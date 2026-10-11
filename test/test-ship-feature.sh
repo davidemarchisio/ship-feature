@@ -2276,6 +2276,8 @@ cat > "$ABIN/pr-review-relay" <<'RSTUB'
 printf '%s\n' "$*" >> "$STUB_RELAY_LOG"
 vf=""; prev=""; for a in "$@"; do [ "$prev" = "--verdict-file" ] && vf="$a"; prev="$a"; done
 [ -n "${STUB_RELAY_TOUCH:-}" ] && printf 'edited during the round\n' >> "$STUB_RELAY_TOUCH"
+# Replace the round's lock during the round with a link to another live pid (STUB_RELAY_RELINK_TO).
+[ -n "${STUB_RELAY_RELINK:-}" ] && { rm -f "$STUB_RELAY_RELINK"; ln -s "$STUB_RELAY_RELINK_TO" "$STUB_RELAY_RELINK"; }
 if [ "${STUB_RELAY_A3:-0}" = 1 ] && [ -n "$vf" ]; then
   # The shape pr-review-relay --verdict-file writes (sets space-separated, every key present).
   { printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\nexit=0\nauthor=claude\n' "$(cat "$GHF/pr_headRefOid")"
@@ -2388,7 +2390,25 @@ gate_case "a verdict file with no benched key" 6 'sed -i.bak "/^benched=/d" "$VF
 gate_case "a consensus result with no plan_path" 6 'sed -i.bak "/^plan_path=/d" "$AH"/state/autonomous/consensus/plan-*.consensus; printf "edited\n" >> "$AH/plan.md"' 'no plan_path'
 gate_case "no verdict file" 6 'rm -f "$VF"'
 # disputes
-gate_case "no disposition comment" 6 ': > "$GH/pr_comments"' 'no author disposition'
+# No disposition: allowed only when every counted round was all_clean and the author disputed nothing.
+# The cases that expect 0 are bespoke blocks: gate_case reads merge.log only for a non-zero status.
+MERGED_OK="0|1|pr merge 7 --merge --match-head-commit $HEAD40"
+merged_state() { printf '%s|%s|%s' "$1" "$(wc -l < "$GH/merge.log" 2>/dev/null | tr -d ' ')" "$(cat "$GH/merge.log" 2>/dev/null)"; }
+mk_round2() { sed 's/^pr_round=1$/pr_round=2/' "$VF" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"; }
+mk_world; : > "$GH/pr_comments"; run_gate; rc=$?
+check "merge-gate: no disposition, round 1 clean, no dispute → merges" "$(merged_state "$rc")" "$MERGED_OK"
+mk_world; : > "$GH/pr_comments"; mk_round2; run_gate; rc=$?
+check "merge-gate: no disposition, rounds 1 and 2 both clean, no dispute → merges" "$(merged_state "$rc")" "$MERGED_OK"
+gate_case "no disposition, round 1 clean, an author - DISPUTED: line in a review comment" 6 ': > "$GH/pr_comments"; printf "alice\t%s\n" "$(printf "%s\n" "- DISPUTED: inline objection" | b64_of)" > "$GH/pr_review_comments"' 'no author disposition'
+mk_world; : > "$GH/pr_comments"; printf 'bob\t%s\n' "$(printf '%s\n' '- DISPUTED: not the author' | b64_of)" > "$GH/pr_review_comments"; run_gate; rc=$?
+check "merge-gate: no disposition, round 1 clean, a - DISPUTED: line by someone else → merges" "$(merged_state "$rc")" "$MERGED_OK"
+gate_case "no disposition, round 2 candidate, round 1 had findings" 6 ': > "$GH/pr_comments"; mk_round2; sed -i.bak "s/^all_clean=.*/all_clean=false/" "$VF"' 'no author disposition'
+gate_case "no disposition, round 2 candidate, round-1.verdict missing" 6 ': > "$GH/pr_comments"; mk_round2; rm -f "$VF"' 'no author disposition'
+gate_case "no disposition, round 2 candidate, round-1.verdict names another PR" 6 ': > "$GH/pr_comments"; mk_round2; sed -i.bak "s/^pr=7$/pr=8/" "$VF"' 'no author disposition'
+gate_case "no disposition, round 2 candidate, round-1.verdict names another repo" 6 ': > "$GH/pr_comments"; mk_round2; sed -i.bak "s|^repo=o/r$|repo=x/y|" "$VF"' 'no author disposition'
+gate_case "no disposition, round 2 candidate, round-1.verdict with another pr_round" 6 ': > "$GH/pr_comments"; mk_round2; sed -i.bak "s/^pr_round=1$/pr_round=2/" "$VF"' 'no author disposition'
+# A disposition, when there is one, keeps every rule also when all rounds were clean: the next case runs
+# on the round-1 clean world of mk_world.
 gate_case "disposition says Disputed findings: 1" 6 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\nDisputed findings: 1\n" | b64_of)" > "$GH/pr_comments"' 'does not end with'
 gate_case "a quoted 'Disputed findings: none' above a real closing line 'Disputed findings: 1'" 6 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\n> Disputed findings: none\nDisputed findings: none\n- note\nDisputed findings: 1\n" | b64_of)" > "$GH/pr_comments"' 'does not end with'
 gate_case "text after the closing 'Disputed findings: none' line" 6 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\nDisputed findings: none\nSuite green\n" | b64_of)" > "$GH/pr_comments"' 'does not end with'
@@ -2439,12 +2459,12 @@ mk_world; printf 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=fal
 check "merge-gate: a newer, non-clean round recorded during the checks stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
 mk_world; printf 'sed -i.bak "s/^run_id=.*/run_id=rewritten/" "%s"\n' "$VF" > "$GH/on_second_head"; run_gate; rc=$?
 check "merge-gate: the same round rewritten during the checks (new run_id) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'newer round' "$AH/gate.err")" "6|none|1"
-mk_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_gate; rc=$?
+mk_world; ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"; run_gate; rc=$?
 check "merge-gate --merge: a live PR lock (a round in progress) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'holds the lock' "$AH/gate.err")" "6|none|1"
-mk_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; GATE_MERGE="" run_gate; rc=$?
+mk_world; ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"; GATE_MERGE="" run_gate; rc=$?
 check "merge-gate without --merge takes no lock (reports 0 while a round runs)" "$rc" 0
 mk_world; run_gate; rc=$?
-check "merge-gate: the PR lock is released after the merge" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7.lock" ] && echo held || echo free)" "0|free"
+check "merge-gate: the PR lock is released after the merge" "$rc|$([ -L "$AH/state/autonomous/o_r/pr-7.lock" ] && echo held || echo free)" "0|free"
 mk_world; for _i in $(seq 1 250); do printf 'src/f%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
 check "merge-gate: 250 files are all listed in the audit comment, with the total" "$rc|$(grep -c '^    src/f[0-9]*\.js$' "$GH/audit_posted")|$(grep -c '^files_checked (250):$' "$GH/audit_posted")" "0|250|1"
 mk_world; for _i in $(seq 1 1500); do printf 'src/a/very/long/directory/name/for/the/audit/file_%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
@@ -2496,10 +2516,20 @@ mk_relay_world; run_relay --pr=7
 check "relay --autonomous: the verdict file records the context's SHA-256" "$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" 1
 mk_relay_world; printf 'not the plan\n' > "$AH/other.md"; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file "$AH/other.md" >/dev/null 2>"$AH/relay.err" ); rc=$?
 check "relay --autonomous: a context file that is not a consensus plan is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
-mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a fresh lock with no pid yet is held, not taken over (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
-mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; touch -t 200001010000 "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
-check "relay --autonomous: an old lock with no pid is stale and taken over" "$rc" 0
+mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; ln -s "$$" "$_LK"; touch -h -t 200001010000 "$_LK"; run_relay --pr 7; rc=$?
+check "relay --autonomous: an old lock whose owner is alive is held (4): age never frees a lock" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(readlink "$_LK")" "4|0|$$"
+mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$_LK"; printf '999999\n' > "$_LK/pid"; run_relay --pr 7; rc=$?
+check "relay --autonomous: an old-format lock directory is held (4) and nothing is written into it" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(ls -A "$_LK" | tr '\n' ' ')" "4|0|pid "
+mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$AH/state/autonomous/o_r/$$"; ln -s "$$" "$_LK"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a live lock whose target is also a directory is held (4), nothing is created inside it" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(ls -A "$AH/state/autonomous/o_r/$$" | wc -l | tr -d ' ')" "4|0|0"
+mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; ln -s garbage "$_LK"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a lock whose target is not a pid is taken over, and released after the round" "$rc|$([ -L "$_LK" ] && echo locked || echo free)" "0|free"
+mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$_LK.guard"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a held guard blocks every acquisition (4), even with no lock link" "$rc|$(wc -l < "$RL" | tr -d ' ')|$([ -L "$_LK" ] && echo linked || echo none)" "4|0|none"
+mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$_LK.takeover"; run_relay --pr 7; rc=$?
+check "relay --autonomous: an old .lock.takeover directory is ignored" "$rc|$(wc -l < "$RL" | tr -d ' ')" "0|1"
+mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; export STUB_RELAY_RELINK="$_LK" STUB_RELAY_RELINK_TO="$$"; run_relay --pr 7; rc=$?; unset STUB_RELAY_RELINK STUB_RELAY_RELINK_TO
+check "relay --autonomous: unlock removes only its own lock (a link to another live pid stays)" "$rc|$(readlink "$_LK")" "0|$$"
 mk_relay_world; export STUB_RELAY_CLEAN=false; run_relay --pr 7; rc=$?; unset STUB_RELAY_CLEAN
 check "relay --autonomous: a findings round (all_clean=false) is counted and exits 2" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/rounds")|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept)" "2|1|kept"
 mk_relay_world; export STUB_RELAY_CLEAN=""; run_relay --pr 7; rc=$?; unset STUB_RELAY_CLEAN
@@ -2512,8 +2542,8 @@ mk_relay_world; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH"
 check "relay --autonomous without --context-file is refused (7) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
 mk_relay_world; chmod 555 "$AH/state/autonomous/o_r/pr-7"; run_relay --pr 7; rc=$?; chmod 755 "$AH/state/autonomous/o_r/pr-7"
 check "relay --autonomous: an unwritable round state stops before dispatch (4), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(grep -c 'cannot write the round state' "$AH/relay.err")" "4|0|1"
-mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock" "$AH/state/autonomous/o_r/pr-7.lock.takeover"; printf '999999\n' > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a stale lock is not taken while another takeover is in progress (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
+mk_relay_world; ln -s 999999 "$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$AH/state/autonomous/o_r/pr-7.lock.guard"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a stale lock is not taken while another process holds the guard (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
 mk_relay_world; run_relay --pr 7 --reviewers codex; check "relay --autonomous refuses --reviewers (7)" "$?" 7
 mk_relay_world; run_relay --pr 7 --verdict-file /tmp/x; check "relay --autonomous refuses a caller verdict path (7)" "$?" 7
 mk_relay_world; run_relay --pr 7 --reset; check "relay --autonomous refuses --reset (7)" "$?" 7
@@ -2529,10 +2559,10 @@ mk_relay_world; export STUB_RELAY_RC=3; run_relay --pr 7; rc=$?; unset STUB_RELA
 check "relay --autonomous: a failed round (exit 3) is not counted as a round" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")" "3|0"
 mk_relay_world; export STUB_RELAY_WRITE=0; run_relay --pr 7; rc=$?; unset STUB_RELAY_WRITE
 check "relay --autonomous: exit 0 without a verdict file is not a counted round (3)" "$rc" 3
-mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_relay --pr 7; rc=$?
+mk_relay_world; ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
 check "relay --autonomous: a live lock on the PR refuses the round (4) and does not call the relay" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
-mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '999999\n' > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a stale lock (owner gone) is taken over, and released after the round" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7.lock" ] && echo locked || echo free)|$([ -e "$AH/state/autonomous/o_r/pr-7.lock.takeover" ] && echo left || echo clean)" "0|free|clean"
+mk_relay_world; ln -s 999999 "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a stale lock (owner gone) is taken over, and released after the round" "$rc|$([ -L "$AH/state/autonomous/o_r/pr-7.lock" ] && echo locked || echo free)|$([ -e "$AH/state/autonomous/o_r/pr-7.lock.guard" ] && echo left || echo clean)" "0|free|clean"
 mk_relay_world; export STUB_RELAY_RC=1; run_relay --pr 7; rc=$?
 check "relay --autonomous: a relay exit outside 0/3/4 is a failed attempt (3), not a round" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/fails" 2>/dev/null)|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")" "3|1|0"
 run_relay --pr 7; run_relay --pr 7; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
@@ -2601,7 +2631,7 @@ _c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"
 check "plan-consensus: every supported plan seat's verdict is read back by name (claude, codex, cursor, glm, grok, antigravity)" "$rc|$(for _s in claude codex cursor glm grok antigravity; do awk -F= -v k="seat.$_s" '$1==k{printf "%s ", $2}' "$_c" 2>/dev/null; done)" "0|clean clean clean clean clean clean "
 mk_plan_world; export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
 check "plan-consensus: a plan edited while the panel reads it → exit 3, no consensus file, no round" "$rc|$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0|0"
-mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan/$_pk.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/plan/$_pk.lock/pid"; run_pc; rc=$?
+mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan"; ln -s "$$" "$AH/state/autonomous/plan/$_pk.lock"; run_pc; rc=$?
 check "plan-consensus: a live lock on the plan refuses the run (5) and runs no reviewer" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)" "5|none"
 mk_plan_world; export STUB_LAST_grok=""; run_pc; rc=$?; unset STUB_LAST_grok
 check "plan-consensus: a seat with no VERDICT line → exit 3, no round counted" "$rc|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0"
@@ -2648,7 +2678,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=553
+EXPECTED=566
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

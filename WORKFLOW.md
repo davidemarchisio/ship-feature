@@ -395,7 +395,9 @@ stops at the first failure (exit `6`); without `--merge` it only reports:
 4. the verdict file of the highest round is for this repo and PR, names the PR's current head SHA, has
    `all_clean=true`, round at most 6, `context_sha256` equal to the PR's `Plan-Key`, and the panel
    equals the relay's configured `REVIEWERS` without the author;
-5. no unresolved dispute and a latest disposition whose last non-empty line is `Disputed findings: none`;
+5. no unresolved dispute and a latest disposition whose last non-empty line is `Disputed findings: none`.
+   When every counted round of the PR was `all_clean` (no round had findings), no disposition is needed;
+   any `- DISPUTED:` line by the author still stops it;
 6. CI on that SHA: every check `SUCCESS` or `NEUTRAL` (nothing skipped, pending or missing); an empty
    result needs the repo listed in `~/.config/ship-feature/allow-no-ci`, a file a human creates;
 7. no sensitive file in the PR: the file list comes from the PR files API, every page, and each pattern is
@@ -416,10 +418,16 @@ stops at the first failure (exit `6`); without `--merge` it only reports:
 
 It never fixes, never retries a failed merge call and never loops.
 
-**Locks.** Each round and each plan-consensus run holds a lock directory, so two sessions cannot pick
-the same round. A stale lock (owner gone, or no pid after a minute) is taken over inside a second
-directory, `<lock>.takeover`. A takeover directory left by a crash is never removed by the tool: it
-blocks only takeovers, and a human removes it.
+**Locks.** Each round and each plan-consensus run holds a lock, so two sessions cannot pick the same
+round. A lock is a symlink whose target is the owner's pid, made in one step, and every acquisition holds
+the guard directory `<lock>.guard` for that step. Only a lock whose owner is gone is stale and taken over;
+an old lock with a live owner is never taken over. The tool never removes these by itself, and a human
+removes them only when no process can own them:
+- a `<lock>.guard` left by a crash blocks that lock: remove it when `pgrep -fl ship-feature` shows no
+  autonomous command;
+- a directory at a lock path is the format before the symlink, and that format held live locks too: remove
+  it when `kill -0 <pid in its pid file>` fails or, with no or an empty `pid` file, when
+  `pgrep -fl ship-feature` shows no autonomous command. A `<lock>.takeover` directory is no longer used.
 
 **Stop and notify.** Exit `4`, `5`, `6`, `7` or `8`, exit `3` after the bounded retries, a failing
 hook, or a dispute: report it in the conversation, send a notification if the harness has a tool for

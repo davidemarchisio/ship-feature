@@ -1385,33 +1385,37 @@ sf_auto_guard() {
   return 0
 }
 
-# A directory lock for the read-modify-write of round counters and verdict files: two sessions on the
-# same PR or plan must not pick the same round or overwrite each other's verdict. A stale lock (owner
-# gone, or no pid after a minute) is taken over, and the takeover is serialized by a second directory,
-# `<lock>.takeover`, so the staleness check and the replacement are one step: two processes that both
-# saw the same dead owner cannot both replace the lock, and none can replace a lock that a live process
-# just took. A takeover directory is never removed automatically; one left by a crash blocks only
-# takeovers, and a human removes it.
-sf_lock_own() { printf '%s\n' "$$" > "$1/pid" 2>/dev/null || { rm -rf "$1"; return 1; }; }
+# A lock for the read-modify-write of round counters and verdict files: two sessions on the same PR or
+# plan must not pick the same round or overwrite each other's verdict. The lock is a symlink whose target
+# is the owner's pid: `ln -s` creates the link and its target in one step, so a lock never exists without
+# an owner, and age never makes a lock stale. Only a lock whose owner is gone (the target is not a number,
+# is 0, or `kill -0` fails) is taken over. The target is a bare pid, so the link dangles by design: test
+# for it with `[ -L ]` or readlink, never `[ -e ]`.
+# EVERY acquisition holds the guard directory `<lock>.guard`, so only the guard's holder can create a
+# link. Between its readlink and its rm, the link can only disappear (its owner's unlock), never be
+# replaced by another process's link, so a takeover never removes a lock that a third process just took.
+# Two processes that start together: the one that loses the guard gets "held", as a lost race does.
+# Known limits, both fail closed: a guard left by a crash blocks that lock, and a dead owner whose pid the
+# system reuses (or a zombie owner) keeps the lock held; a human removes either one. A real directory at
+# the lock path (the format before the symlink, which also held live locks) is never taken over or
+# written into: `-n` stops ln from following a link to a directory, and the `[ -d ] && [ ! -L ]` test
+# stops it from creating a name inside a real one.
+sf_lock_try() { if [ -d "$1" ] && [ ! -L "$1" ]; then return 1; fi; ln -sn "$$" "$1" 2>/dev/null; }
 sf_lock() {
-  local d="$1.lock" t="$1.lock.takeover" p stale=0
-  if mkdir "$d" 2>/dev/null; then sf_lock_own "$d"; return; fi
-  mkdir "$t" 2>/dev/null || return 1
-  if [ -d "$d" ]; then
-    p="$(cat "$d/pid" 2>/dev/null)"
-    if [ -n "$p" ]; then
-      kill -0 "$p" 2>/dev/null || stale=1
-    else
-      # No pid yet: the owner may be between mkdir and writing it. Held, unless the directory is old.
-      find "$d" -maxdepth 0 -mmin +1 2>/dev/null | grep -q . && stale=1
-    fi
-    [ "$stale" = 1 ] && rm -rf "$d"
-  fi
-  if mkdir "$d" 2>/dev/null; then sf_lock_own "$d" || { rmdir "$t" 2>/dev/null; return 1; }; rmdir "$t" 2>/dev/null; return 0; fi
-  rmdir "$t" 2>/dev/null
-  return 1
+  local d="$1.lock" g="$1.lock.guard" p rc=1
+  mkdir "$g" 2>/dev/null || return 1
+  p="$(readlink "$d" 2>/dev/null)"
+  case "$p" in
+    '') ;;
+    *[!0-9]*|0) rm -f "$d" ;;
+    *) kill -0 "$p" 2>/dev/null || rm -f "$d" ;;
+  esac
+  sf_lock_try "$d" && rc=0
+  rmdir "$g" 2>/dev/null
+  return "$rc"
 }
-sf_unlock() { rm -rf "$1.lock"; }
+# Removes only this process's own lock, and always returns 0: the callers return the round's status.
+sf_unlock() { if [ "$(readlink "$1.lock" 2>/dev/null)" = "$$" ]; then rm -f "$1.lock"; fi; return 0; }
 
 sf_sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'; else shasum -a 256 | awk '{print $1}'; fi; }
 # KEY=value files: last value wins; prints nothing when the key is absent.
@@ -1789,6 +1793,24 @@ sf_gate_verdict() {
   return 0
 }
 
+# True when round-1 … round-$SF_G_ROUND all exist for this repo and PR, each with its own pr_round and
+# all_clean=true. A missing or mismatched file is false: that PR needs a disposition.
+sf_gate_all_rounds_clean() {
+  local pr="$1" vdir k=1 f
+  case "$SF_G_ROUND" in ''|*[!0-9]*|0) return 1;; esac
+  vdir="$(sf_auto_state)/$(printf '%s' "$SF_G_REPO" | tr '/' '_')/pr-$pr"
+  while [ "$k" -le "$SF_G_ROUND" ]; do
+    f="$vdir/round-$k.verdict"
+    [ -f "$f" ] || return 1
+    [ "$(sf_kv_get "$f" repo)" = "$SF_G_REPO" ] || return 1
+    [ "$(sf_kv_get "$f" pr)" = "$pr" ] || return 1
+    [ "$(sf_kv_get "$f" pr_round)" = "$k" ] || return 1
+    [ "$(sf_kv_get "$f" all_clean)" = true ] || return 1
+    k=$((k + 1))
+  done
+  return 0
+}
+
 # Check 5: no unresolved dispute, and a latest disposition that says so in words.
 sf_gate_disputes() {
   local pr="$1" author tmp i=0 login b64 latest="" line rest rc=0 ep
@@ -1818,7 +1840,12 @@ sf_gate_disputes() {
     [ "$login" = "$author" ] || continue
     printf '%s' "$b64" | sf_b64d | tr -d '\r' | grep '^- DISPUTED:' >> "$tmp/disputed"
   done < "$tmp/other"
-  if [ -z "$latest" ]; then rm -rf "$tmp"; sf_gate_fail "no author disposition comment (it must start with 'Disposition,')"; return 6; fi
+  if [ -z "$latest" ]; then
+    # A disposition answers a round with findings. When every counted round of this PR was all_clean
+    # and the author disputed nothing, there is nothing to answer.
+    if [ ! -s "$tmp/disputed" ] && sf_gate_all_rounds_clean "$pr"; then rm -rf "$tmp"; return 0; fi
+    rm -rf "$tmp"; sf_gate_fail "no author disposition comment (it must start with 'Disposition,')"; return 6
+  fi
   if ! head -n 1 "$latest" | grep -Eqx 'Disposition, round [0-9]+ \(reviewed sha [0-9a-f]{7,40}\):'; then
     rm -rf "$tmp"; sf_gate_fail "the latest disposition's first line is not 'Disposition, round <k> (reviewed sha <sha7>):'"; return 6
   fi
