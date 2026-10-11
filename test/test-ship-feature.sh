@@ -2248,7 +2248,7 @@ cat > "$ABIN/pr-review-relay" <<'RSTUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_RELAY_LOG"
 vf=""; prev=""; for a in "$@"; do [ "$prev" = "--verdict-file" ] && vf="$a"; prev="$a"; done
-[ "${STUB_RELAY_WRITE:-1}" = 1 ] && [ -n "$vf" ] && printf 'repo=o/r\npr=7\nall_clean=true\n' > "$vf"
+[ "${STUB_RELAY_WRITE:-1}" = 1 ] && [ -n "$vf" ] && printf 'repo=o/r\npr=7\nround=1\nall_clean=true\n' > "$vf"
 exit "${STUB_RELAY_RC:-0}"
 RSTUB
 chmod +x "$ABIN/pr-review-relay"
@@ -2264,7 +2264,7 @@ mk_world() {
   PKEY="$(sha256_of < "$AH/plan.md")"
   printf 'plan_sha256=%s\nplan_path=%s\nround=1\nseats=codex,grok\nplan_panel=codex,grok\ndegraded=grok\nseat.codex=clean\nseat.grok=clean\n' "$PKEY" "$AH/plan.md" > "$AH/state/autonomous/consensus/plan-$PKEY.consensus"
   VF="$AH/state/autonomous/o_r/pr-7/round-1.verdict"
-  printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" > "$VF"
+  printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\npr_round=1\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" > "$VF"
   printf 'o/r\n' > "$GH/repo"; printf 'main\n' > "$GH/defb"
   printf 'OPEN\n' > "$GH/pr_state"; printf 'false\n' > "$GH/pr_isDraft"; printf 'main\n' > "$GH/pr_baseRefName"
   printf 'MERGEABLE\n' > "$GH/pr_mergeable"; printf '%s\n' "$HEAD40" > "$GH/pr_headRefOid"
@@ -2338,9 +2338,11 @@ gate_case "a seat benched" 6 'sed -i.bak "s/^benched=.*/benched=opencode/" "$VF"
 gate_case "ran is not the full panel" 6 'sed -i.bak "s/^ran=.*/ran=codex,grok/" "$VF"'
 gate_case "configured differs from the relay config now" 6 'printf "REVIEWERS=claude,codex,grok,opencode,cursor\n" > "$AH/relay.conf"' 'panel'
 gate_case "relay config unreadable" 6 'rm -f "$AH/relay.conf"'
-gate_case "not the highest round (a newer round exists and is not clean)" 6 'sed "s/^round=.*/round=2/; s/^all_clean=.*/all_clean=false/" "$VF" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"' 'not all_clean'
-gate_case "highest round clean while round 1 is not" 0 'sed -i.bak "s/^all_clean=.*/all_clean=false/" "$VF"; sed "s/^round=.*/round=2/" "$VF" | sed "s/^all_clean=.*/all_clean=true/" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"'
-gate_case "round 7 is past the cap" 6 'mv "$VF" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"; sed -i.bak "s/^round=.*/round=7/" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"' 'past the cap'
+gate_case "not the highest round (a newer round exists and is not clean)" 6 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=false/" "$VF" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"' 'not all_clean'
+gate_case "highest round clean while round 1 is not" 0 'sed -i.bak "s/^all_clean=.*/all_clean=false/" "$VF"; sed "s/^pr_round=.*/pr_round=2/" "$VF" | sed "s/^all_clean=.*/all_clean=true/" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"'
+gate_case "round 7 is past the cap" 6 'mv "$VF" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"; sed -i.bak "s/^pr_round=.*/pr_round=7/" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"' 'past the cap'
+gate_case "the relay's per-SHA round (1) differs from the PR round (2): accepted" 0 'mv "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict"; sed -i.bak "s/^pr_round=.*/pr_round=2/" "$AH/state/autonomous/o_r/pr-7/round-2.verdict"'
+gate_case "a verdict file with no pr_round (not written by relay --autonomous)" 6 'sed -i.bak "/^pr_round=/d" "$VF"' 'pr_round'
 gate_case "no verdict file" 6 'rm -f "$VF"'
 # disputes
 gate_case "no disposition comment" 6 ': > "$GH/pr_comments"' 'no author disposition'
@@ -2382,7 +2384,18 @@ mk_relay_world; run_relay --pr 7; rc=$?
 check "relay --autonomous: runs, exit 0" "$rc" 0
 check "relay --autonomous: full panel (no --reviewers), computed verdict path, --max-rounds 6, --autonomous stripped" "$(grep -c -- '--reviewers' "$RL")|$(grep -c -- "--verdict-file $AH/state/autonomous/o_r/pr-7/round-1.verdict --max-rounds 6" "$RL")|$(grep -c -- '--autonomous' "$RL")" "0|1|0"
 run_relay --pr 7; rc=$?
+check "relay --autonomous: the second round writes round-2 with pr_round=2 beside the relay's own round=1" "$(sf_vf="$AH/state/autonomous/o_r/pr-7/round-2.verdict"; echo "$(grep -c '^pr_round=2$' "$sf_vf")|$(grep -c '^round=1$' "$sf_vf")")" "1|1"
 check "relay --autonomous: the second round writes round-2" "$([ -s "$AH/state/autonomous/o_r/pr-7/round-2.verdict" ] && echo yes)" yes
+mk_relay_world; run_relay; rc=$?
+check "relay --autonomous: the PR is resolved from the current branch when --pr is absent" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)" "0|yes"
+mk_relay_world; : > "$GH/pr_number"; run_relay; rc=$?
+check "relay --autonomous: an unresolvable PR is refused (4) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
+mk_relay_world; run_relay --pr=7; rc=$?
+check "relay --autonomous: the --pr=N form is honoured" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)" "0|yes"
+mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a fresh lock with no pid yet is held, not taken over (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
+mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; touch -t 200001010000 "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
+check "relay --autonomous: an old lock with no pid is stale and taken over" "$rc" 0
 mk_relay_world; run_relay --pr 7 --reviewers codex; check "relay --autonomous refuses --reviewers (7)" "$?" 7
 mk_relay_world; run_relay --pr 7 --verdict-file /tmp/x; check "relay --autonomous refuses a caller verdict path (7)" "$?" 7
 mk_relay_world; run_relay --pr 7 --reset; check "relay --autonomous refuses --reset (7)" "$?" 7
@@ -2426,6 +2439,24 @@ check "plan-consensus: still findings in round 2 → exit 5 (cap)" "$rc" 5
 n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?
 check "plan-consensus: a third invocation exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
 unset STUB_LAST_grok
+mk_plan_world; run_pc; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; n1="$(wc -l < "$SL.grok" | tr -d ' ')"; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: a re-run after consensus on the same text and panel exits 0 and runs no reviewer" "$rc|$(wc -l < "$SL.grok" | tr -d ' ')" "0|$n1"
+# Human-only closing lines must not leak into plan-consensus output (they contradict "never drop a seat").
+HUMAN_RE='drop that one reviewer|do not run a round 3|straight to Gate 1'
+mk_plan_world; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"
+check "plan-consensus: a clean round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
+mk_plan_world; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"; unset STUB_LAST_grok
+check "plan-consensus: a findings round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"
+check "plan-consensus: a seat-failure round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
+check "plan-consensus: its own exit-3 line says autonomous mode never drops a seat" "$(grep -c 'Run plan-consensus again; autonomous mode never drops a seat\.' "$AH/pc.all")" 1
+unset STUB_FAIL_grok
+PR_OUT="$AH/plain.out"
+printf 'plan\n' | ( export STUB_LOG="$AH/p3.log"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
+check "plan-review (plain, clean): still prints the human closing lines" "$(grep -c 'straight to Gate 1' "$PR_OUT")|$(grep -c 'do not run a round 3' "$PR_OUT")" "1|1"
+printf 'plan\n' | ( export STUB_LOG="$AH/p4.log" STUB_FAIL_grok="$AH/fail_grok"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
+check "plan-review (plain, seat failed): still prints the drop-the-reviewer line" "$(grep -c 'drop that one reviewer' "$PR_OUT")" 1
+unset STUB_FAIL_grok
 mk_plan_world; export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
 check "plan-consensus: a plan edited while the panel reads it → exit 3, no consensus file, no round" "$rc|$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0|0"
 mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan/$_pk.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/plan/$_pk.lock/pid"; run_pc; rc=$?
@@ -2466,7 +2497,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=466
+EXPECTED=481
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

@@ -1325,8 +1325,19 @@ $SF_VERDICT_RULES"
   if [ "$ran" = 0 ]; then
     die "no supported reviewers ran. plan-review supports: claude, codex, cursor, glm, grok, antigravity (aliases agy, gemini) — bare opencode is relay-only. Pass --reviewers with a supported agent."
   fi
-  if [ "$failed" -gt 0 ]; then echo "✖ Plan review NOT clean: $failed/$ran reviewer(s) failed —$names. Re-run THIS ROUND. If the SAME reviewer fails a SECOND consecutive attempt, drop that one reviewer, proceed with the rest, and tell the human about the reduced panel before Gate 1 — do not keep retrying it." >&2; return 3; fi
-  echo "✔ Plan review done — $ran/$ran reviewer(s) responded (cap: 2 rounds, same full panel both times). READ the findings: no Blocker/plan-qualifying Should-fix → straight to Gate 1. Was this round 1 with a plan-qualifying finding → revise once and re-run. Was this round 2 with a plan-qualifying finding still open → do not run a round 3 on your own — write a disagreement summary (objection, classification, reason) and take it to Gate 1 instead." >&2
+  if [ "$failed" -gt 0 ]; then
+    if [ -z "${SF_VERDICT_DIR:-}" ]; then
+      echo "✖ Plan review NOT clean: $failed/$ran reviewer(s) failed —$names. Re-run THIS ROUND. If the SAME reviewer fails a SECOND consecutive attempt, drop that one reviewer, proceed with the rest, and tell the human about the reduced panel before Gate 1 — do not keep retrying it." >&2
+    else
+      echo "✖ Plan review NOT clean: $failed/$ran reviewer(s) failed —$names." >&2
+    fi
+    return 3
+  fi
+  if [ -z "${SF_VERDICT_DIR:-}" ]; then
+    echo "✔ Plan review done — $ran/$ran reviewer(s) responded (cap: 2 rounds, same full panel both times). READ the findings: no Blocker/plan-qualifying Should-fix → straight to Gate 1. Was this round 1 with a plan-qualifying finding → revise once and re-run. Was this round 2 with a plan-qualifying finding still open → do not run a round 3 on your own — write a disagreement summary (objection, classification, reason) and take it to Gate 1 instead." >&2
+  else
+    echo "✔ Plan review done — $ran/$ran reviewer(s) responded." >&2
+  fi
   return 0
 }
 
@@ -1379,8 +1390,16 @@ sf_lock() {
   local d="$1.lock" p
   if mkdir "$d" 2>/dev/null; then printf '%s\n' "$$" > "$d/pid"; return 0; fi
   p="$(cat "$d/pid" 2>/dev/null)"
-  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then return 1; fi
-  rm -rf "$d"
+  if [ -n "$p" ]; then
+    kill -0 "$p" 2>/dev/null && return 1
+  else
+    # No pid yet: the owner may be between mkdir and writing it. Held, unless the directory is old.
+    find "$d" -maxdepth 0 -mmin +1 2>/dev/null | grep -q . || return 1
+  fi
+  # Stale. Take it over by an atomic rename: only one process wins it, and nobody can delete a lock
+  # another process just created.
+  mv "$d" "$d.stale.$$" 2>/dev/null || return 1
+  rm -rf "$d.stale.$$"
   if mkdir "$d" 2>/dev/null; then printf '%s\n' "$$" > "$d/pid"; return 0; fi
   return 1
 }
@@ -1468,6 +1487,13 @@ cmd_plan_consensus() {
 
 sf_plan_consensus_run() {
   local file="$1" abs="$2" seats="$3" pdir="$4" state="$5" rounds attempts vdir s sha_before sha_after
+  # Idempotent after success: a consensus for this exact text and the current panel already exists, so
+  # a re-run must not spend the panel again (and risk a new finding turning a valid result into a stop).
+  sha_before="$(sf_sha256 < "$file")"
+  if [ -f "$state/consensus/plan-$sha_before.consensus" ] && [ "$(sf_kv_get "$state/consensus/plan-$sha_before.consensus" plan_panel)" = "$seats" ]; then
+    echo "✔ plan-consensus: consensus for this exact plan text and panel already exists — Plan-Key: $sha_before" >&2
+    return 0
+  fi
   rounds="$(sf_num_get "$pdir/rounds")"; attempts="$(sf_num_get "$pdir/attempts")"
   if [ "$rounds" -ge "$SF_AUTO_PLAN_MAX_ROUNDS" ]; then echo "✖ plan-consensus: $rounds rounds already ran for this plan (cap $SF_AUTO_PLAN_MAX_ROUNDS). STOP and notify the human; there is no round 3 and no reset." >&2; return 5; fi
   if [ "$attempts" -ge "$SF_AUTO_PLAN_MAX_ATTEMPTS" ]; then echo "✖ plan-consensus: $attempts attempts already ran for this plan (cap $SF_AUTO_PLAN_MAX_ATTEMPTS). STOP and notify the human." >&2; return 5; fi
@@ -1481,7 +1507,7 @@ sf_plan_consensus_run() {
   ( export SF_VERDICT_DIR="$vdir"; cmd_plan_review "$file" ); rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -rf "$vdir"
-    if [ "$rc" = 3 ]; then echo "✖ plan-consensus: a seat failed — no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS)." >&2; return 3; fi
+    if [ "$rc" = 3 ]; then echo "✖ plan-consensus: a seat failed — no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS). Run plan-consensus again; autonomous mode never drops a seat." >&2; return 3; fi
     return "$rc"
   fi
   sha_after="$(sf_sha256 < "$file")"
@@ -1532,6 +1558,7 @@ cmd_relay_auto() {
       --reviewers|--reviewers=*) echo "✖ relay --autonomous refuses --reviewers: every autonomous round is a full-panel round on the relay's own quorum." >&2; return 7;;
       --verdict-file|--verdict-file=*|--max-rounds|--max-rounds=*|--reset) echo "✖ relay --autonomous sets its own verdict path and round cap and never resets; '$1' is refused." >&2; return 7;;
       --pr) [ $# -ge 2 ] || die "--pr needs a number."; pr="$2"; args+=("$1" "$2"); shift 2;;
+      --pr=*) pr="${1#--pr=}"; args+=("$1"); shift;;
       *) args+=("$1"); shift;;
     esac
   done
@@ -1567,6 +1594,9 @@ sf_relay_auto_round() {
         [ "$fails" -ge "$SF_AUTO_MAX_FAILS" ] && return 4
         return 3
       fi
+      # The relay numbers its rounds per reviewed SHA; this wrapper numbers them per PR. Record the PR
+      # round, which is the one the merge gate binds to the file name and caps at 6.
+      printf 'pr_round=%s\n' "$k" >> "$vf"
       sf_num_put "$dir/rounds" "$k"
       echo "  → relay --autonomous: round $k/$SF_AUTO_MAX_ROUNDS for $repo#$pr, all_clean=$(sf_kv_get "$vf" all_clean). READ the reviews; fix every Blocker and Should-fix, post the disposition, then run the next round." >&2
       return 0;;
@@ -1660,7 +1690,7 @@ sf_gate_verdict() {
   [ -n "$bestf" ] || { sf_gate_fail "no verdict file for $SF_G_REPO#$pr (run 'ship-feature relay --autonomous')"; return 6; }
   [ "$(sf_kv_get "$bestf" repo)" = "$SF_G_REPO" ] || { sf_gate_fail "the verdict file names another repository"; return 6; }
   [ "$(sf_kv_get "$bestf" pr)" = "$pr" ] || { sf_gate_fail "the verdict file names another PR"; return 6; }
-  [ "$(sf_kv_get "$bestf" round)" = "$best" ] || { sf_gate_fail "the verdict file's round does not match its name"; return 6; }
+  [ "$(sf_kv_get "$bestf" pr_round)" = "$best" ] || { sf_gate_fail "the verdict file's pr_round does not match its name (not written by relay --autonomous?)"; return 6; }
   [ "$best" -le "$SF_AUTO_MAX_ROUNDS" ] || { sf_gate_fail "round $best is past the cap of $SF_AUTO_MAX_ROUNDS"; return 6; }
   [ "$(sf_kv_get "$bestf" head_sha)" = "$SF_G_HEAD" ] || { sf_gate_fail "the verdict is for $(sf_kv_get "$bestf" head_sha | cut -c1-7), the PR head is $(printf '%s' "$SF_G_HEAD" | cut -c1-7)"; return 6; }
   [ "$(sf_kv_get "$bestf" exit)" = 0 ] || { sf_gate_fail "the relay round did not exit 0"; return 6; }

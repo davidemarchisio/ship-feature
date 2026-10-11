@@ -360,14 +360,16 @@ result; a PR without exactly one key is refused.
 **The loop: `ship-feature relay --autonomous`.** Every round is a full-panel round on the relay's own
 quorum (`--reviewers`, `--verdict-file`, `--max-rounds` and `--reset` are refused). The verdict file is
 written at a path the tool computes. One counter per PR (not per SHA) allows at most 6 rounds; the 7th
-exits `4`, and so does the 4th failed attempt. Fix every Blocker and Should-fix, post the disposition,
+exits `4`, and so does the 4th failed attempt. The wrapper records the PR round in the verdict file as
+`pr_round` (the relay's own `round` counts per SHA). The relay also gets `--max-rounds 6`, which it
+applies per SHA and counting failed rounds too, so it can stop a SHA earlier (exit `4`, a safe stop). Fix every Blocker and Should-fix, post the disposition,
 run the next round. The first round whose verdict is `all_clean` on the final SHA is the merge candidate.
 
 **Disposition and dispute comment formats** (the merge gate reads whole lines only). A disposition
 comment by the PR author starts with the line `Disposition, round <k> (reviewed sha <sha7>):`, lists
 each finding with its classification, and ends with the line `Disputed findings: none` (or
 `Disputed findings: <n>`). A finding the author disputes is a line that starts with `- DISPUTED: <text>`;
-the next disposition repeats it as `- RESOLVED: <text>` once settled. Autonomous mode never merges over
+the latest disposition must repeat every dispute settled so far as `- RESOLVED: <text>`. Autonomous mode never merges over
 a dispute, because the human who settled disputes at Gate 2 is gone.
 
 **Replacing Gate 2: `ship-feature merge-gate <pr> --autonomous [--merge]`.** It checks, in order, and
