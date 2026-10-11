@@ -350,15 +350,23 @@ end its review with exactly `VERDICT: clean` as the last line, and be the only `
 SAME round. Cap: 2 rounds and 3 attempts per plan path; a round counts only when every seat returned a
 verdict. Exit `0` consensus (a result file bound to the plan's SHA-256 is written), `2` findings: revise
 and run once more, `3` a seat failed or gave no usable verdict, `5` stop and notify. There is no round 3
-and no reset. A relay-only seat in `PLAN_REVIEWERS`, or an unset `PLAN_REVIEWERS`, is exit `5`.
+and no reset. The panel is `PLAN_REVIEWERS` in the relay config. A relay-only seat in it, a value that
+names no seat, an unset `PLAN_REVIEWERS`, or a `SHIP_FEATURE_PLAN_REVIEWERS` override (environment or
+ship-feature config) that names a different set is exit `5`, before any seat runs. A counter that cannot
+be written also stops before the panel runs (exit `5`). A re-run after consensus on the same text, path
+and panel exits `0` without running the panel again.
 Seats that review the plan text only are named in the result as `degraded` and in the audit comment.
 
 **The PR body carries the plan's key.** When the PR is opened from a plan that reached consensus, its
 body has one line `Plan-Key: <sha256 of the plan text>`. The merge gate reads it to find the consensus
 result; a PR without exactly one key is refused.
 
-**The loop: `ship-feature relay --autonomous`.** Every round is a full-panel round on the relay's own
-quorum (`--reviewers`, `--verdict-file`, `--max-rounds` and `--reset` are refused). The verdict file is
+**The loop: `ship-feature relay --autonomous --context-file <plan>`.** Every round is a full-panel round
+on the relay's own quorum (`--reviewers`, `--verdict-file`, `--max-rounds` and `--reset` are refused, and
+so is a round without `--context-file`). Exit `0` is an `all_clean` round, exit `2` a counted round with
+findings. A verdict file that is missing, names another repo or PR, or has no `all_clean=true|false` is
+removed and counts as a failed attempt (exit `3`). A round state that cannot be written stops before the
+relay runs (exit `4`). The verdict file is
 written at a path the tool computes. One counter per PR (not per SHA) allows at most 6 rounds; the 7th
 exits `4`, and so does the 4th failed attempt. The wrapper records the PR round in the verdict file as
 `pr_round` (the relay's own `round` counts per SHA). The relay also gets `--max-rounds 6`, which it
@@ -368,30 +376,39 @@ run the next round. The first round whose verdict is `all_clean` on the final SH
 **Disposition and dispute comment formats** (the merge gate reads whole lines only). A disposition
 comment by the PR author starts with the line `Disposition, round <k> (reviewed sha <sha7>):`, lists
 each finding with its classification, and ends with the line `Disputed findings: none` (or
-`Disputed findings: <n>`). A finding the author disputes is a line that starts with `- DISPUTED: <text>`;
-the latest disposition must repeat every dispute settled so far as `- RESOLVED: <text>`. Autonomous mode never merges over
+`Disputed findings: <n>`) as its last non-empty line. A finding the author disputes is a line that starts with `- DISPUTED: <text>`;
+the latest disposition must repeat every dispute settled so far as `- RESOLVED: <text>`. Dispute lines
+by the author count in review comments and review bodies too. Autonomous mode never merges over
 a dispute, because the human who settled disputes at Gate 2 is gone.
 
 **Replacing Gate 2: `ship-feature merge-gate <pr> --autonomous [--merge]`.** It checks, in order, and
 stops at the first failure (exit `6`); without `--merge` it only reports:
 1. both keys present, kill switch absent (exit `7`);
 2. plan binding: one `Plan-Key`, a consensus result for it, the plan panel unchanged, the plan unedited;
-3. the PR is open, not a draft, based on the repo's default branch, and `MERGEABLE`;
+3. the PR is open, not a draft, based on the repo's default branch, and `MERGEABLE` (`UNKNOWN` is read
+   up to 5 times);
 4. the verdict file of the highest round is for this repo and PR, names the PR's current head SHA, has
    `all_clean=true`, round at most 6, and the panel equals the relay's configured `REVIEWERS` without
    the author;
-5. no unresolved dispute and a latest disposition saying `Disputed findings: none`;
+5. no unresolved dispute and a latest disposition whose last non-empty line is `Disputed findings: none`;
 6. CI on that SHA: every check `SUCCESS` or `NEUTRAL` (nothing skipped, pending or missing); an empty
    result needs the repo listed in `~/.config/ship-feature/allow-no-ci`, a file a human creates;
 7. no sensitive file in the diff: the patterns in `~/.config/ship-feature/sensitive-paths`, else the
    built-in defaults (workflows, hooks, deploy and release scripts, keys, env files, anything named
-   secret or credential); a match leaves the PR to a human;
+   secret or credential); a match leaves the PR to a human, and a patterns file that cannot be read is
+   exit `6`;
 8. the head is re-read and the kill switch re-checked, then exactly one
    `gh pr merge <n> --merge --match-head-commit <verdict sha>` runs, followed by an audit comment (head
-   SHA, merge commit, the verdict file, degraded seats, CI, files checked, `autonomous_env=1`). If the
-   audit comment cannot be posted the command exits `8` and prints the text: post it.
+   SHA, merge commit, the verdict file, degraded seats, CI, files checked, `autonomous_env=1`). The text
+   is kept in memory and also written to `audit.txt` when the state directory allows it. If the audit
+   comment cannot be posted the command exits `8` and prints the text: post it.
 
 It never fixes, never retries a failed merge call and never loops.
+
+**Locks.** Each round and each plan-consensus run holds a lock directory, so two sessions cannot pick
+the same round. A stale lock (owner gone, or no pid after a minute) is taken over inside a second
+directory, `<lock>.takeover`. A takeover directory left by a crash is never removed by the tool: it
+blocks only takeovers, and a human removes it.
 
 **Stop and notify.** Exit `4`, `5`, `6`, `7` or `8`, exit `3` after the bounded retries, a failing
 hook, or a dispute: report it in the conversation, send a notification if the harness has a tool for
