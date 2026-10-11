@@ -2199,6 +2199,447 @@ sf_plan_tool_clause_notclean() {  # same pattern as sf_plan_tool_clause, but for
 sf_plan_tool_clause_notclean "drop the reviewer on a second consecutive attempt" 'second consecutive attempt.{0,60}drop'
 sf_plan_tool_clause_notclean "tell the human about the reduced panel"           'reduced panel'
 
+# --- autonomous mode (experimental): plan-consensus, relay --autonomous, merge-gate ----------------
+# Fake gh / pr-review-relay / reviewers; no network. The merge call is the thing under test: every
+# failing case also asserts the fake `gh pr merge` log stayed empty.
+ABIN="$WORK/abin"; mkdir -p "$ABIN"
+HEAD40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+OTHER40=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+OTHER64=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+cat > "$ABIN/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+f() { cat "$GHF/$1" 2>/dev/null; }
+seq_pop() { local s="$GHF/$1.seq"; if [ -s "$s" ]; then head -n1 "$s"; tail -n +2 "$s" > "$s.t"; mv "$s.t" "$s"; else cat "$GHF/$1" 2>/dev/null; fi; }
+case "$1" in api)
+  case "$*" in
+    *pulls/*/files*) f diff; exit "$(cat "$GHF/api_files_rc" 2>/dev/null || echo 0)";;   # "<path>[TAB<previous path>]" per line
+    *pulls/*/comments*) f pr_review_comments; exit "$(cat "$GHF/api_review_rc" 2>/dev/null || echo 0)";;
+    *pulls/*/reviews*) f pr_reviews;; *) f pr_comments;; esac; exit 0;; esac
+case "$1 $2" in
+  "repo view") [ -e "$GHF/repo_view_fail" ] && exit 1; case "$*" in *nameWithOwner*) f repo;; *defaultBranchRef*) f defb;; esac;;
+  "pr view")
+    fld=""; prev=""; for a in "$@"; do [ "$prev" = "--json" ] && fld="$a"; prev="$a"; done
+    case "$fld" in
+      headRefOid) n=$(( $(cat "$GHF/head.count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GHF/head.count"
+                  if [ "$n" = 2 ] && [ -e "$GHF/kill_on_second_head" ]; then : > "$(cat "$GHF/kill_on_second_head")"; fi
+                  if [ "$n" = 2 ] && [ -e "$GHF/on_second_head" ]; then bash "$GHF/on_second_head"; fi
+                  seq_pop pr_headRefOid;;
+      mergeable) seq_pop pr_mergeable;;
+      statusCheckRollup) seq_pop pr_statusCheckRollup;;
+      changedFiles) if [ -e "$GHF/pr_changedFiles" ]; then f pr_changedFiles; else grep -c . "$GHF/diff"; fi;;
+      *) f "pr_$fld";;
+    esac;;
+  "pr diff") f diff;;
+  "pr merge") if [ "${3:-}" = "--help" ]; then [ -e "$GHF/kill_on_help" ] && : > "$(cat "$GHF/kill_on_help")"; f merge_help; else printf '%s\n' "$*" >> "$GHF/merge.log"; exit "$(cat "$GHF/merge_rc" 2>/dev/null || echo 0)"; fi;;
+  "pr comment") prev=""; for a in "$@"; do if [ "$prev" = "--body-file" ]; then if [ "$a" = - ]; then cat > "$GHF/audit_posted"; else cp "$a" "$GHF/audit_posted"; fi; fi; prev="$a"; done; exit "$(cat "$GHF/comment_rc" 2>/dev/null || echo 0)";;
+  *) echo "fake gh: unexpected: $*" >&2; exit 64;;
+esac
+GHSTUB
+chmod +x "$ABIN/gh"
+# Fake reviewers for plan-consensus: print a body, then the verdict (or none) from STUB_LAST_<name>.
+for _s in codex grok; do
+  cat > "$ABIN/$_s" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$STUB_LOG.$_s"
+cat >/dev/null
+[ -n "\${STUB_TOUCH_PLAN:-}" ] && printf 'edited under the reviewer\\n' >> "\$STUB_TOUCH_PLAN"
+[ -e "\$STUB_FAIL_$_s" ] && exit 1
+echo "review body from $_s"
+[ -n "\${STUB_LAST_$_s-VERDICT: clean}" ] && printf '%s\n' "\${STUB_LAST_$_s-VERDICT: clean}"
+exit 0
+STUB
+  chmod +x "$ABIN/$_s"
+done
+# The antigravity seat runs `gemini`: the suite's gemini stub answers the version probe; a review is a
+# body and the verdict line (the suite's stub echoes the prompt, whose rules quote both verdict forms).
+cat > "$ABIN/gemini" <<GSTUB
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in --version|-v) exec "$PBIN/gemini" "\$@";; esac; done
+cat >/dev/null
+printf 'review body from gemini\nVERDICT: clean\n'
+GSTUB
+chmod +x "$ABIN/gemini"
+# The other plan seats (claude, cursor, glm via opencode): a body and the verdict line.
+for _b in claude cursor-agent opencode; do
+  cat > "$ABIN/$_b" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$STUB_LOG.$_b"
+case " \$* " in *" --version "*|*" -v "*) echo "1.0.0"; exit 0;; esac
+cat >/dev/null
+printf 'review body from $_b\nVERDICT: clean\n'
+STUB
+  chmod +x "$ABIN/$_b"
+done
+# Fake pr-review-relay: record argv; write a verdict file when asked; exit with STUB_RELAY_RC.
+cat > "$ABIN/pr-review-relay" <<'RSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_RELAY_LOG"
+vf=""; prev=""; for a in "$@"; do [ "$prev" = "--verdict-file" ] && vf="$a"; prev="$a"; done
+[ -n "${STUB_RELAY_TOUCH:-}" ] && printf 'edited during the round\n' >> "$STUB_RELAY_TOUCH"
+if [ "${STUB_RELAY_A3:-0}" = 1 ] && [ -n "$vf" ]; then
+  # The shape pr-review-relay --verdict-file writes (sets space-separated, every key present).
+  { printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\nexit=0\nauthor=claude\n' "$(cat "$GHF/pr_headRefOid")"
+    printf 'configured=codex grok opencode\nrequested=codex grok opencode\nran=codex grok opencode\nbenched=\n'
+    printf 'seat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=0123456789abcdef\nts=2026-10-11T00:00:00Z\n'; } > "$vf"
+  exit "${STUB_RELAY_RC:-0}"
+fi
+[ "${STUB_RELAY_WRITE:-1}" = 1 ] && [ -n "$vf" ] && printf 'repo=%s\npr=7\nround=1\nall_clean=%s\n' "${STUB_RELAY_REPO:-o/r}" "${STUB_RELAY_CLEAN-true}" > "$vf"
+exit "${STUB_RELAY_RC:-0}"
+RSTUB
+chmod +x "$ABIN/pr-review-relay"
+
+sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'; else shasum -a 256 | awk '{print $1}'; fi; }
+b64_of() { base64 | tr -d '\n'; }
+
+# One fresh, fully valid world per case: $AH (HOME), $GH (fake gh state), plan, consensus, verdict.
+mk_world() {
+  AH="$(mktemp -d "$WORK/ah.XXXXXX")"; GH="$AH/gh"; mkdir -p "$GH" "$AH/.config/ship-feature" "$AH/state/autonomous/consensus" "$AH/state/autonomous/o_r/pr-7"
+  printf 'REVIEWERS=claude,codex,grok,opencode\nPLAN_REVIEWERS=codex,grok\n' > "$AH/relay.conf"
+  printf 'the plan text\n' > "$AH/plan.md"
+  PKEY="$(sha256_of < "$AH/plan.md")"
+  printf 'plan_sha256=%s\nplan_path=%s\nround=1\nseats=codex,grok\nplan_panel=codex,grok\ndegraded=grok\nseat.codex=clean\nseat.grok=clean\n' "$PKEY" "$AH/plan.md" > "$AH/state/autonomous/consensus/plan-$PKEY.consensus"
+  VF="$AH/state/autonomous/o_r/pr-7/round-1.verdict"
+  printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\npr_round=1\ncontext_sha256=%s\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" "$PKEY" > "$VF"
+  printf 'o/r\n' > "$GH/repo"; printf 'main\n' > "$GH/defb"
+  printf 'OPEN\n' > "$GH/pr_state"; printf 'false\n' > "$GH/pr_isDraft"; printf 'main\n' > "$GH/pr_baseRefName"
+  printf 'MERGEABLE\n' > "$GH/pr_mergeable"; printf '%s\n' "$HEAD40" > "$GH/pr_headRefOid"
+  printf 'summary\n\nPlan-Key: %s\n' "$PKEY" > "$GH/pr_body"
+  printf 'alice\n' > "$GH/pr_author"
+  printf 'alice\t%s\n' "$(printf 'Disposition, round 1 (reviewed sha 1234567):\n- fixed it\nDisputed findings: none\n' | b64_of)" > "$GH/pr_comments"
+  printf 'COMPLETED|SUCCESS|-\nCOMPLETED|NEUTRAL|-\n-|-|SUCCESS\n' > "$GH/pr_statusCheckRollup"
+  printf 'src/a.js\ntest/a.test.js\n' > "$GH/diff"
+  printf 'merge options:\n  --match-head-commit SHA\n' > "$GH/merge_help"
+  printf 'cccccccccccccccccccccccccccccccccccccccc\n' > "$GH/pr_mergeCommit"
+  KILL="$AH/.config/ship-feature/AUTONOMOUS_OFF"
+}
+run_gate() { # run_gate [extra args]; env: SHIP_FEATURE_AUTONOMOUS unless AUTO_ENV=0
+  ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" SHIP_FEATURE_MERGEABLE_SLEEP=0 PR_RELAY_CONFIG="$AH/relay.conf" SHIP_FEATURE_PLAN_REVIEWERS="${GATE_PANEL:-codex,grok}" PATH="$ABIN:$PATH"
+    [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
+    bash "$CLI" merge-gate 7 ${GATE_FLAG---autonomous} ${GATE_MERGE---merge} "$@" >"$AH/gate.out" 2>"$AH/gate.err" )
+}
+# gate_case <desc> <want_rc> <mutation code run inside the world>
+gate_case() {
+  local desc="$1" want="$2" mut="${3:-:}" why="${4:-}" rc got
+  mk_world; eval "$mut"; run_gate; rc=$?
+  got="$rc"; if [ "$want" != 0 ] && [ -s "$GH/merge.log" ]; then got="merge-called"; fi
+  # WHY: the case must fail for the reason it names, not because some other check happened to fail.
+  if [ -n "$why" ] && [ "$got" = "$want" ] && ! grep -Eq -- "$why" "$AH/gate.err"; then got="wrong-reason($(tr '\n' ' ' < "$AH/gate.err" | cut -c1-90))"; fi
+  check "merge-gate: $desc" "$got" "$want"
+}
+
+gate_case "happy path (author seat in REVIEWERS, full panel, green CI)" 0
+mk_world; run_gate; rc=$?
+check "merge-gate happy path: exactly one pinned merge call, no other merge flag" "$(wc -l < "$GH/merge.log" | tr -d ' ')|$(cat "$GH/merge.log")" "1|pr merge 7 --merge --match-head-commit $HEAD40"
+grep -q "autonomous_env=1" "$GH/audit_posted" 2>/dev/null && grep -q "plan_degraded_seats=grok" "$GH/audit_posted" && grep -q "head_sha=$HEAD40" "$GH/audit_posted"; check "merge-gate happy path: audit comment records env key, degraded seats and head" $? 0
+grep -q 'src/a.js' "$GH/audit_posted" && grep -q 'test/a.test.js' "$GH/audit_posted" && grep -q 'COMPLETED|SUCCESS' "$GH/audit_posted"; check "merge-gate happy path: the audit comment lists the files and CI checks it saw" $? 0
+check "merge-gate happy path prints the merge commit" "$(cat "$AH/gate.out")" "cccccccccccccccccccccccccccccccccccccccc"
+mk_world; GATE_MERGE="" run_gate; rc=$?
+check "merge-gate without --merge only reports and never merges" "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)" "0|none"
+
+# keys and kill switch
+mk_world; AUTO_ENV=0 run_gate; check "merge-gate: flag without the env key is refused (7)" "$?" 7
+mk_world; GATE_FLAG="" run_gate; check "merge-gate: env key without the flag is refused (7)" "$?" 7
+gate_case "kill switch present at the start (7)" 7 ': > "$KILL"'
+mk_world; : > "$GH/kill_on_second_head"; printf '%s\n' "$KILL" > "$GH/kill_on_second_head"; run_gate; rc=$?
+check "merge-gate: kill switch created between the checks and the call (7, no merge)" "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)" "7|none"
+
+mk_world; printf '%s\n' "$KILL" > "$GH/kill_on_help"; run_gate; rc=$?
+check "merge-gate: kill switch created while the gh version is checked (7, no merge)" "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)" "7|none"
+
+# plan binding
+gate_case "two identical Plan-Key lines" 6 'printf "Plan-Key: %s\nPlan-Key: %s\n" "$PKEY" "$PKEY" > "$GH/pr_body"' 'exactly one well-formed'
+gate_case "a malformed second Plan-Key line" 6 'printf "Plan-Key: %s\nPlan-Key: nothex\n" "$PKEY" > "$GH/pr_body"' 'exactly one well-formed'
+gate_case "plan panel given through aliases (agy) still matches" 0 'sed -i.bak "s/^plan_panel=.*/plan_panel=antigravity,codex/" "$AH"/state/autonomous/consensus/plan-*.consensus; sed -i.bak "s/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=agy,codex/" "$AH/relay.conf"; GATE_PANEL=agy,codex'
+gate_case "SHIP_FEATURE_PLAN_REVIEWERS narrower than the relay config is refused" 6 'GATE_PANEL=codex' 'differs from PLAN_REVIEWERS'
+gate_case "PLAN_REVIEWERS missing from the relay config is refused" 6 'sed -i.bak "/^PLAN_REVIEWERS/d" "$AH/relay.conf"' 'PLAN_REVIEWERS is not set'
+unset GATE_PANEL
+gate_case "no Plan-Key line" 6 'printf "summary only\n" > "$GH/pr_body"'
+gate_case "two different Plan-Key lines" 6 'printf "Plan-Key: %s\nPlan-Key: %s\n" "$PKEY" "$OTHER64" > "$GH/pr_body"'
+gate_case "no consensus file for the Plan-Key" 6 'rm -f "$AH"/state/autonomous/consensus/*' 'no plan consensus'
+gate_case "plan panel changed since consensus" 6 'sed -i.bak "s/^plan_panel=.*/plan_panel=codex/" "$AH"/state/autonomous/consensus/plan-*.consensus' 'plan panel changed'
+gate_case "plan file edited after consensus" 6 'printf "edited\n" >> "$AH/plan.md"' 'changed after consensus'
+# repo / PR state
+gate_case "verdict names another repo" 6 'sed -i.bak "s/^repo=.*/repo=x\/y/" "$VF"'
+gate_case "verdict names another PR" 6 'sed -i.bak "s/^pr=.*/pr=8/" "$VF"'
+gate_case "draft PR" 6 'printf "true\n" > "$GH/pr_isDraft"' 'draft'
+gate_case "wrong base branch" 6 'printf "dev\n" > "$GH/pr_baseRefName"' 'base'
+gate_case "mergeable CONFLICTING" 6 'printf "CONFLICTING\n" > "$GH/pr_mergeable"' 'not mergeable'
+gate_case "mergeable UNKNOWN past 5 reads" 6 'printf "UNKNOWN\n" > "$GH/pr_mergeable"' 'not mergeable'
+gate_case "mergeable UNKNOWN 5 times: the 6th read is never made" 6 'printf "UNKNOWN\nUNKNOWN\nUNKNOWN\nUNKNOWN\nUNKNOWN\nMERGEABLE\n" > "$GH/pr_mergeable.seq"' 'not mergeable'
+gate_case "mergeable UNKNOWN 4 times, then MERGEABLE on the 5th read" 0 'printf "UNKNOWN\nUNKNOWN\nUNKNOWN\nUNKNOWN\nMERGEABLE\n" > "$GH/pr_mergeable.seq"'
+gate_case "mergeable UNKNOWN then MERGEABLE (retry)" 0 'printf "UNKNOWN\nUNKNOWN\nMERGEABLE\n" > "$GH/pr_mergeable.seq"'
+gate_case "PR not open" 6 'printf "MERGED\n" > "$GH/pr_state"'
+# verdict
+gate_case "verdict SHA differs from the PR head" 6 'printf "%s\n" "$OTHER40" > "$GH/pr_headRefOid"' 'verdict is for'
+gate_case "all_clean=false" 6 'sed -i.bak "s/^all_clean=.*/all_clean=false/" "$VF"' 'not all_clean'
+gate_case "a seat is findings in the verdict" 6 'sed -i.bak "s/^seat.grok=.*/seat.grok=findings/" "$VF"'
+gate_case "a seat benched" 6 'sed -i.bak "s/^benched=.*/benched=opencode/" "$VF"'
+gate_case "ran is not the full panel" 6 'sed -i.bak "s/^ran=.*/ran=codex,grok/" "$VF"'
+gate_case "configured differs from the relay config now" 6 'printf "REVIEWERS=claude,codex,grok,opencode,cursor\n" > "$AH/relay.conf"' 'panel'
+gate_case "relay config unreadable" 6 'rm -f "$AH/relay.conf"'
+gate_case "not the highest round (a newer round exists and is not clean)" 6 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=false/" "$VF" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"' 'not all_clean'
+gate_case "highest round clean while round 1 is not" 0 'sed -i.bak "s/^all_clean=.*/all_clean=false/" "$VF"; sed "s/^pr_round=.*/pr_round=2/" "$VF" | sed "s/^all_clean=.*/all_clean=true/" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"'
+gate_case "round 7 is past the cap" 6 'mv "$VF" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"; sed -i.bak "s/^pr_round=.*/pr_round=7/" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"' 'past the cap'
+gate_case "the relay's per-SHA round (1) differs from the PR round (2): accepted" 0 'mv "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict"; sed -i.bak "s/^pr_round=.*/pr_round=2/" "$AH/state/autonomous/o_r/pr-7/round-2.verdict"'
+gate_case "a verdict file with no pr_round (not written by relay --autonomous)" 6 'sed -i.bak "/^pr_round=/d" "$VF"' 'pr_round'
+gate_case "the round's context was not the Plan-Key plan" 6 'sed -i.bak "s/^context_sha256=.*/context_sha256=$OTHER64/" "$VF"' 'context other than the plan'
+gate_case "a verdict file with no context_sha256" 6 'sed -i.bak "/^context_sha256=/d" "$VF"' 'context other than the plan'
+gate_case "a verdict file with no benched key" 6 'sed -i.bak "/^benched=/d" "$VF"' 'no benched key'
+gate_case "a consensus result with no plan_path" 6 'sed -i.bak "/^plan_path=/d" "$AH"/state/autonomous/consensus/plan-*.consensus; printf "edited\n" >> "$AH/plan.md"' 'no plan_path'
+gate_case "no verdict file" 6 'rm -f "$VF"'
+# disputes
+gate_case "no disposition comment" 6 ': > "$GH/pr_comments"' 'no author disposition'
+gate_case "disposition says Disputed findings: 1" 6 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\nDisputed findings: 1\n" | b64_of)" > "$GH/pr_comments"' 'does not end with'
+gate_case "a quoted 'Disputed findings: none' above a real closing line 'Disputed findings: 1'" 6 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\n> Disputed findings: none\nDisputed findings: none\n- note\nDisputed findings: 1\n" | b64_of)" > "$GH/pr_comments"' 'does not end with'
+gate_case "text after the closing 'Disputed findings: none' line" 6 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\nDisputed findings: none\nSuite green\n" | b64_of)" > "$GH/pr_comments"' 'does not end with'
+gate_case "trailing blank lines after the closing line are fine" 0 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\nDisputed findings: none\n\n\n" | b64_of)" > "$GH/pr_comments"'
+gate_case "a CRLF disposition is read as lines" 0 'printf "alice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\r\n- fixed\r\nDisputed findings: none\r\n" | b64_of)" > "$GH/pr_comments"'
+gate_case "a malformed disposition header" 6 'printf "alice\t%s\n" "$(printf "Disposition, round one:\nDisputed findings: none\n" | b64_of)" > "$GH/pr_comments"' 'first line'
+gate_case "a - DISPUTED: line in the author's review comment" 6 'printf "alice\t%s\n" "$(printf "%s\n" "- DISPUTED: inline objection" | b64_of)" > "$GH/pr_review_comments"' 'unresolved'
+gate_case "a - DISPUTED: line in the author's review body" 6 'printf "alice\t%s\n" "$(printf "%s\n" "- DISPUTED: review body objection" | b64_of)" > "$GH/pr_reviews"' 'unresolved'
+gate_case "a review-comment dispute resolved in the latest disposition" 0 'printf "alice\t%s\n" "$(printf "%s\n" "- DISPUTED: inline objection" | b64_of)" > "$GH/pr_review_comments"; printf "alice\t%s\n" "$(printf "Disposition, round 2 (reviewed sha 1234567):\n- RESOLVED: inline objection\nDisputed findings: none\n" | b64_of)" > "$GH/pr_comments"'
+gate_case "review comments unreadable" 6 'printf "1\n" > "$GH/api_review_rc"' 'review comments'
+gate_case "an unresolved - DISPUTED: line" 6 'printf "alice\t%s\nalice\t%s\n" "$(printf "x\n- DISPUTED: the review is wrong\n" | b64_of)" "$(printf "Disposition, round 2 (reviewed sha 1234567):\nDisputed findings: none\n" | b64_of)" > "$GH/pr_comments"' 'unresolved'
+gate_case "a - DISPUTED: line resolved in the latest disposition" 0 'printf "alice\t%s\nalice\t%s\n" "$(printf "x\n- DISPUTED: the review is wrong\n" | b64_of)" "$(printf "Disposition, round 2 (reviewed sha 1234567):\n- RESOLVED: the review is wrong\nDisputed findings: none\n" | b64_of)" > "$GH/pr_comments"'
+gate_case "a quote mentioning DISPUTED mid-line (even by the author) does not block" 0 'printf "alice\t%s\nalice\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\nDisputed findings: none\n" | b64_of)" "$(printf "quote: see - DISPUTED: here\n" | b64_of)" > "$GH/pr_comments"'
+gate_case "a - DISPUTED: line from someone other than the author does not block" 0 'printf "alice\t%s\nbob\t%s\n" "$(printf "Disposition, round 1 (reviewed sha 1234567):\nDisputed findings: none\n" | b64_of)" "$(printf "%s\n" "- DISPUTED: x" | b64_of)" > "$GH/pr_comments"'
+# CI
+gate_case "CI pending" 6 'printf "IN_PROGRESS|-|-\n" > "$GH/pr_statusCheckRollup"' 'not green'
+gate_case "CI failed" 6 'printf "COMPLETED|FAILURE|-\n" > "$GH/pr_statusCheckRollup"' 'not green'
+gate_case "CI skipped is not green" 6 'printf "COMPLETED|SKIPPED|-\n" > "$GH/pr_statusCheckRollup"' 'not green'
+gate_case "CI status context pending" 6 'printf -- "-|-|PENDING\n" > "$GH/pr_statusCheckRollup"' 'not green'
+gate_case "CI entry with null state" 6 'printf -- "-|-|-\n" > "$GH/pr_statusCheckRollup"' 'not green'
+gate_case "empty CI refused by default" 6 ': > "$GH/pr_statusCheckRollup"' 'no CI checks'
+gate_case "empty CI allowed only by the allow-no-ci file" 0 ': > "$GH/pr_statusCheckRollup"; printf "o/r\n" > "$AH/.config/ship-feature/allow-no-ci"'
+# sensitive files
+for _pat in '.kamal/hooks.d/x' '.kamal/x' '.github/workflows/ci.yml' '.githooks/pre-push' 'ios/Fastfile' 'deploy.yml' 'config/deploy.yml' 'keys/AuthKey_X.p8' 'a/b.jks' 'x.keystore' '.env' 'app/.env.production' 'lib/secrets.rb' 'src/credentials.json' 'bin/mac-ios-build.sh' 'bin/build-ios-ipa.sh' 'android/build-android.sh' 'ios/hooks/x'; do
+  gate_case "sensitive default pattern: $_pat" 6 "printf 'src/a.js\\n%s\\n' '$_pat' > \"\$GH/diff\"" "sensitive path"
+done
+gate_case "custom sensitive-paths file overrides the defaults" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf "docs/x.md\n" > "$GH/diff"'
+gate_case "custom sensitive-paths file: defaults no longer apply" 0 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"'
+gate_case "a sensitive-paths file that cannot be read" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; chmod 000 "$AH/.config/ship-feature/sensitive-paths"' 'cannot read'
+gate_case "an empty sensitive-paths file is refused, not read as allow-all" 6 ': > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"' 'no active pattern'
+gate_case "a sensitive-paths file of comments and blanks is refused" 6 'printf "# none\n\n   \n" > "$AH/.config/ship-feature/sensitive-paths"' 'no active pattern'
+mk_world; printf 'src/a$(touch %s/pwned1)`touch %s/pwned2`.js\n' "$AH" "$AH" > "$GH/diff"; printf 'x$(touch %s/pwned3)\n*$(touch*\n' "$AH" > "$AH/.config/ship-feature/sensitive-paths"; run_gate; rc=$?
+check "merge-gate: \$(...) and backticks in a path or a pattern are never run, and the path is matched as written" "$rc|$(ls "$AH" | grep -c pwned)|$(grep -c 'sensitive path' "$AH/gate.err")" "6|0|1"
+gate_case "a rename OUT of a protected path is caught by its old name" 6 'printf "src/a.js\ndocs/ci.yml\t.github/workflows/ci.yml\n" > "$GH/diff"' 'sensitive path \(\.github/workflows/ci\.yml'
+gate_case "a rename INTO a protected path is caught by its new name" 6 'printf "bin/mac-ios-build.sh\tsrc/build.sh\n" > "$GH/diff"' 'sensitive path \(bin/mac-ios-build\.sh'
+gate_case "a plain rename between safe paths passes" 0 'printf "src/b.js\tsrc/a.js\n" > "$GH/diff"'
+mk_world; printf 'src/b.js\tsrc/a.js\n' > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: the audit comment shows a rename as 'old -> new'" "$rc|$(grep -c '^    src/a.js -> src/b.js$' "$GH/audit_posted")" "0|1"
+gate_case "a file list shorter than the PR's changedFiles (truncated) fails closed" 6 'printf "3\n" > "$GH/pr_changedFiles"' 'incomplete'
+gate_case "the PR files API cannot be read" 6 'printf "1\n" > "$GH/api_files_rc"' 'cannot read the PR file list'
+gate_case "a CRLF sensitive-paths file still matches" 6 'printf ".github/workflows/*\r\n" > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"' 'sensitive path'
+gate_case "CRLF paths from the diff still match an exact default pattern" 6 'printf "src/a.js\r\nbin/mac-ios-build.sh\r\n" > "$GH/diff"' 'sensitive path'
+# the merge call itself
+gate_case "head moved before the merge call" 6 'printf "%s\n%s\n" "$HEAD40" "$OTHER40" > "$GH/pr_headRefOid.seq"' 'head moved'
+gate_case "CI turns red between the checks and the merge call" 6 'printf "COMPLETED|SUCCESS|-\nCOMPLETED|FAILURE|-\n" > "$GH/pr_statusCheckRollup.seq"' 'CI changed after the checks'
+gate_case "gh without --match-head-commit" 6 'printf "options:\n  --squash\n" > "$GH/merge_help"' 'match-head-commit'
+mk_world; printf 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=false/; s/^run_id=.*/run_id=y/" "%s" > "%s"\n' "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict" > "$GH/on_second_head"; run_gate; rc=$?
+check "merge-gate: a newer, non-clean round recorded during the checks stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
+mk_world; printf 'sed -i.bak "s/^run_id=.*/run_id=rewritten/" "%s"\n' "$VF" > "$GH/on_second_head"; run_gate; rc=$?
+check "merge-gate: the same round rewritten during the checks (new run_id) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'newer round' "$AH/gate.err")" "6|none|1"
+mk_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_gate; rc=$?
+check "merge-gate --merge: a live PR lock (a round in progress) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'holds the lock' "$AH/gate.err")" "6|none|1"
+mk_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; GATE_MERGE="" run_gate; rc=$?
+check "merge-gate without --merge takes no lock (reports 0 while a round runs)" "$rc" 0
+mk_world; run_gate; rc=$?
+check "merge-gate: the PR lock is released after the merge" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7.lock" ] && echo held || echo free)" "0|free"
+mk_world; for _i in $(seq 1 250); do printf 'src/f%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: 250 files are all listed in the audit comment, with the total" "$rc|$(grep -c '^    src/f[0-9]*\.js$' "$GH/audit_posted")|$(grep -c '^files_checked (250):$' "$GH/audit_posted")" "0|250|1"
+mk_world; for _i in $(seq 1 1500); do printf 'src/a/very/long/directory/name/for/the/audit/file_%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: a list too long for one comment is shortened, says so, and audit.txt has every file" "$rc|$(grep -c '^files_checked (1500):$' "$GH/audit_posted")|$(grep -c '200 of 1500 files listed here; the full list is in .*audit.txt' "$GH/audit_posted")|$(grep -c 'file_[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|1|1|1500"
+mk_world; _long="$(printf 'd%.0s' $(seq 1 400))"; for _i in $(seq 1 1500); do printf 'src/%s/f%s.js\n' "$_long" "$_i"; done > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: 200 very long paths are shortened again until the comment fits (posted, under 60000 bytes)" "$rc|$([ "$(wc -c < "$GH/audit_posted")" -le 60000 ] && echo fits)|$(grep -Ec '^    \.\.\. [0-9]+ of 1500 files listed here' "$GH/audit_posted")|$(grep -c 'f[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|fits|1|1500"
+mk_world; printf 'printf "alice\\t%%s\\n" "%s" >> "%s"\n' "$(printf '%s\n' '- DISPUTED: raised during the merge' | b64_of)" "$GH/pr_comments" > "$GH/on_second_head"; run_gate; rc=$?
+check "merge-gate: a dispute posted after check 5 stops the merge under the lock (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'dispute appeared' "$AH/gate.err")" "6|none|1"
+mk_world; printf '1\n' > "$GH/merge_rc"; run_gate; rc=$?
+check "merge-gate: a failing merge call exits 6 and is not retried (one call logged)" "$rc|$(wc -l < "$GH/merge.log" | tr -d ' ')" "6|1"
+mk_world; printf '1\n' > "$GH/comment_rc"; run_gate; rc=$?
+check "merge-gate: audit comment fails to post → exit 8, text printed, audit.txt written" "$rc|$(grep -q 'head_sha=' "$AH/gate.out" && echo text)|$([ -s "$AH/state/autonomous/o_r/pr-7/audit.txt" ] && echo file)" "8|text|file"
+mk_world; chmod 555 "$AH/state/autonomous/o_r/pr-7"; run_gate; rc=$?; chmod 755 "$AH/state/autonomous/o_r/pr-7"
+check "merge-gate: audit.txt cannot be written → the comment is still posted with the full text" "$rc|$(grep -c "^head_sha=$HEAD40" "$GH/audit_posted" 2>/dev/null)" "0|1"
+mk_world; chmod 555 "$AH/state/autonomous/o_r/pr-7"; printf '1\n' > "$GH/comment_rc"; run_gate; rc=$?; chmod 755 "$AH/state/autonomous/o_r/pr-7"
+check "merge-gate: neither audit.txt nor the comment → exit 8 and the text on stdout" "$rc|$(grep -c "^head_sha=$HEAD40" "$AH/gate.out")" "8|1"
+
+# relay --autonomous
+mk_relay_world() { mk_world; RL="$AH/relay.log"; : > "$RL"; printf '7\n' > "$GH/pr_number"; }
+run_relay() { # extra args
+  ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH"
+    [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
+    bash "$CLI" relay --autonomous --author claude --context-file "$AH/plan.md" "$@" >"$AH/relay.out" 2>"$AH/relay.err" )
+}
+mk_relay_world; run_relay --pr 7; rc=$?
+check "relay --autonomous: runs, exit 0" "$rc" 0
+check "relay --autonomous: full panel (no --reviewers), computed verdict path, --max-rounds 6, --autonomous stripped" "$(grep -c -- '--reviewers' "$RL")|$(grep -c -- "--verdict-file $AH/state/autonomous/o_r/pr-7/round-1.verdict --max-rounds 6" "$RL")|$(grep -c -- '--autonomous' "$RL")" "0|1|0"
+run_relay --pr 7; rc=$?
+check "relay --autonomous: the second round writes round-2 with pr_round=2 beside the relay's own round=1" "$(sf_vf="$AH/state/autonomous/o_r/pr-7/round-2.verdict"; echo "$(grep -c '^pr_round=2$' "$sf_vf")|$(grep -c '^round=1$' "$sf_vf")")" "1|1"
+check "relay --autonomous: the second round writes round-2" "$([ -s "$AH/state/autonomous/o_r/pr-7/round-2.verdict" ] && echo yes)" yes
+mk_relay_world; run_relay; rc=$?
+check "relay --autonomous: the PR is resolved from the current branch when --pr is absent" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)" "0|yes"
+mk_relay_world; : > "$GH/pr_number"; run_relay; rc=$?
+check "relay --autonomous: an unresolvable PR is a retry (3), nothing counted, and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')|$([ -e "$AH/state/autonomous/o_r/pr-7/fails" ] && echo counted || echo none)" "3|0|none"
+mk_relay_world; : > "$GH/repo_view_fail"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a failed repo lookup is a retry (3) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "3|0"
+mk_relay_world; run_relay --pr abc; rc=$?
+check "relay --autonomous: a non-numeric --pr is refused (7) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
+mk_relay_world; run_relay --pr=7; rc=$?
+check "relay --autonomous: the --pr=N form is honoured and passed to the relay as --pr N" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)|$(grep -c -- '--pr 7 ' "$RL")|$(grep -c -- '--pr=7' "$RL")" "0|yes|1|0"
+check "relay --autonomous: --context-file reaches the relay as two fields" "$(grep -c -- "--context-file $AH/plan.md " "$RL")" 1
+mk_relay_world; run_relay --pr 7 --context-file="$AH/plan.md"; rc=$?
+check "relay --autonomous: a second --context-file (here the = form) is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
+mk_relay_world; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file="$AH/plan.md" >/dev/null 2>&1 ); rc=$?
+check "relay --autonomous: the --context-file=PATH form is passed to the relay as two fields" "$rc|$(grep -c -- "--context-file $AH/plan.md " "$RL")|$(grep -c -- '--context-file=' "$RL")" "0|1|0"
+mk_relay_world; export STUB_RELAY_TOUCH="$AH/plan.md"; run_relay --pr 7; rc=$?; unset STUB_RELAY_TOUCH
+check "relay --autonomous: a plan edited during the round is not a round (3) and leaves no verdict" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|0|gone"
+mk_relay_world; run_relay --pr=7
+check "relay --autonomous: the verdict file records the context's SHA-256" "$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" 1
+mk_relay_world; printf 'not the plan\n' > "$AH/other.md"; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file "$AH/other.md" >/dev/null 2>"$AH/relay.err" ); rc=$?
+check "relay --autonomous: a context file that is not a consensus plan is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
+mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a fresh lock with no pid yet is held, not taken over (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
+mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; touch -t 200001010000 "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
+check "relay --autonomous: an old lock with no pid is stale and taken over" "$rc" 0
+mk_relay_world; export STUB_RELAY_CLEAN=false; run_relay --pr 7; rc=$?; unset STUB_RELAY_CLEAN
+check "relay --autonomous: a findings round (all_clean=false) is counted and exits 2" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/rounds")|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept)" "2|1|kept"
+mk_relay_world; export STUB_RELAY_CLEAN=""; run_relay --pr 7; rc=$?; unset STUB_RELAY_CLEAN
+check "relay --autonomous: a verdict file with no all_clean value is not a round (3) and is removed" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|0|gone"
+mk_relay_world; export STUB_RELAY_REPO=x/y; run_relay --pr 7; rc=$?; unset STUB_RELAY_REPO
+check "relay --autonomous: a verdict file for another repo is not a round (3) and is removed" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|gone"
+mk_relay_world; run_relay --pr 7; export STUB_RELAY_RC=3; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+check "relay --autonomous: a failed round (exit 3) leaves no higher verdict file behind" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7/round-2.verdict" ] && echo kept || echo gone)" "3|gone"
+mk_relay_world; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 >/dev/null 2>"$AH/relay.err" ); rc=$?
+check "relay --autonomous without --context-file is refused (7) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
+mk_relay_world; chmod 555 "$AH/state/autonomous/o_r/pr-7"; run_relay --pr 7; rc=$?; chmod 755 "$AH/state/autonomous/o_r/pr-7"
+check "relay --autonomous: an unwritable round state stops before dispatch (4), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(grep -c 'cannot write the round state' "$AH/relay.err")" "4|0|1"
+mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock" "$AH/state/autonomous/o_r/pr-7.lock.takeover"; printf '999999\n' > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a stale lock is not taken while another takeover is in progress (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
+mk_relay_world; run_relay --pr 7 --reviewers codex; check "relay --autonomous refuses --reviewers (7)" "$?" 7
+mk_relay_world; run_relay --pr 7 --verdict-file /tmp/x; check "relay --autonomous refuses a caller verdict path (7)" "$?" 7
+mk_relay_world; run_relay --pr 7 --reset; check "relay --autonomous refuses --reset (7)" "$?" 7
+mk_relay_world; AUTO_ENV=0 run_relay --pr 7; check "relay --autonomous without the env key is refused (7)" "$?" 7
+mk_relay_world; : > "$KILL"; run_relay --pr 7; check "relay --autonomous with the kill switch is refused (7)" "$?" 7
+mk_relay_world; for _i in 1 2 3 4 5 6; do run_relay --pr 7; done; run_relay --pr 7; rc=$?
+check "relay --autonomous: the 7th round is refused (4) and the relay is not called again" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|6"
+mk_relay_world; for _i in 1 2 3; do run_relay --pr 7; done; printf 'head moved\n' > "$AH/note"; run_relay --pr 7; run_relay --pr 7; rc=$?
+check "relay --autonomous: rounds are counted per PR (the 5th call writes round-5)" "$([ -s "$AH/state/autonomous/o_r/pr-7/round-5.verdict" ] && echo yes)" yes
+mk_relay_world; export STUB_RELAY_RC=3; for _i in 1 2 3; do run_relay --pr 7; done; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+check "relay --autonomous: the 4th failed attempt exits 4" "$rc" 4
+mk_relay_world; export STUB_RELAY_RC=3; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+check "relay --autonomous: a failed round (exit 3) is not counted as a round" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")" "3|0"
+mk_relay_world; export STUB_RELAY_WRITE=0; run_relay --pr 7; rc=$?; unset STUB_RELAY_WRITE
+check "relay --autonomous: exit 0 without a verdict file is not a counted round (3)" "$rc" 3
+mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a live lock on the PR refuses the round (4) and does not call the relay" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
+mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '999999\n' > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a stale lock (owner gone) is taken over, and released after the round" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7.lock" ] && echo locked || echo free)|$([ -e "$AH/state/autonomous/o_r/pr-7.lock.takeover" ] && echo left || echo clean)" "0|free|clean"
+mk_relay_world; export STUB_RELAY_RC=1; run_relay --pr 7; rc=$?
+check "relay --autonomous: a relay exit outside 0/3/4 is a failed attempt (3), not a round" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/fails" 2>/dev/null)|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")" "3|1|0"
+run_relay --pr 7; run_relay --pr 7; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+check "relay --autonomous: unexpected relay exits are bounded by the same cap (the 4th exits 4)" "$rc" 4
+mk_relay_world; export STUB_RELAY_RC=4; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+check "relay --autonomous passes the relay's exit 4 through" "$rc" 4
+
+# relay --autonomous → merge-gate, with a verdict file in the shape the real relay writes
+mk_relay_world; rm -f "$VF"; export STUB_RELAY_A3=1; run_relay --pr 7; rc=$?; unset STUB_RELAY_A3
+check "relay → merge-gate: relay --autonomous accepts an A3-shaped verdict as an all_clean round 1" "$rc|$(grep -c '^pr_round=1$' "$AH/state/autonomous/o_r/pr-7/round-1.verdict")|$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" "0|1|1"
+run_gate; rc=$?
+check "relay → merge-gate: merge-gate merges on the wrapper's own verdict file, once" "$rc|$(cat "$GH/merge.log" 2>/dev/null)" "0|pr merge 7 --merge --match-head-commit $HEAD40"
+mk_relay_world; rm -f "$VF"; export STUB_RELAY_A3=1; run_relay --pr 7; unset STUB_RELAY_A3; sed -i.bak 's/^seat.grok=.*/seat.grok=findings/' "$AH/state/autonomous/o_r/pr-7/round-1.verdict"; run_gate; rc=$?
+check "relay → merge-gate: the same chain with one seat 'findings' does not merge" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
+
+# plan-consensus
+mk_plan_world() { mk_world; PL="$AH/plan.md"; SL="$AH/stub.log"; rm -f "$AH/state/autonomous/consensus/"*; }
+run_pc() { # extra args
+  ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH"
+    [ -z "${PLAN_ENV:-}" ] || export SHIP_FEATURE_PLAN_REVIEWERS="$PLAN_ENV"
+    # The grok seat is degraded when the machine has no bwrap (a CI runner, for one). Pin the probe so
+    # the result does not depend on the machine; the =fail case below covers the degraded path.
+    export SHIP_FEATURE_FORCE_SANDBOX_PROBE="${SHIP_FEATURE_FORCE_SANDBOX_PROBE:-ok}"
+    [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
+    bash "$CLI" plan-consensus "$PL" --autonomous "$@" >"$AH/pc.out" 2>"$AH/pc.err" )
+}
+mk_plan_world; run_pc; rc=$?
+check "plan-consensus: every seat clean → exit 0" "$rc" 0
+check "plan-consensus: result file binds the plan hash, panel and degraded seats" "$(sf_kv_get_t() { awk -F= -v k="$2" '$1==k{print $2}' "$1"; }; c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"; echo "$(sf_kv_get_t "$c" plan_sha256)|$(sf_kv_get_t "$c" plan_panel)|$(sf_kv_get_t "$c" degraded)")" "$PKEY|codex,grok|"
+grep -q 'VERDICT: clean' "$SL.codex" && grep -q 'VERDICT LINE' "$SL.codex"; check "plan-consensus: the verdict-line rules are added to the reviewer prompt" $? 0
+printf 'plan\n' | ( export STUB_LOG="$AH/p2.log"; PATH="$ABIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 )
+[ -s "$AH/p2.log.codex" ] && ! grep -q 'VERDICT LINE' "$AH/p2.log.codex"; check "plan-review (not autonomous) does NOT get the verdict-line rules" $? 0
+mk_plan_world; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; run_pc; rc=$?
+check "plan-consensus: one seat has findings in round 1 → exit 2 (revise)" "$rc" 2
+run_pc; rc=$?
+check "plan-consensus: still findings in round 2 → exit 5 (cap)" "$rc" 5
+n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?
+check "plan-consensus: a third invocation exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
+unset STUB_LAST_grok
+mk_plan_world; run_pc; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; n1="$(wc -l < "$SL.grok" | tr -d ' ')"; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: a re-run after consensus on the same text and panel exits 0 and runs no reviewer" "$rc|$(wc -l < "$SL.grok" | tr -d ' ')" "0|$n1"
+# Human-only closing lines must not leak into plan-consensus output (they contradict "never drop a seat").
+HUMAN_RE='drop that one reviewer|do not run a round 3|straight to Gate 1'
+mk_plan_world; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"
+check "plan-consensus: a clean round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
+mk_plan_world; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"; unset STUB_LAST_grok
+check "plan-consensus: a findings round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"
+check "plan-consensus: a seat-failure round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
+check "plan-consensus: its own exit-3 line says autonomous mode never drops a seat" "$(grep -c 'Run plan-consensus again; autonomous mode never drops a seat\.' "$AH/pc.all")" 1
+unset STUB_FAIL_grok
+PR_OUT="$AH/plain.out"
+printf 'plan\n' | ( export STUB_LOG="$AH/p3.log"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
+check "plan-review (plain, clean): still prints the human closing lines" "$(grep -c 'straight to Gate 1' "$PR_OUT")|$(grep -c 'do not run a round 3' "$PR_OUT")" "1|1"
+printf 'plan\n' | ( export STUB_LOG="$AH/p4.log" STUB_FAIL_grok="$AH/fail_grok"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
+check "plan-review (plain, seat failed): still prints the drop-the-reviewer line" "$(grep -c 'drop that one reviewer' "$PR_OUT")" 1
+unset STUB_FAIL_grok
+mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail run_pc; rc=$?
+check "plan-consensus: a real degraded_note (grok without its sandbox) is recorded as degraded=grok" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|grok"
+mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
+check "plan-consensus: no degraded_note → nothing recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|"
+mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=agy,codex/' "$AH/relay.conf"; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
+check "plan-consensus: the antigravity seat (named agy) is always recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)|$(awk -F= '$1=="plan_panel"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)" "0|antigravity|antigravity,codex"
+mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=claude,codex,cursor,glm,grok,antigravity/' "$AH/relay.conf"; run_pc; rc=$?
+_c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"
+check "plan-consensus: every supported plan seat's verdict is read back by name (claude, codex, cursor, glm, grok, antigravity)" "$rc|$(for _s in claude codex cursor glm grok antigravity; do awk -F= -v k="seat.$_s" '$1==k{printf "%s ", $2}' "$_c" 2>/dev/null; done)" "0|clean clean clean clean clean clean "
+mk_plan_world; export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
+check "plan-consensus: a plan edited while the panel reads it → exit 3, no consensus file, no round" "$rc|$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0|0"
+mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan/$_pk.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/plan/$_pk.lock/pid"; run_pc; rc=$?
+check "plan-consensus: a live lock on the plan refuses the run (5) and runs no reviewer" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)" "5|none"
+mk_plan_world; export STUB_LAST_grok=""; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: a seat with no VERDICT line → exit 3, no round counted" "$rc|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0"
+mk_plan_world; export STUB_LAST_grok="VERDICT: Clean"; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: 'VERDICT: Clean' (wrong case) is unknown → exit 3" "$rc" 3
+mk_plan_world; export STUB_LAST_grok="VERDICT: clean
+VERDICT: clean"; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: two verdict lines are unknown → exit 3" "$rc" 3
+mk_plan_world; export STUB_LAST_grok="VERDICT: clean   "; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: trailing blanks after the verdict are unknown → exit 3" "$rc" 3
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; run_pc; rc=$?
+check "plan-consensus: a failed seat → exit 3, no round counted" "$rc|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0"
+run_pc; run_pc; run_pc; rc=$?; unset STUB_FAIL_grok
+check "plan-consensus: the 4th attempt exits 5" "$rc" 5
+mk_plan_world; sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; check "plan-consensus: PLAN_REVIEWERS unset → exit 5" "$?" 5
+mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=, ,/' "$AH/relay.conf"; run_pc; rc=$?
+check "plan-consensus: PLAN_REVIEWERS that names no seat → exit 5, no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)" "5|none"
+mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=codex,opencode/' "$AH/relay.conf"; run_pc; check "plan-consensus: a relay-only name in PLAN_REVIEWERS → exit 5" "$?" 5
+mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=codex,nonesuch/' "$AH/relay.conf"; run_pc; check "plan-consensus: an unknown seat → exit 5" "$?" 5
+mk_plan_world; PLAN_ENV=codex run_pc; rc=$?
+check "plan-consensus: SHIP_FEATURE_PLAN_REVIEWERS narrower than the relay config → exit 5, no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)|$(grep -c 'differs from PLAN_REVIEWERS' "$AH/pc.err")" "5|none|1"
+mk_plan_world; PLAN_ENV="grok, codex" run_pc; check "plan-consensus: an override naming the same set as the relay config runs" "$?" 0
+mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan/$_pk"; chmod 555 "$AH/state/autonomous/plan/$_pk"; run_pc; rc=$?; chmod 755 "$AH/state/autonomous/plan/$_pk"
+check "plan-consensus: an unwritable attempt counter stops before dispatch (5), no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)|$(grep -c 'cannot record the attempt' "$AH/pc.err")" "5|none|1"
+mk_plan_world; run_pc; cp "$AH/plan.md" "$AH/plan-copy.md"; n1="$(wc -l < "$SL.codex" | tr -d ' ')"; PL="$AH/plan-copy.md" run_pc; rc=$?
+check "plan-consensus: the same text at another path is reviewed again (no reuse across paths)" "$rc|$([ "$(wc -l < "$SL.codex" | tr -d ' ')" -gt "$n1" ] && echo reviewed)" "0|reviewed"
+mk_plan_world; run_pc --reviewers codex; check "plan-consensus refuses --reviewers (7)" "$?" 7
+mk_plan_world; ( export SHIP_FEATURE_AUTONOMOUS=1 HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state"; bash "$CLI" plan-consensus - --autonomous </dev/null >/dev/null 2>&1 ); check "plan-consensus refuses stdin" "$?" 1
+mk_plan_world; AUTO_ENV=0 run_pc; check "plan-consensus without the env key is refused (7)" "$?" 7
+mk_plan_world; : > "$KILL"; run_pc; check "plan-consensus with the kill switch is refused (7)" "$?" 7
+mk_plan_world; ( export HOME="$AH" SHIP_FEATURE_AUTONOMOUS=1 SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH" SHIP_FEATURE_PLAN_REVIEWERS=codex,grok; bash "$CLI" plan-consensus "$PL" >/dev/null 2>&1 ); check "plan-consensus without --autonomous is refused (7)" "$?" 7
+
+# docs and adapters state the mode (consistency clauses: WORKFLOW.md and every adapter)
+sf_clause "autonomous mode exists, is experimental and is off by default" 'autonomous mode.{0,200}(experimental|off by default)'
+sf_clause "autonomous mode needs the env key SHIP_FEATURE_AUTONOMOUS" 'SHIP_FEATURE_AUTONOMOUS'
+grep -q 'AUTONOMOUS_OFF' "$HERE/../WORKFLOW.md" && grep -q 'Plan-Key:' "$HERE/../WORKFLOW.md" && grep -q 'Disputed findings: none' "$HERE/../WORKFLOW.md" && grep -q -- '- DISPUTED:' "$HERE/../WORKFLOW.md" && grep -q 'Disposition,' "$HERE/../WORKFLOW.md"
+check "WORKFLOW.md documents the kill switch, Plan-Key and the disposition/dispute line formats" $? 0
+
 echo "-------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 # FAIL is checked FIRST: when a case fails, PASS is naturally short of the total, and reporting that
@@ -2207,7 +2648,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=351
+EXPECTED=553
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

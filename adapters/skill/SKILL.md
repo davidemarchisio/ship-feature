@@ -90,4 +90,6 @@ The essentials you must honor:
 For a trivial change, the human may say `--light` (may skip only the plan review — never the worktree,
 tests, cross-review, or merge gate).
 
+**Autonomous mode (experimental, off by default):** only when the human launched the session with `SHIP_FEATURE_AUTONOMOUS=1` AND the commands are given `--autonomous` (`plan-consensus`, `relay --autonomous`, `merge-gate`). The rules, the eight merge-gate checks, the kill switch and the stop-and-notify duty are in the "Autonomous mode" section of `WORKFLOW.md`; read it before using any of them. Without that variable, everything above stands and the agent never self-merges.
+
 Read `WORKFLOW.md` now and follow it step by step.

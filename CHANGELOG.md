@@ -6,6 +6,18 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ## [Unreleased]
 
+### Added
+
+- **Autonomous mode (experimental, off by default).** Three opt-in commands close the loop without a
+  human gate: `ship-feature plan-consensus <plan> --autonomous` (the full plan panel must all return
+  `VERDICT: clean` in one round; 2 rounds, 3 attempts), `ship-feature relay --autonomous` (full-panel
+  rounds only, a computed verdict-file path, one round counter per PR, cap 6) and
+  `ship-feature merge-gate <pr> --autonomous [--merge]` (eight fail-closed checks, then one
+  `gh pr merge --merge --match-head-commit`, then an audit comment). It needs BOTH the flag and
+  `SHIP_FEATURE_AUTONOMOUS=1`; `~/.config/ship-feature/AUTONOMOUS_OFF` stops it; `sensitive-paths` and
+  `allow-no-ci` live next to it. It is a guard against accidents, not a security boundary against the
+  agent (see `WORKFLOW.md`). Needs a `pr-review-relay` with `--verdict-file`. Defaults are unchanged.
+
 ## [0.6.0] — 2026-09-25
 
 ### Changed
