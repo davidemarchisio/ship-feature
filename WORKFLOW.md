@@ -363,7 +363,8 @@ result; a PR without exactly one key is refused.
 
 **The loop: `ship-feature relay --autonomous --context-file <plan>`.** Every round is a full-panel round
 on the relay's own quorum (`--reviewers`, `--verdict-file`, `--max-rounds` and `--reset` are refused, and
-so is a round without `--context-file`). The context file must be the approved plan itself, byte for
+so is a round without `--context-file`). A repository or PR that `gh` cannot resolve stops before the
+relay runs and counts nothing (exit `3`); a `--pr` that is not a number is exit `7`. The context file must be the approved plan itself, byte for
 byte: a file with no consensus result for its SHA-256 is refused (exit `7`), and the hash is recorded in
 the verdict file as `context_sha256`. The file is hashed again after the round, and a plan edited during
 the round is a failed attempt (exit `3`). Dispositions reach the reviewers as PR comments. Exit `0` is an `all_clean` round, exit `2` a counted round with
@@ -397,17 +398,20 @@ stops at the first failure (exit `6`); without `--merge` it only reports:
 5. no unresolved dispute and a latest disposition whose last non-empty line is `Disputed findings: none`;
 6. CI on that SHA: every check `SUCCESS` or `NEUTRAL` (nothing skipped, pending or missing); an empty
    result needs the repo listed in `~/.config/ship-feature/allow-no-ci`, a file a human creates;
-7. no sensitive file in the diff: the patterns in `~/.config/ship-feature/sensitive-paths`, else the
+7. no sensitive file in the PR: the file list comes from the PR files API, every page, and each pattern is
+   matched against the new name and, for a rename, the old name too; a list shorter than the PR's
+   `changedFiles` is exit `6`. The patterns are in `~/.config/ship-feature/sensitive-paths`, else the
    built-in defaults (workflows, hooks, deploy and release scripts, keys, env files, anything named
    secret or credential); a match leaves the PR to a human, and a patterns file that cannot be read or
    has no active pattern is exit `6`;
 8. under the same PR lock that `relay --autonomous` takes, the head, the highest verdict file (same file,
-   same `run_id` as check 4) and CI are re-read and the kill switch re-checked, then exactly one
+   same `run_id` as check 4), the disputes and CI are re-read and the kill switch re-checked, then exactly one
    `gh pr merge <n> --merge --match-head-commit <verdict sha>` runs, followed by an audit comment (head
    SHA, merge commit, the verdict file, degraded seats, CI, files checked, `autonomous_env=1`). The text
    is kept in memory and also written to `audit.txt` when the state directory allows it. The comment
    states the number of files checked and lists them all, unless that would pass GitHub's comment size
-   limit: then it lists the first 200 and says where the full list is. If the audit comment cannot be
+   limit: then it lists the first 200, halving that number until the comment fits, and says where the full list
+   is. If the audit comment cannot be
    posted the command exits `8` and prints the text: post it.
 
 It never fixes, never retries a failed merge call and never loops.

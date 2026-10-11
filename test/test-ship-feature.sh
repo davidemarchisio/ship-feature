@@ -2211,9 +2211,12 @@ cat > "$ABIN/gh" <<'GHSTUB'
 f() { cat "$GHF/$1" 2>/dev/null; }
 seq_pop() { local s="$GHF/$1.seq"; if [ -s "$s" ]; then head -n1 "$s"; tail -n +2 "$s" > "$s.t"; mv "$s.t" "$s"; else cat "$GHF/$1" 2>/dev/null; fi; }
 case "$1" in api)
-  case "$*" in *pulls/*/comments*) f pr_review_comments; exit "$(cat "$GHF/api_review_rc" 2>/dev/null || echo 0)";; *pulls/*/reviews*) f pr_reviews;; *) f pr_comments;; esac; exit 0;; esac
+  case "$*" in
+    *pulls/*/files*) f diff; exit "$(cat "$GHF/api_files_rc" 2>/dev/null || echo 0)";;   # "<path>[TAB<previous path>]" per line
+    *pulls/*/comments*) f pr_review_comments; exit "$(cat "$GHF/api_review_rc" 2>/dev/null || echo 0)";;
+    *pulls/*/reviews*) f pr_reviews;; *) f pr_comments;; esac; exit 0;; esac
 case "$1 $2" in
-  "repo view") case "$*" in *nameWithOwner*) f repo;; *defaultBranchRef*) f defb;; esac;;
+  "repo view") [ -e "$GHF/repo_view_fail" ] && exit 1; case "$*" in *nameWithOwner*) f repo;; *defaultBranchRef*) f defb;; esac;;
   "pr view")
     fld=""; prev=""; for a in "$@"; do [ "$prev" = "--json" ] && fld="$a"; prev="$a"; done
     case "$fld" in
@@ -2223,6 +2226,7 @@ case "$1 $2" in
                   seq_pop pr_headRefOid;;
       mergeable) seq_pop pr_mergeable;;
       statusCheckRollup) seq_pop pr_statusCheckRollup;;
+      changedFiles) if [ -e "$GHF/pr_changedFiles" ]; then f pr_changedFiles; else grep -c . "$GHF/diff"; fi;;
       *) f "pr_$fld";;
     esac;;
   "pr diff") f diff;;
@@ -2418,6 +2422,13 @@ gate_case "an empty sensitive-paths file is refused, not read as allow-all" 6 ':
 gate_case "a sensitive-paths file of comments and blanks is refused" 6 'printf "# none\n\n   \n" > "$AH/.config/ship-feature/sensitive-paths"' 'no active pattern'
 mk_world; printf 'src/a$(touch %s/pwned1)`touch %s/pwned2`.js\n' "$AH" "$AH" > "$GH/diff"; printf 'x$(touch %s/pwned3)\n*$(touch*\n' "$AH" > "$AH/.config/ship-feature/sensitive-paths"; run_gate; rc=$?
 check "merge-gate: \$(...) and backticks in a path or a pattern are never run, and the path is matched as written" "$rc|$(ls "$AH" | grep -c pwned)|$(grep -c 'sensitive path' "$AH/gate.err")" "6|0|1"
+gate_case "a rename OUT of a protected path is caught by its old name" 6 'printf "src/a.js\ndocs/ci.yml\t.github/workflows/ci.yml\n" > "$GH/diff"' 'sensitive path \(\.github/workflows/ci\.yml'
+gate_case "a rename INTO a protected path is caught by its new name" 6 'printf "bin/mac-ios-build.sh\tsrc/build.sh\n" > "$GH/diff"' 'sensitive path \(bin/mac-ios-build\.sh'
+gate_case "a plain rename between safe paths passes" 0 'printf "src/b.js\tsrc/a.js\n" > "$GH/diff"'
+mk_world; printf 'src/b.js\tsrc/a.js\n' > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: the audit comment shows a rename as 'old -> new'" "$rc|$(grep -c '^    src/a.js -> src/b.js$' "$GH/audit_posted")" "0|1"
+gate_case "a file list shorter than the PR's changedFiles (truncated) fails closed" 6 'printf "3\n" > "$GH/pr_changedFiles"' 'incomplete'
+gate_case "the PR files API cannot be read" 6 'printf "1\n" > "$GH/api_files_rc"' 'cannot read the PR file list'
 gate_case "a CRLF sensitive-paths file still matches" 6 'printf ".github/workflows/*\r\n" > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"' 'sensitive path'
 gate_case "CRLF paths from the diff still match an exact default pattern" 6 'printf "src/a.js\r\nbin/mac-ios-build.sh\r\n" > "$GH/diff"' 'sensitive path'
 # the merge call itself
@@ -2438,6 +2449,10 @@ mk_world; for _i in $(seq 1 250); do printf 'src/f%s.js\n' "$_i"; done > "$GH/di
 check "merge-gate: 250 files are all listed in the audit comment, with the total" "$rc|$(grep -c '^    src/f[0-9]*\.js$' "$GH/audit_posted")|$(grep -c '^files_checked (250):$' "$GH/audit_posted")" "0|250|1"
 mk_world; for _i in $(seq 1 1500); do printf 'src/a/very/long/directory/name/for/the/audit/file_%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
 check "merge-gate: a list too long for one comment is shortened, says so, and audit.txt has every file" "$rc|$(grep -c '^files_checked (1500):$' "$GH/audit_posted")|$(grep -c '200 of 1500 files listed here; the full list is in .*audit.txt' "$GH/audit_posted")|$(grep -c 'file_[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|1|1|1500"
+mk_world; _long="$(printf 'd%.0s' $(seq 1 400))"; for _i in $(seq 1 1500); do printf 'src/%s/f%s.js\n' "$_long" "$_i"; done > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: 200 very long paths are shortened again until the comment fits (posted, under 60000 bytes)" "$rc|$([ "$(wc -c < "$GH/audit_posted")" -le 60000 ] && echo fits)|$(grep -Ec '^    \.\.\. [0-9]+ of 1500 files listed here' "$GH/audit_posted")|$(grep -c 'f[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|fits|1|1500"
+mk_world; printf 'printf "alice\\t%%s\\n" "%s" >> "%s"\n' "$(printf '%s\n' '- DISPUTED: raised during the merge' | b64_of)" "$GH/pr_comments" > "$GH/on_second_head"; run_gate; rc=$?
+check "merge-gate: a dispute posted after check 5 stops the merge under the lock (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'dispute appeared' "$AH/gate.err")" "6|none|1"
 mk_world; printf '1\n' > "$GH/merge_rc"; run_gate; rc=$?
 check "merge-gate: a failing merge call exits 6 and is not retried (one call logged)" "$rc|$(wc -l < "$GH/merge.log" | tr -d ' ')" "6|1"
 mk_world; printf '1\n' > "$GH/comment_rc"; run_gate; rc=$?
@@ -2463,7 +2478,11 @@ check "relay --autonomous: the second round writes round-2" "$([ -s "$AH/state/a
 mk_relay_world; run_relay; rc=$?
 check "relay --autonomous: the PR is resolved from the current branch when --pr is absent" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)" "0|yes"
 mk_relay_world; : > "$GH/pr_number"; run_relay; rc=$?
-check "relay --autonomous: an unresolvable PR is refused (4) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
+check "relay --autonomous: an unresolvable PR is a retry (3), nothing counted, and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')|$([ -e "$AH/state/autonomous/o_r/pr-7/fails" ] && echo counted || echo none)" "3|0|none"
+mk_relay_world; : > "$GH/repo_view_fail"; run_relay --pr 7; rc=$?
+check "relay --autonomous: a failed repo lookup is a retry (3) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "3|0"
+mk_relay_world; run_relay --pr abc; rc=$?
+check "relay --autonomous: a non-numeric --pr is refused (7) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
 mk_relay_world; run_relay --pr=7; rc=$?
 check "relay --autonomous: the --pr=N form is honoured and passed to the relay as --pr N" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)|$(grep -c -- '--pr 7 ' "$RL")|$(grep -c -- '--pr=7' "$RL")" "0|yes|1|0"
 check "relay --autonomous: --context-file reaches the relay as two fields" "$(grep -c -- "--context-file $AH/plan.md " "$RL")" 1
@@ -2629,7 +2648,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=543
+EXPECTED=553
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

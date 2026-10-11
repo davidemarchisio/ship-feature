@@ -1602,9 +1602,16 @@ cmd_relay_auto() {
   command -v pr-review-relay >/dev/null 2>&1 || die "pr-review-relay not found on PATH (it is a dependency: https://github.com/hamen/pr-review-relay)."
   command -v gh >/dev/null 2>&1 || die "gh not found on PATH."
   repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || repo=""
-  [ -n "$repo" ] || { echo "✖ relay --autonomous: cannot resolve the repository (gh repo view failed)." >&2; return 4; }
-  if [ -z "$pr" ]; then pr="$(gh pr view --json number --jq .number 2>/dev/null)" || pr=""; fi
-  case "$pr" in ''|*[!0-9]*) echo "✖ relay --autonomous: cannot resolve one PR (pass --pr N)." >&2; return 4;; esac
+  # A lookup that fails is a retry (3), not the round cap (4): nothing ran and nothing was counted. It
+  # still fails closed: no relay runs without a known repo and PR. There is no per-PR counter yet, so
+  # the bound is the caller's: a second failure in a row is a stop.
+  [ -n "$repo" ] || { echo "✖ relay --autonomous: cannot resolve the repository (gh repo view failed). Nothing ran; run again, and stop if it fails twice." >&2; return 3; }
+  if [ -n "$pr" ]; then
+    case "$pr" in *[!0-9]*) echo "✖ relay --autonomous: --pr needs a PR number, got '$pr'." >&2; return 7;; esac
+  else
+    pr="$(gh pr view --json number --jq .number 2>/dev/null)" || pr=""
+    case "$pr" in ''|*[!0-9]*) echo "✖ relay --autonomous: cannot resolve one PR for this branch (gh pr view failed or found none). Nothing ran; pass --pr N or run again, and stop if it fails twice." >&2; return 3;; esac
+  fi
   local dir rc
   dir="$(sf_auto_state)/$(printf '%s' "$repo" | tr '/' '_')/pr-$pr"
   sf_mkdirp "$dir" || { echo "✖ cannot create $dir" >&2; return 4; }
@@ -1852,10 +1859,27 @@ EOF
 
 # Check 7: stop on sensitive files (bash case patterns; `*` also matches `/`).
 sf_gate_sensitive() {
-  local pr="$1" files f pat pf pats match=0
-  files="$(gh pr diff "$pr" --name-only 2>/dev/null)" || { sf_gate_fail "cannot read the PR file list"; return 6; }
-  files="$(printf '%s\n' "$files" | tr -d '\r')"
-  [ -n "$files" ] || { sf_gate_fail "the PR file list is empty"; return 6; }
+  local pr="$1" rows files names f pat pf pats match=0 n want new old
+  # The PR files API, not `gh pr diff --name-only`: a rename lists only its NEW path there, so a file
+  # moved out of a protected path would pass. Every row gives the path and, for a rename, the previous
+  # path; BOTH are matched. Paginated, and the count is checked against the PR's changedFiles, so a
+  # truncated list fails closed.
+  rows="$(gh api --paginate "repos/$SF_G_REPO/pulls/$pr/files" --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' 2>/dev/null)" \
+    || { sf_gate_fail "cannot read the PR file list"; return 6; }
+  rows="$(printf '%s\n' "$rows" | tr -d '\r' | sed '/^$/d')"
+  [ -n "$rows" ] || { sf_gate_fail "the PR file list is empty"; return 6; }
+  n="$(printf '%s\n' "$rows" | wc -l | tr -d ' ')"
+  want="$(gh pr view "$pr" --json changedFiles --jq .changedFiles 2>/dev/null)"
+  [ "$want" = "$n" ] || { sf_gate_fail "the PR file list is incomplete ($n of ${want:-unknown} changed files read)"; return 6; }
+  names=""; files=""
+  while IFS=$'\t' read -r new old || [ -n "$new" ]; do
+    [ -n "$new" ] || continue
+    names="$names$new"$'\n'
+    if [ -n "$old" ]; then names="$names$old"$'\n'; files="$files$old -> $new"$'\n'; else files="$files$new"$'\n'; fi
+  done <<EOF
+$rows
+EOF
+  files="${files%$'\n'}"
   pf="$(sf_auto_cfg_dir)/sensitive-paths"
   # A file that exists but cannot be read must not become an empty list (which allows every path).
   if [ -e "$pf" ]; then
@@ -1876,7 +1900,7 @@ sf_gate_sensitive() {
 $pats
 EOF
   done <<EOF
-$files
+$names
 EOF
   [ "$match" = 0 ] || return 6
   SF_G_FILES="$files"
@@ -1949,6 +1973,8 @@ sf_gate_merge() {
   sf_gate_verdict "$pr" || { sf_gate_fail "the verdict changed after the checks; not merging"; return 6; }
   [ "$SF_G_VFILE" = "$vfile1" ] && [ "$SF_G_RUNID" = "$run1" ] \
     || { sf_gate_fail "a newer round was recorded after the checks; not merging"; return 6; }
+  # Disputes again: a '- DISPUTED:' line posted after check 5 must stop the merge too.
+  sf_gate_disputes "$pr" || { sf_gate_fail "a dispute appeared after the checks; not merging"; return 6; }
   # CI again, on the same SHA: a check can be re-run or turn red after the first read.
   sf_gate_ci "$pr" || { sf_gate_fail "CI changed after the checks; not merging"; return 6; }
   gh pr merge --help 2>&1 | grep -q -- '--match-head-commit' || { sf_gate_fail "this gh has no 'pr merge --match-head-commit'; update gh"; return 6; }
@@ -1963,7 +1989,12 @@ sf_gate_merge() {
   printf '%s\n' "$full" > "$afile" 2>/dev/null || { echo "  ! cannot write $afile; the audit text is posted and printed instead" >&2; afile=""; full="$(sf_audit_text "" "$mc" "")"; }
   audit="$full"
   if [ "${#full}" -gt "$SF_AUDIT_MAX_BYTES" ]; then
-    audit="$(sf_audit_text 200 "$mc" "$afile")"
+    # Shorten the list until the comment fits; at 0 names the text is a few hundred bytes.
+    local lim=200
+    audit="$(sf_audit_text "$lim" "$mc" "$afile")"
+    while [ "${#audit}" -gt "$SF_AUDIT_MAX_BYTES" ] && [ "$lim" -gt 0 ]; do
+      lim=$((lim / 2)); audit="$(sf_audit_text "$lim" "$mc" "$afile")"
+    done
     # No file to point at: the full text goes to stdout, so the list is never lost.
     [ -n "$afile" ] || printf '%s\n' "$full"
   fi
