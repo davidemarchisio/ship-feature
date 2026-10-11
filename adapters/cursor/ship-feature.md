@@ -72,3 +72,4 @@ Non-negotiable points:
 - Disputed classifications do not block the stop; they go to **Gate 2** with both positions.
   Still two gates, never three.
 - **The human merges** — never self-merge.
+- **Autonomous mode (experimental, off by default):** only with `SHIP_FEATURE_AUTONOMOUS=1` set by the human AND `--autonomous` on `plan-consensus`, `relay` and `merge-gate`. See the "Autonomous mode" section of `WORKFLOW.md` for the rules, the kill switch and the stop-and-notify duty. Without that variable, never self-merge.

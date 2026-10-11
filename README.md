@@ -132,6 +132,14 @@ a **Blocker** or a **qualifying** Should-fix (correctness, safety, deployability
 for every remark. Anything the author downgrades is written down, and if the reviewer still disagrees
 it goes to you at the merge gate — which is a change to what that gate *receives*, not a third gate.
 
+## Autonomous mode (experimental)
+
+Opt-in, off by default: `plan-consensus`, `relay --autonomous` and `merge-gate` replace the two human
+gates with machine-checked ones (panel unanimity on the exact SHA, CI, a sensitive-file stop, a kill
+switch, an audit comment). It needs both `--autonomous` and `SHIP_FEATURE_AUTONOMOUS=1`. It is a
+guard against accidents, **not** a security boundary against the agent. Read the "Autonomous mode"
+section of [`WORKFLOW.md`](WORKFLOW.md) first.
+
 ## Install
 
 Requires [**`pr-review-relay`**](https://github.com/hamen/pr-review-relay) on your `PATH` — it powers the

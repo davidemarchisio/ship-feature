@@ -19,6 +19,16 @@
 #                            review as it lands, for when you want to watch a single reviewer work or
 #                            to keep concurrent agent load down. Exit 0 clean, 3 not-clean, 1 usage
 #                            error.
+#   ship-feature plan-consensus <plan-file> --autonomous
+#                            EXPERIMENTAL. Gate 1 without a human: the full PLAN_REVIEWERS panel must all
+#                            return `VERDICT: clean` in one round (cap 2 rounds, 3 attempts). Needs
+#                            SHIP_FEATURE_AUTONOMOUS=1. Exit 0 consensus, 2 revise, 3 seat failed, 5 stop, 7 refused.
+#   ship-feature relay --autonomous [..]
+#                            EXPERIMENTAL. Full-panel rounds only, verdict file at a computed path, one round
+#                            counter per PR (cap 6). Exit 4 = stop and notify.
+#   ship-feature merge-gate <pr> --autonomous [--merge]
+#                            EXPERIMENTAL. Gate 2 without a human: eight checks, then one pinned
+#                            `gh pr merge --merge --match-head-commit`. Exit 6 stop, 7 refused, 8 audit not posted.
 #   ship-feature help        This message.
 #
 # The workflow itself lives in WORKFLOW.md; this tool does not drive it. State/resume is intentionally
@@ -425,6 +435,11 @@ cmd_preflight() {
 
 cmd_relay() {
   command -v pr-review-relay >/dev/null 2>&1 || die "pr-review-relay not found on PATH (it is a dependency: https://github.com/hamen/pr-review-relay)."
+  # `--autonomous` is ours, not the relay's: strip it and take the autonomous path (full panel, computed
+  # verdict file, per-PR round counter). Without it, nothing below changes.
+  local _auto=0 _rest=() _a
+  for _a in "$@"; do case "$_a" in --autonomous) _auto=1;; *) _rest+=("$_a");; esac; done
+  if [ "$_auto" = 1 ]; then cmd_relay_auto ${_rest[@]+"${_rest[@]}"}; return $?; fi
   load_config
   # If the caller omitted --reviewers and a quorum is configured, inject it (still fully overridable by
   # passing --reviewers yourself). stdout and the exact exit code are always preserved.
@@ -629,6 +644,10 @@ BUDGET YOUR TIME: you are cut off after a few minutes, and a run that is still r
 when the clock stops delivers NOTHING — which is worse than a review with two claims left
 unchecked. Verify only what could change your verdict, then stop reading and write. If you
 have found something serious, write it down before you go looking for the next thing.')"
+
+  # Autonomous mode only (plan-consensus sets SF_VERDICT_DIR): the verdict-line rules join the prompt.
+  [ -z "${SF_VERDICT_DIR:-}" ] || PROMPT="$PROMPT
+$SF_VERDICT_RULES"
 
   echo "▶ Plan review — reviewers: $reviewers${src:+ — plan: $src}$([ "$parallel" = 1 ] || printf ' — sequential')" >&2
 
@@ -1218,6 +1237,11 @@ have found something serious, write it down before you go looking for the next t
       } > "$STATUS_DIR/diag_$key"
       echo fail > "$STATUS_DIR/$key"; return 0
     fi
+    # Autonomous mode only: keep the RAW seat text (no banner) and note a degraded seat, for plan-consensus.
+    if [ -n "${SF_VERDICT_DIR:-}" ]; then
+      printf '%s\n' "$out" > "$SF_VERDICT_DIR/raw_$key"
+      [ -z "$degraded_note" ] || : > "$SF_VERDICT_DIR/degraded_$key"
+    fi
     { printf '\n========== %s (plan review) ==========\n' "$Name"
       [ -n "$degraded_note" ] && printf '%s\n\n' "$degraded_note"
       printf '%s\n=======================================\n' "$out"
@@ -1306,6 +1330,440 @@ have found something serious, write it down before you go looking for the next t
   return 0
 }
 
+# --- autonomous mode (EXPERIMENTAL, off by default) --------------------------------------------------
+# A closed loop with no human gate: plan consensus replaces Gate 1, a machine-checked merge gate
+# replaces Gate 2. See WORKFLOW.md "Autonomous mode". What this is NOT: a security boundary. The
+# agent runs as the user, with the user's gh token, so anything it can write (a file, an env var, a
+# PR comment) it can forge. Each brake below makes the unsafe path need a deliberate, visible,
+# logged act and fails closed on missing evidence — nothing here claims "the agent cannot".
+#
+# Exit codes of the new commands (never 1 for a policy stop, so a stop is not read as a usage error):
+#   0 done / consensus / merged        2 plan round finished with findings: revise the plan, re-run
+#   3 a seat failed or gave no usable verdict (no round counted)
+#   4 round cap or failed-attempt cap  5 plan consensus impossible or capped: STOP and notify
+#   6 merge-gate check failed: STOP    7 refused: keys missing or kill switch present
+#   8 merged, but the audit comment was NOT posted: post it
+SF_AUTO_MAX_ROUNDS=6          # relay rounds per PR (full panel each), counted per PR not per SHA
+SF_AUTO_PLAN_MAX_ROUNDS=2     # plan-consensus rounds per plan
+SF_AUTO_PLAN_MAX_ATTEMPTS=3   # plan-consensus invocations per plan; the next one exits 5
+SF_AUTO_MAX_FAILS=4           # failed relay attempts per PR; at this count the next exits 4
+
+# The rules every reviewer prompt gets in autonomous mode (and only then): the verdict line is the
+# machine-read contract. Identical to the pr-review-relay prompt rules (its --verdict-file mode).
+SF_VERDICT_RULES='VERDICT LINE (required). The LAST line of your review must be exactly one of:
+VERDICT: clean
+VERDICT: findings blockers=<N> should_fix=<M>
+"clean" means zero Blockers and zero Should-fix. A Should-fix is ONLY a material problem of
+correctness, safety, deployability or verification; every style, wording or preference item is a
+Nit and does not block. Write the verdict line once, as the final line, with nothing after it.'
+
+sf_auto_cfg_dir()  { printf '%s/.config/ship-feature' "${HOME:-}"; }
+sf_auto_state()    { printf '%s/autonomous' "${SHIP_FEATURE_STATE_DIR:-${HOME:-}/.local/state/ship-feature}"; }
+sf_mkdirp()        { ( umask 077; mkdir -p "$1" ); }
+
+# Refuses (7) unless BOTH keys are present and the kill switch is absent. $1 = 1 when --autonomous
+# was given. The env var is the thing the user sets on purpose when launching a session; an agent
+# that sets it itself has done so visibly (the audit comment records autonomous_env=1).
+sf_auto_guard() {
+  local off; off="$(sf_auto_cfg_dir)/AUTONOMOUS_OFF"
+  if [ -e "$off" ]; then echo "✖ autonomous mode is switched off ($off exists). Stopping." >&2; return 7; fi
+  if [ "${1:-0}" != 1 ]; then echo "✖ autonomous mode needs BOTH the --autonomous flag and SHIP_FEATURE_AUTONOMOUS=1 in the environment — the flag is missing." >&2; return 7; fi
+  if [ "${SHIP_FEATURE_AUTONOMOUS:-}" != 1 ]; then echo "✖ autonomous mode needs BOTH the --autonomous flag and SHIP_FEATURE_AUTONOMOUS=1 in the environment — the environment key is missing." >&2; return 7; fi
+  return 0
+}
+
+sf_sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'; else shasum -a 256 | awk '{print $1}'; fi; }
+# KEY=value files: last value wins; prints nothing when the key is absent.
+sf_kv_get() { awk -F= -v k="$2" '$1==k { sub(/^[^=]*=/, ""); v=$0; f=1 } END { if (f) print v }' "$1" 2>/dev/null; }
+sf_num_get() { local v; v="$(cat "$1" 2>/dev/null)"; case "$v" in ''|*[!0-9]*) v=0;; esac; printf '%s' "$v"; }
+sf_num_put() { local t="$1.tmp.$$"; printf '%s\n' "$2" > "$t" && mv -f "$t" "$1"; }
+# A set of seat names: split on commas and blanks, drop empties, sort, join with commas.
+sf_norm_set() { printf '%s\n' "$1" | tr ', \t' '\n\n\n' | sed '/^$/d' | sort -u | paste -sd, -; }
+# Plan seats, with the aliases plan-review itself collapses (agy/gemini -> antigravity, grok45high -> grok).
+sf_norm_plan_seats() { printf '%s\n' "$1" | tr ', \t' '\n\n\n' | sed -e '/^$/d' -e 's/^agy$/antigravity/' -e 's/^gemini$/antigravity/' -e 's/^grok45high$/grok/' | sort -u | paste -sd, -; }
+sf_set_without() { printf '%s\n' "$1" | tr ',' '\n' | grep -vx -- "$2" | sed '/^$/d' | paste -sd, -; }
+sf_b64d() { local in; in="$(cat)"; printf '%s' "$in" | base64 --decode 2>/dev/null || printf '%s' "$in" | base64 -D 2>/dev/null; }
+
+# REVIEWERS exactly as pr-review-relay's own config defines it (last value wins, BOM stripped, quotes
+# and inline comment removed). Fails (1) when the file or the key is missing: the gate then fails closed.
+sf_relay_cfg_reviewers() {
+  local cfg="${PR_RELAY_CONFIG:-${HOME:-}/.config/pr-review-relay/config}" key val last="" have=0
+  [ -f "$cfg" ] || return 1
+  while IFS='=' read -r key val || [ -n "$key$val" ]; do
+    key="${key#$'\xef\xbb\xbf'}"
+    case "$key" in ''|\#*) continue;; esac
+    key="$(printf '%s' "$key" | tr -d '[:space:]')"
+    [ "$key" = REVIEWERS ] || continue
+    val="${val%%[[:space:]]#*}"
+    val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+    case "$val" in \"*\") val="${val#\"}"; val="${val%\"}";; \'*\') val="${val#\'}"; val="${val%\'}";; esac
+    last="$val"; have=1
+  done < "$cfg"
+  [ "$have" = 1 ] && [ -n "$last" ] || return 1
+  printf '%s' "$last"
+}
+
+# One review's verdict, by the strict rule: the LAST non-empty line is exactly `VERDICT: clean` or a
+# well-formed `VERDICT: findings blockers=N should_fix=M`, and it is the ONLY line starting `VERDICT:`.
+# Anything else (missing, malformed, duplicated, wrong case, trailing text) is `unknown`, never clean.
+sf_parse_verdict() {
+  local f="$1" last n
+  [ -s "$f" ] || { echo unknown; return 0; }
+  n="$(grep -c '^VERDICT:' "$f")"
+  [ "$n" = 1 ] || { echo unknown; return 0; }
+  last="$(awk 'NF { l = $0 } END { print l }' "$f")"
+  if [ "$last" = "VERDICT: clean" ]; then echo clean
+  elif printf '%s\n' "$last" | grep -Eq '^VERDICT: findings blockers=[0-9]+ should_fix=[0-9]+$'; then echo findings
+  else echo unknown; fi
+}
+
+# --- plan-consensus: Gate 1 without a human ---------------------------------------------------------
+cmd_plan_consensus() {
+  local file="" auto=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --autonomous) auto=1; shift;;
+      --reviewers|--reviewers=*) die "plan-consensus refuses --reviewers: the panel is PLAN_REVIEWERS and is never narrowed.";;
+      -h|--help) echo "usage: ship-feature plan-consensus <plan-file> --autonomous   (needs SHIP_FEATURE_AUTONOMOUS=1)"; return 0;;
+      -) die "plan-consensus reads a file path, never stdin.";;
+      -*) die "unknown arg: $1";;
+      *) [ -z "$file" ] || die "only one plan file may be given."; file="$1"; shift;;
+    esac
+  done
+  sf_auto_guard "$auto" || return 7
+  [ -n "$file" ] && [ -f "$file" ] || die "plan-consensus needs an existing plan file."
+  load_config
+  local panel seats s abs state key pdir rounds attempts vdir
+  panel="${SHIP_FEATURE_PLAN_REVIEWERS:-}"
+  [ -n "$panel" ] || { echo "✖ plan-consensus: PLAN_REVIEWERS is not set. Without it plan-review falls back to the PR panel and can skip a relay-only seat while reporting success. Set it." >&2; return 5; }
+  seats="$(sf_norm_plan_seats "$panel")"
+  for s in $(printf '%s' "$seats" | tr ',' ' '); do
+    if plan_relay_only "$s"; then echo "✖ plan-consensus: '$s' is relay-only and cannot review a plan; the panel can never be complete. Fix PLAN_REVIEWERS." >&2; return 5; fi
+    [ -n "$(plan_tool_for "$s")" ] || { echo "✖ plan-consensus: unknown plan reviewer '$s'." >&2; return 5; }
+  done
+  abs="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
+  state="$(sf_auto_state)"
+  key="$(printf '%s' "$abs" | sf_sha256)"
+  pdir="$state/plan/$key"; sf_mkdirp "$pdir" || { echo "✖ cannot create $pdir" >&2; return 5; }
+  printf '%s\n' "$abs" > "$pdir/path"
+  rounds="$(sf_num_get "$pdir/rounds")"; attempts="$(sf_num_get "$pdir/attempts")"
+  if [ "$rounds" -ge "$SF_AUTO_PLAN_MAX_ROUNDS" ]; then echo "✖ plan-consensus: $rounds rounds already ran for this plan (cap $SF_AUTO_PLAN_MAX_ROUNDS). STOP and notify the human; there is no round 3 and no reset." >&2; return 5; fi
+  if [ "$attempts" -ge "$SF_AUTO_PLAN_MAX_ATTEMPTS" ]; then echo "✖ plan-consensus: $attempts attempts already ran for this plan (cap $SF_AUTO_PLAN_MAX_ATTEMPTS). STOP and notify the human." >&2; return 5; fi
+  sf_num_put "$pdir/attempts" $((attempts + 1))
+
+  vdir="$(mktemp -d)" || { echo "✖ cannot create a temp dir" >&2; return 5; }
+  local rc=0
+  ( export SF_VERDICT_DIR="$vdir"; cmd_plan_review "$file" ); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -rf "$vdir"
+    if [ "$rc" = 3 ]; then echo "✖ plan-consensus: a seat failed — no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS)." >&2; return 3; fi
+    return "$rc"
+  fi
+  local v verdicts="" all_clean=1 unknown=0 degraded="" skey_s
+  for s in $(printf '%s' "$seats" | tr ',' ' '); do
+    skey_s="k_$(printf '%s' "$s" | tr -c 'A-Za-z0-9._-' '_')"
+    v="$(sf_parse_verdict "$vdir/raw_$skey_s")"
+    verdicts="$verdicts seat.$s=$v"
+    [ "$v" = clean ] || all_clean=0
+    [ "$v" = unknown ] && unknown=1
+    { [ -e "$vdir/degraded_$skey_s" ] || [ "$s" = antigravity ]; } && degraded="${degraded:+$degraded,}$s"
+  done
+  rm -rf "$vdir"
+  if [ "$unknown" = 1 ]; then
+    echo "✖ plan-consensus: a seat gave no usable VERDICT line —$verdicts. No round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS)." >&2
+    return 3
+  fi
+  rounds=$((rounds + 1)); sf_num_put "$pdir/rounds" "$rounds"
+  if [ "$all_clean" = 1 ]; then
+    local sha cons; sha="$(sf_sha256 < "$file")"
+    sf_mkdirp "$state/consensus" || return 5
+    cons="$state/consensus/plan-$sha.consensus"
+    { printf 'plan_sha256=%s\nplan_path=%s\nround=%s\nseats=%s\nplan_panel=%s\ndegraded=%s\nts=%s\n' \
+        "$sha" "$abs" "$rounds" "$seats" "$seats" "$degraded" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      for v in $verdicts; do printf '%s\n' "$v"; done
+    } > "$cons.tmp.$$" && mv -f "$cons.tmp.$$" "$cons" || { echo "✖ cannot write $cons" >&2; return 5; }
+    echo "✔ plan-consensus: every seat clean in round $rounds — Plan-Key: $sha" >&2
+    [ -n "$degraded" ] && echo "  ! seats that reviewed the plan text only (named in the audit comment): $degraded" >&2
+    return 0
+  fi
+  if [ "$rounds" -ge "$SF_AUTO_PLAN_MAX_ROUNDS" ]; then
+    echo "✖ plan-consensus: round $rounds still has findings —$verdicts. Cap reached: STOP and notify the human." >&2; return 5
+  fi
+  echo "✖ plan-consensus: round $rounds has findings —$verdicts. Revise the plan and run it once more." >&2
+  return 2
+}
+
+# --- relay --autonomous: full-panel rounds, a computed verdict path, one counter per PR -------------
+cmd_relay_auto() {
+  local args=() pr="" repo a
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reviewers|--reviewers=*) echo "✖ relay --autonomous refuses --reviewers: every autonomous round is a full-panel round on the relay's own quorum." >&2; return 7;;
+      --verdict-file|--verdict-file=*|--max-rounds|--max-rounds=*|--reset) echo "✖ relay --autonomous sets its own verdict path and round cap and never resets; '$1' is refused." >&2; return 7;;
+      --pr) [ $# -ge 2 ] || die "--pr needs a number."; pr="$2"; args+=("$1" "$2"); shift 2;;
+      *) args+=("$1"); shift;;
+    esac
+  done
+  sf_auto_guard 1 || return 7
+  command -v pr-review-relay >/dev/null 2>&1 || die "pr-review-relay not found on PATH (it is a dependency: https://github.com/hamen/pr-review-relay)."
+  command -v gh >/dev/null 2>&1 || die "gh not found on PATH."
+  repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || repo=""
+  [ -n "$repo" ] || { echo "✖ relay --autonomous: cannot resolve the repository (gh repo view failed)." >&2; return 4; }
+  if [ -z "$pr" ]; then pr="$(gh pr view --json number --jq .number 2>/dev/null)" || pr=""; fi
+  case "$pr" in ''|*[!0-9]*) echo "✖ relay --autonomous: cannot resolve one PR (pass --pr N)." >&2; return 4;; esac
+  local dir rounds fails k vf rc
+  dir="$(sf_auto_state)/$(printf '%s' "$repo" | tr '/' '_')/pr-$pr"
+  sf_mkdirp "$dir" || { echo "✖ cannot create $dir" >&2; return 4; }
+  rounds="$(sf_num_get "$dir/rounds")"; fails="$(sf_num_get "$dir/fails")"
+  if [ "$rounds" -ge "$SF_AUTO_MAX_ROUNDS" ]; then echo "✖ relay --autonomous: cap of $SF_AUTO_MAX_ROUNDS rounds reached for $repo#$pr. STOP and notify the human." >&2; return 4; fi
+  if [ "$fails" -ge "$SF_AUTO_MAX_FAILS" ]; then echo "✖ relay --autonomous: $fails failed attempts for $repo#$pr (cap $SF_AUTO_MAX_FAILS). STOP and notify the human." >&2; return 4; fi
+  k=$((rounds + 1)); vf="$dir/round-$k.verdict"; rm -f "$vf"
+  pr-review-relay ${args[@]+"${args[@]}"} --verdict-file "$vf" --max-rounds "$SF_AUTO_MAX_ROUNDS"; rc=$?
+  case "$rc" in
+    0)
+      if [ ! -s "$vf" ]; then
+        fails=$((fails + 1)); sf_num_put "$dir/fails" "$fails"
+        echo "✖ relay --autonomous: the relay exited 0 but wrote no verdict file (pr-review-relay too old for --verdict-file?). Round not counted (failed attempt $fails/$SF_AUTO_MAX_FAILS)." >&2
+        [ "$fails" -ge "$SF_AUTO_MAX_FAILS" ] && return 4
+        return 3
+      fi
+      sf_num_put "$dir/rounds" "$k"
+      echo "  → relay --autonomous: round $k/$SF_AUTO_MAX_ROUNDS for $repo#$pr, all_clean=$(sf_kv_get "$vf" all_clean). READ the reviews; fix every Blocker and Should-fix, post the disposition, then run the next round." >&2
+      return 0;;
+    3) fails=$((fails + 1)); sf_num_put "$dir/fails" "$fails"
+       if [ "$fails" -ge "$SF_AUTO_MAX_FAILS" ]; then echo "✖ relay --autonomous: failed attempt $fails/$SF_AUTO_MAX_FAILS for $repo#$pr — cap reached. STOP and notify the human." >&2; return 4; fi
+       echo "  → relay --autonomous: round not clean (exit 3), attempt $fails/$SF_AUTO_MAX_FAILS — not counted as a round." >&2; return 3;;
+    4) echo "  → relay: round cap reached (exit 4) — STOP and notify the human." >&2; return 4;;
+    *) return "$rc";;
+  esac
+}
+
+# --- merge-gate: Gate 2 without a human -------------------------------------------------------------
+sf_gate_fail() { echo "✖ merge-gate: $*" >&2; }
+
+sf_default_sensitive() {
+  cat <<'EOF'
+.github/workflows/*
+.githooks/*
+*/hooks/*
+*pre-push*
+*deploy.yml*
+.kamal/*
+*Fastfile*
+*.p8
+*.jks
+*.keystore
+*.env
+.env*
+*/.env*
+*secret*
+*credential*
+bin/mac-ios-build.sh
+bin/build-ios-ipa.sh
+*build-android.sh
+EOF
+}
+
+# Check 2: the PR carries one Plan-Key, and a consensus result exists for exactly that plan.
+sf_gate_plan() {
+  local pr="$1" body keys n key cons state panel_now pp
+  state="$(sf_auto_state)"
+  body="$(gh pr view "$pr" --json body --jq .body 2>/dev/null)" || { sf_gate_fail "cannot read the PR body"; return 6; }
+  keys="$(printf '%s\n' "$body" | sed -n 's/^Plan-Key: \([0-9a-f]\{64\}\)[[:space:]]*$/\1/p' | sort -u)"
+  n="$(printf '%s' "$keys" | grep -c .)"
+  [ "$n" = 1 ] || { sf_gate_fail "the PR body must carry exactly one 'Plan-Key: <sha256>' line (found $n distinct)"; return 6; }
+  key="$keys"; cons="$state/consensus/plan-$key.consensus"
+  [ -f "$cons" ] || { sf_gate_fail "no plan consensus result for Plan-Key $key"; return 6; }
+  panel_now="$(sf_norm_plan_seats "${SHIP_FEATURE_PLAN_REVIEWERS:-}")"
+  [ -n "$panel_now" ] || { sf_gate_fail "PLAN_REVIEWERS is not set"; return 6; }
+  [ "$(sf_kv_get "$cons" plan_panel)" = "$panel_now" ] || { sf_gate_fail "the plan panel changed since consensus (was $(sf_kv_get "$cons" plan_panel), now $panel_now)"; return 6; }
+  pp="$(sf_kv_get "$cons" plan_path)"
+  if [ -n "$pp" ] && [ -f "$pp" ]; then
+    [ "$(sf_sha256 < "$pp")" = "$key" ] || { sf_gate_fail "the plan file changed after consensus ($pp)"; return 6; }
+  fi
+  SF_G_CONS="$cons"
+  return 0
+}
+
+# Check 3: repository, state, base, mergeable.
+sf_gate_pr() {
+  local pr="$1" defb st dr base m i=0
+  SF_G_REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || SF_G_REPO=""
+  [ -n "$SF_G_REPO" ] || { sf_gate_fail "cannot resolve the repository"; return 6; }
+  defb="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null)" || defb=""
+  [ -n "$defb" ] || { sf_gate_fail "cannot resolve the default branch"; return 6; }
+  st="$(gh pr view "$pr" --json state --jq .state 2>/dev/null)"; [ "$st" = OPEN ] || { sf_gate_fail "PR is not open (state: ${st:-unknown})"; return 6; }
+  dr="$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)"; [ "$dr" = false ] || { sf_gate_fail "PR is a draft (or draft state unreadable)"; return 6; }
+  base="$(gh pr view "$pr" --json baseRefName --jq .baseRefName 2>/dev/null)"
+  [ "$base" = "$defb" ] || { sf_gate_fail "PR base is '${base:-unknown}', the default branch is '$defb'"; return 6; }
+  while :; do
+    m="$(gh pr view "$pr" --json mergeable --jq .mergeable 2>/dev/null)"
+    if [ "$m" = UNKNOWN ] && [ "$i" -lt 5 ]; then i=$((i + 1)); sleep "${SHIP_FEATURE_MERGEABLE_SLEEP:-10}"; continue; fi
+    break
+  done
+  [ "$m" = MERGEABLE ] || { sf_gate_fail "PR is not mergeable (mergeable: ${m:-unknown})"; return 6; }
+  SF_G_HEAD="$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)"
+  printf '%s' "$SF_G_HEAD" | grep -Eq '^[0-9a-f]{40}$' || { sf_gate_fail "cannot read the PR head SHA"; return 6; }
+  return 0
+}
+
+# Check 4: the verdict file of the HIGHEST round, for this repo and PR, on the current head.
+sf_gate_verdict() {
+  local pr="$1" vdir f n best=0 bestf="" cfg want have s conf author
+  vdir="$(sf_auto_state)/$(printf '%s' "$SF_G_REPO" | tr '/' '_')/pr-$pr"
+  for f in "$vdir"/round-*.verdict; do
+    [ -e "$f" ] || continue
+    n="${f##*/round-}"; n="${n%.verdict}"
+    case "$n" in ''|*[!0-9]*) continue;; esac
+    [ "$n" -gt "$best" ] && { best="$n"; bestf="$f"; }
+  done
+  [ -n "$bestf" ] || { sf_gate_fail "no verdict file for $SF_G_REPO#$pr (run 'ship-feature relay --autonomous')"; return 6; }
+  [ "$(sf_kv_get "$bestf" repo)" = "$SF_G_REPO" ] || { sf_gate_fail "the verdict file names another repository"; return 6; }
+  [ "$(sf_kv_get "$bestf" pr)" = "$pr" ] || { sf_gate_fail "the verdict file names another PR"; return 6; }
+  [ "$(sf_kv_get "$bestf" round)" = "$best" ] || { sf_gate_fail "the verdict file's round does not match its name"; return 6; }
+  [ "$best" -le "$SF_AUTO_MAX_ROUNDS" ] || { sf_gate_fail "round $best is past the cap of $SF_AUTO_MAX_ROUNDS"; return 6; }
+  [ "$(sf_kv_get "$bestf" head_sha)" = "$SF_G_HEAD" ] || { sf_gate_fail "the verdict is for $(sf_kv_get "$bestf" head_sha | cut -c1-7), the PR head is $(printf '%s' "$SF_G_HEAD" | cut -c1-7)"; return 6; }
+  [ "$(sf_kv_get "$bestf" exit)" = 0 ] || { sf_gate_fail "the relay round did not exit 0"; return 6; }
+  [ "$(sf_kv_get "$bestf" all_clean)" = true ] || { sf_gate_fail "the last full-panel round is not all_clean"; return 6; }
+  cfg="$(sf_relay_cfg_reviewers)" || { sf_gate_fail "cannot read REVIEWERS from the relay config"; return 6; }
+  author="$(sf_kv_get "$bestf" author)"
+  case "$author" in agy) author=antigravity;; esac
+  want="$(sf_norm_set "$cfg")"; [ -z "$author" ] || want="$(sf_set_without "$want" "$author")"
+  have="$(sf_norm_set "$(sf_kv_get "$bestf" configured)")"
+  [ -n "$want" ] && [ "$want" = "$have" ] || { sf_gate_fail "the verdict's panel ($have) is not the relay's configured panel without the author ($want)"; return 6; }
+  [ "$(sf_norm_set "$(sf_kv_get "$bestf" requested)")" = "$want" ] || { sf_gate_fail "the round did not request the full panel"; return 6; }
+  [ "$(sf_norm_set "$(sf_kv_get "$bestf" ran)")" = "$want" ] || { sf_gate_fail "not every seat of the panel ran"; return 6; }
+  [ -z "$(sf_kv_get "$bestf" benched)" ] || { sf_gate_fail "a seat was benched"; return 6; }
+  for s in $(printf '%s' "$want" | tr ',' ' '); do
+    [ "$(sf_kv_get "$bestf" "seat.$s")" = clean ] || { sf_gate_fail "seat '$s' is not clean in the verdict"; return 6; }
+  done
+  SF_G_VFILE="$bestf"; SF_G_ROUND="$best"
+  return 0
+}
+
+# Check 5: no unresolved dispute, and a latest disposition that says so in words.
+sf_gate_disputes() {
+  local pr="$1" author tmp i=0 login b64 latest="" line rest rc=0
+  author="$(gh pr view "$pr" --json author --jq .author.login 2>/dev/null)"
+  [ -n "$author" ] || { sf_gate_fail "cannot read the PR author"; return 6; }
+  tmp="$(mktemp -d)" || { sf_gate_fail "cannot create a temp dir"; return 6; }
+  if ! gh pr view "$pr" --json comments --jq '.comments[] | "\(.author.login)\t\(.body | @base64)"' > "$tmp/list" 2>/dev/null; then
+    rm -rf "$tmp"; sf_gate_fail "cannot read the PR comments"; return 6
+  fi
+  : > "$tmp/disputed"
+  while IFS=$'\t' read -r login b64 || [ -n "$login" ]; do
+    [ "$login" = "$author" ] || continue
+    i=$((i + 1)); printf '%s' "$b64" | sf_b64d > "$tmp/c$i"
+    case "$(head -n 1 "$tmp/c$i")" in Disposition,*) latest="$tmp/c$i";; esac
+    grep '^- DISPUTED:' "$tmp/c$i" >> "$tmp/disputed"
+  done < "$tmp/list"
+  if [ -z "$latest" ]; then rm -rf "$tmp"; sf_gate_fail "no author disposition comment (it must start with 'Disposition,')"; return 6; fi
+  if ! grep -qxF 'Disputed findings: none' "$latest"; then rm -rf "$tmp"; sf_gate_fail "the latest disposition does not say 'Disputed findings: none'"; return 6; fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    rest="${line#- DISPUTED:}"
+    grep -qxF -- "- RESOLVED:$rest" "$latest" || { sf_gate_fail "an unresolved '- DISPUTED:' finding:$rest"; rc=6; break; }
+  done < "$tmp/disputed"
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+# Check 6: CI on the verdict SHA. SUCCESS / NEUTRAL only; empty needs a file a human created.
+sf_gate_ci() {
+  local pr="$1" rows st co sa
+  rows="$(gh pr view "$pr" --json statusCheckRollup --jq '.statusCheckRollup[]? | "\(.status // "-")|\(.conclusion // "-")|\(.state // "-")"' 2>/dev/null)" || { sf_gate_fail "cannot read the CI checks"; return 6; }
+  if [ -z "$rows" ]; then
+    if grep -qxF -- "$SF_G_REPO" "$(sf_auto_cfg_dir)/allow-no-ci" 2>/dev/null; then SF_G_CI="none (allowed by the allow-no-ci file)"; return 0; fi
+    sf_gate_fail "the PR reports no CI checks (a human can allow this repo in $(sf_auto_cfg_dir)/allow-no-ci)"; return 6
+  fi
+  while IFS='|' read -r st co sa; do
+    if [ "$st" != "-" ]; then
+      { [ "$st" = COMPLETED ] && { [ "$co" = SUCCESS ] || [ "$co" = NEUTRAL ]; }; } || { sf_gate_fail "a check is not green (status $st, conclusion $co)"; return 6; }
+    else
+      [ "$sa" = SUCCESS ] || { sf_gate_fail "a check is not green (state $sa)"; return 6; }
+    fi
+  done <<EOF
+$rows
+EOF
+  SF_G_CI="$(printf '%s\n' "$rows" | wc -l | tr -d ' ') check(s), all SUCCESS/NEUTRAL"
+  return 0
+}
+
+# Check 7: stop on sensitive files (bash case patterns; `*` also matches `/`).
+sf_gate_sensitive() {
+  local pr="$1" files f pat pf match=0
+  files="$(gh pr diff "$pr" --name-only 2>/dev/null)" || { sf_gate_fail "cannot read the PR file list"; return 6; }
+  [ -n "$files" ] || { sf_gate_fail "the PR file list is empty"; return 6; }
+  pf="$(sf_auto_cfg_dir)/sensitive-paths"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    while IFS= read -r pat; do
+      case "$pat" in ''|\#*) continue;; esac
+      # shellcheck disable=SC2254
+      case "$f" in $pat) sf_gate_fail "the PR touches a sensitive path ($f matches '$pat') — a human merges this one"; match=1;; esac
+    done <<EOF
+$(if [ -f "$pf" ]; then cat "$pf"; else sf_default_sensitive; fi)
+EOF
+  done <<EOF
+$files
+EOF
+  [ "$match" = 0 ] || return 6
+  SF_G_FILES="$(printf '%s\n' "$files" | wc -l | tr -d ' ') file(s)"
+  return 0
+}
+
+cmd_merge_gate() {
+  local pr="" auto=0 do_merge=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --autonomous) auto=1; shift;;
+      --merge) do_merge=1; shift;;
+      -h|--help) echo "usage: ship-feature merge-gate <pr> --autonomous [--merge]   (needs SHIP_FEATURE_AUTONOMOUS=1; without --merge it only reports)"; return 0;;
+      -*) die "unknown arg: $1";;
+      *) [ -z "$pr" ] || die "only one PR number may be given."; pr="$1"; shift;;
+    esac
+  done
+  case "$pr" in ''|*[!0-9]*) die "merge-gate needs a PR number.";; esac
+  sf_auto_guard "$auto" || return 7
+  command -v gh >/dev/null 2>&1 || { sf_gate_fail "gh not found on PATH"; return 6; }
+  load_config
+  SF_G_REPO=""; SF_G_HEAD=""; SF_G_VFILE=""; SF_G_ROUND=""; SF_G_CONS=""; SF_G_CI=""; SF_G_FILES=""
+  sf_gate_plan "$pr"      || return 6
+  sf_gate_pr "$pr"        || return 6
+  sf_gate_verdict "$pr"   || return 6
+  sf_gate_disputes "$pr"  || return 6
+  sf_gate_ci "$pr"        || return 6
+  sf_gate_sensitive "$pr" || return 6
+  if [ "$do_merge" != 1 ]; then
+    echo "✔ merge-gate: every check passes for $SF_G_REPO#$pr at $(printf '%s' "$SF_G_HEAD" | cut -c1-7) (round $SF_G_ROUND). Not merging: --merge was not given." >&2
+    return 0
+  fi
+  # Merge: re-read the head, recheck the kill switch, then ONE merge call pinned to the verdict SHA.
+  local head2 mc audit adir body
+  head2="$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)"
+  [ "$head2" = "$SF_G_HEAD" ] || { sf_gate_fail "the PR head moved during the checks ($(printf '%s' "$SF_G_HEAD" | cut -c1-7) -> $(printf '%s' "$head2" | cut -c1-7))"; return 6; }
+  sf_auto_guard 1 || return 7
+  gh pr merge --help 2>&1 | grep -q -- '--match-head-commit' || { sf_gate_fail "this gh has no 'pr merge --match-head-commit'; update gh"; return 6; }
+  gh pr merge "$pr" --merge --match-head-commit "$SF_G_HEAD" || { sf_gate_fail "the merge call failed; nothing was retried"; return 6; }
+  mc="$(gh pr view "$pr" --json mergeCommit --jq .mergeCommit.oid 2>/dev/null)"
+  adir="$(sf_auto_state)/$(printf '%s' "$SF_G_REPO" | tr '/' '_')/pr-$pr"; sf_mkdirp "$adir"
+  audit="$adir/audit.txt"
+  {
+    printf 'Autonomous merge (ship-feature merge-gate)\n\n'
+    printf 'head_sha=%s\nmerge_commit=%s\nround=%s\nautonomous_env=1\n' "$SF_G_HEAD" "${mc:-unknown}" "$SF_G_ROUND"
+    printf 'plan_degraded_seats=%s\nci=%s\nfiles_checked=%s\n\nverdict file:\n' "$(sf_kv_get "$SF_G_CONS" degraded)" "$SF_G_CI" "$SF_G_FILES"
+    sed 's/^/    /' "$SF_G_VFILE"
+  } > "$audit"
+  echo "✔ merge-gate: merged $SF_G_REPO#$pr as ${mc:-unknown}" >&2
+  if ! gh pr comment "$pr" --body-file "$audit" >/dev/null 2>&1; then
+    echo "✖ merged, audit comment NOT posted — post it. Text (also in $audit):" >&2
+    cat "$audit"
+    return 8
+  fi
+  [ -n "$mc" ] && printf '%s\n' "$mc"
+  return 0
+}
+
 main() {
   local sub="${1:-help}"
   [ $# -gt 0 ] && shift
@@ -1313,6 +1771,8 @@ main() {
     preflight)   cmd_preflight "$@" ;;
     relay)       cmd_relay "$@" ;;
     plan-review) cmd_plan_review "$@" ;;
+    plan-consensus) cmd_plan_consensus "$@" ;;
+    merge-gate)  cmd_merge_gate "$@" ;;
     # Print the whole header comment block — from line 2 to the first line that is not a
     # comment. A hardcoded end line silently truncates help the moment anyone documents a new
     # flag up there, which is exactly how this broke once; the shebang is the only line skipped.

@@ -6,6 +6,9 @@ Codex, Cursor) points here. Follow it top to bottom for a new feature or fix.
 This is a **gated pipeline**: two points require an explicit human decision, and the agent must stop and
 wait at each. The agent never merges its own work.
 
+(That is the default and it never changes on its own. The one exception is the opt-in
+**Autonomous mode** at the end of this file: experimental, off by default.)
+
 ---
 
 ## The two human gates
@@ -319,6 +322,87 @@ After the merge, re-run the tests on the merge commit. Red = stop and fix.
 
 ### (8. Release — out of scope here)
 Releasing to a store / registry is a separate tool's job and is not part of this workflow.
+
+---
+
+## Autonomous mode (experimental, off by default)
+
+A closed loop with no human in it: the plan panel reaches consensus (replacing Gate 1), the agent
+implements, the relay panel reaches consensus, and the merge gate merges (replacing Gate 2). Nothing
+here changes the default pipeline above; without the flags every command behaves as before.
+
+**What this is, and is not.** It is a guard against accidents and a record of intent. It is **not a
+security boundary against the agent**: the agent runs as the user, with the user's `gh` token, so
+anything it can write (a file, an environment variable, a PR comment) it can forge. Each brake below
+makes the unsafe path need a deliberate, visible, logged act and fails closed on missing evidence.
+The real protection is unanimity of the full panel on the exact SHA, CI, tests and the repo's gate.
+
+**Two keys.** The autonomous commands run only with **both** the `--autonomous` flag and
+`SHIP_FEATURE_AUTONOMOUS=1` in the environment (the user sets the variable on purpose when launching
+the session). One key alone is refused (exit `7`).
+
+**Kill switch.** If `~/.config/ship-feature/AUTONOMOUS_OFF` exists, every autonomous command refuses
+(exit `7`), checked at the start and again right before the merge call.
+
+**Replacing Gate 1: `ship-feature plan-consensus <plan-file> --autonomous`.** Runs the full
+`PLAN_REVIEWERS` panel (never narrowed, no `--reviewers`, a file path and never stdin). Every seat must
+end its review with exactly `VERDICT: clean` as the last line, and be the only `VERDICT:` line, in the
+SAME round. Cap: 2 rounds and 3 attempts per plan path; a round counts only when every seat returned a
+verdict. Exit `0` consensus (a result file bound to the plan's SHA-256 is written), `2` findings: revise
+and run once more, `3` a seat failed or gave no usable verdict, `5` stop and notify. There is no round 3
+and no reset. A relay-only seat in `PLAN_REVIEWERS`, or an unset `PLAN_REVIEWERS`, is exit `5`.
+Seats that review the plan text only are named in the result as `degraded` and in the audit comment.
+
+**The PR body carries the plan's key.** When the PR is opened from a plan that reached consensus, its
+body has one line `Plan-Key: <sha256 of the plan text>`. The merge gate reads it to find the consensus
+result; a PR without exactly one key is refused.
+
+**The loop: `ship-feature relay --autonomous`.** Every round is a full-panel round on the relay's own
+quorum (`--reviewers`, `--verdict-file`, `--max-rounds` and `--reset` are refused). The verdict file is
+written at a path the tool computes. One counter per PR (not per SHA) allows at most 6 rounds; the 7th
+exits `4`, and so does the 4th failed attempt. Fix every Blocker and Should-fix, post the disposition,
+run the next round. The first round whose verdict is `all_clean` on the final SHA is the merge candidate.
+
+**Disposition and dispute comment formats** (the merge gate reads whole lines only). A disposition
+comment by the PR author starts with the line `Disposition, round <k> (reviewed sha <sha7>):`, lists
+each finding with its classification, and ends with the line `Disputed findings: none` (or
+`Disputed findings: <n>`). A finding the author disputes is a line that starts with `- DISPUTED: <text>`;
+the next disposition repeats it as `- RESOLVED: <text>` once settled. Autonomous mode never merges over
+a dispute, because the human who settled disputes at Gate 2 is gone.
+
+**Replacing Gate 2: `ship-feature merge-gate <pr> --autonomous [--merge]`.** It checks, in order, and
+stops at the first failure (exit `6`); without `--merge` it only reports:
+1. both keys present, kill switch absent (exit `7`);
+2. plan binding: one `Plan-Key`, a consensus result for it, the plan panel unchanged, the plan unedited;
+3. the PR is open, not a draft, based on the repo's default branch, and `MERGEABLE`;
+4. the verdict file of the highest round is for this repo and PR, names the PR's current head SHA, has
+   `all_clean=true`, round at most 6, and the panel equals the relay's configured `REVIEWERS` without
+   the author;
+5. no unresolved dispute and a latest disposition saying `Disputed findings: none`;
+6. CI on that SHA: every check `SUCCESS` or `NEUTRAL` (nothing skipped, pending or missing); an empty
+   result needs the repo listed in `~/.config/ship-feature/allow-no-ci`, a file a human creates;
+7. no sensitive file in the diff: the patterns in `~/.config/ship-feature/sensitive-paths`, else the
+   built-in defaults (workflows, hooks, deploy and release scripts, keys, env files, anything named
+   secret or credential); a match leaves the PR to a human;
+8. the head is re-read and the kill switch re-checked, then exactly one
+   `gh pr merge <n> --merge --match-head-commit <verdict sha>` runs, followed by an audit comment (head
+   SHA, merge commit, the verdict file, degraded seats, CI, files checked, `autonomous_env=1`). If the
+   audit comment cannot be posted the command exits `8` and prints the text: post it.
+
+It never fixes, never retries a failed merge call and never loops.
+
+**Stop and notify.** Exit `4`, `5`, `6`, `7` or `8`, exit `3` after the bounded retries, a failing
+hook, or a dispute: report it in the conversation, send a notification if the harness has a tool for
+it, and wait. Never try another route to continue.
+
+**Everything else still binds:** worktree, tests with every change, the repo's gate and hooks (never
+`--no-verify`), explicit staging, the PR body generated from the plan, no AI attribution lines,
+dispositions posted before each re-run, no `--reset`.
+
+**Residual risks.** A seat can print `VERDICT: clean` over a wrong review. Degraded seats vote. The
+author can write a false `Disputed findings: none`. The panel definition is a config file the agent
+can edit; the audit comment records who ran. A merge is not undone by the tool: roll back with a
+revert PR.
 
 ---
 
