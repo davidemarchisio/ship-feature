@@ -2221,6 +2221,7 @@ case "$1 $2" in
                   if [ "$n" = 2 ] && [ -e "$GHF/kill_on_second_head" ]; then : > "$(cat "$GHF/kill_on_second_head")"; fi
                   seq_pop pr_headRefOid;;
       mergeable) seq_pop pr_mergeable;;
+      statusCheckRollup) seq_pop pr_statusCheckRollup;;
       *) f "pr_$fld";;
     esac;;
   "pr diff") f diff;;
@@ -2265,7 +2266,7 @@ mk_world() {
   PKEY="$(sha256_of < "$AH/plan.md")"
   printf 'plan_sha256=%s\nplan_path=%s\nround=1\nseats=codex,grok\nplan_panel=codex,grok\ndegraded=grok\nseat.codex=clean\nseat.grok=clean\n' "$PKEY" "$AH/plan.md" > "$AH/state/autonomous/consensus/plan-$PKEY.consensus"
   VF="$AH/state/autonomous/o_r/pr-7/round-1.verdict"
-  printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\npr_round=1\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" > "$VF"
+  printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\npr_round=1\ncontext_sha256=%s\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" "$PKEY" > "$VF"
   printf 'o/r\n' > "$GH/repo"; printf 'main\n' > "$GH/defb"
   printf 'OPEN\n' > "$GH/pr_state"; printf 'false\n' > "$GH/pr_isDraft"; printf 'main\n' > "$GH/pr_baseRefName"
   printf 'MERGEABLE\n' > "$GH/pr_mergeable"; printf '%s\n' "$HEAD40" > "$GH/pr_headRefOid"
@@ -2348,6 +2349,8 @@ gate_case "highest round clean while round 1 is not" 0 'sed -i.bak "s/^all_clean
 gate_case "round 7 is past the cap" 6 'mv "$VF" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"; sed -i.bak "s/^pr_round=.*/pr_round=7/" "$AH/state/autonomous/o_r/pr-7/round-7.verdict"' 'past the cap'
 gate_case "the relay's per-SHA round (1) differs from the PR round (2): accepted" 0 'mv "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict"; sed -i.bak "s/^pr_round=.*/pr_round=2/" "$AH/state/autonomous/o_r/pr-7/round-2.verdict"'
 gate_case "a verdict file with no pr_round (not written by relay --autonomous)" 6 'sed -i.bak "/^pr_round=/d" "$VF"' 'pr_round'
+gate_case "the round's context was not the Plan-Key plan" 6 'sed -i.bak "s/^context_sha256=.*/context_sha256=$OTHER64/" "$VF"' 'context other than the plan'
+gate_case "a verdict file with no context_sha256" 6 'sed -i.bak "/^context_sha256=/d" "$VF"' 'context other than the plan'
 gate_case "no verdict file" 6 'rm -f "$VF"'
 # disputes
 gate_case "no disposition comment" 6 ': > "$GH/pr_comments"' 'no author disposition'
@@ -2380,8 +2383,13 @@ done
 gate_case "custom sensitive-paths file overrides the defaults" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf "docs/x.md\n" > "$GH/diff"'
 gate_case "custom sensitive-paths file: defaults no longer apply" 0 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"'
 gate_case "a sensitive-paths file that cannot be read" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; chmod 000 "$AH/.config/ship-feature/sensitive-paths"' 'cannot read'
+gate_case "an empty sensitive-paths file is refused, not read as allow-all" 6 ': > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"' 'no active pattern'
+gate_case "a sensitive-paths file of comments and blanks is refused" 6 'printf "# none\n\n   \n" > "$AH/.config/ship-feature/sensitive-paths"' 'no active pattern'
+mk_world; printf 'src/a$(touch %s/pwned1)`touch %s/pwned2`.js\n' "$AH" "$AH" > "$GH/diff"; printf 'x$(touch %s/pwned3)\n*$(touch*\n' "$AH" > "$AH/.config/ship-feature/sensitive-paths"; run_gate; rc=$?
+check "merge-gate: \$(...) and backticks in a path or a pattern are never run, and the path is matched as written" "$rc|$(ls "$AH" | grep -c pwned)|$(grep -c 'sensitive path' "$AH/gate.err")" "6|0|1"
 # the merge call itself
 gate_case "head moved before the merge call" 6 'printf "%s\n%s\n" "$HEAD40" "$OTHER40" > "$GH/pr_headRefOid.seq"' 'head moved'
+gate_case "CI turns red between the checks and the merge call" 6 'printf "COMPLETED|SUCCESS|-\nCOMPLETED|FAILURE|-\n" > "$GH/pr_statusCheckRollup.seq"' 'CI changed after the checks'
 gate_case "gh without --match-head-commit" 6 'printf "options:\n  --squash\n" > "$GH/merge_help"' 'match-head-commit'
 mk_world; printf '1\n' > "$GH/merge_rc"; run_gate; rc=$?
 check "merge-gate: a failing merge call exits 6 and is not retried (one call logged)" "$rc|$(wc -l < "$GH/merge.log" | tr -d ' ')" "6|1"
@@ -2410,7 +2418,10 @@ check "relay --autonomous: the PR is resolved from the current branch when --pr 
 mk_relay_world; : > "$GH/pr_number"; run_relay; rc=$?
 check "relay --autonomous: an unresolvable PR is refused (4) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
 mk_relay_world; run_relay --pr=7; rc=$?
-check "relay --autonomous: the --pr=N form is honoured" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)" "0|yes"
+check "relay --autonomous: the --pr=N form is honoured and passed to the relay as --pr N" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)|$(grep -c -- '--pr 7 ' "$RL")|$(grep -c -- '--pr=7' "$RL")" "0|yes|1|0"
+check "relay --autonomous: the verdict file records the context's SHA-256" "$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" 1
+mk_relay_world; printf 'not the plan\n' > "$AH/other.md"; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file "$AH/other.md" >/dev/null 2>"$AH/relay.err" ); rc=$?
+check "relay --autonomous: a context file that is not a consensus plan is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
 mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
 check "relay --autonomous: a fresh lock with no pid yet is held, not taken over (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
 mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; touch -t 200001010000 "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
@@ -2539,7 +2550,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=509
+EXPECTED=517
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

@@ -1435,7 +1435,7 @@ sf_auto_plan_panel() {
   printf '%s' "$file"
 }
 sf_norm_plan_seats() { printf '%s\n' "$1" | tr ', \t' '\n\n\n' | sed -e '/^$/d' -e 's/^agy$/antigravity/' -e 's/^gemini$/antigravity/' -e 's/^grok45high$/grok/' | sort -u | paste -sd, -; }
-sf_set_without() { printf '%s\n' "$1" | tr ',' '\n' | grep -vx -- "$2" | sed '/^$/d' | paste -sd, -; }
+sf_set_without() { printf '%s\n' "$1" | tr ',' '\n' | grep -Fvx -- "$2" | sed '/^$/d' | paste -sd, -; }
 sf_b64d() { local in; in="$(cat)"; printf '%s' "$in" | base64 --decode 2>/dev/null || printf '%s' "$in" | base64 -D 2>/dev/null; }
 
 # A key exactly as pr-review-relay's own config defines it (last value wins, BOM stripped, quotes and
@@ -1583,7 +1583,7 @@ cmd_relay_auto() {
       --reviewers|--reviewers=*) echo "✖ relay --autonomous refuses --reviewers: every autonomous round is a full-panel round on the relay's own quorum." >&2; return 7;;
       --verdict-file|--verdict-file=*|--max-rounds|--max-rounds=*|--reset) echo "✖ relay --autonomous sets its own verdict path and round cap and never resets; '$1' is refused." >&2; return 7;;
       --pr) [ $# -ge 2 ] || die "--pr needs a number."; pr="$2"; args+=("$1" "$2"); shift 2;;
-      --pr=*) pr="${1#--pr=}"; args+=("$1"); shift;;
+      --pr=*) pr="${1#--pr=}"; args+=(--pr "$pr"); shift;;   # pr-review-relay takes only `--pr N`
       --context-file) [ $# -ge 2 ] || die "--context-file needs a path."; ctx="$2"; args+=("$1" "$2"); shift 2;;
       --context-file=*) ctx="${1#--context-file=}"; args+=("$1"); shift;;
       *) args+=("$1"); shift;;
@@ -1592,6 +1592,10 @@ cmd_relay_auto() {
   sf_auto_guard 1 || return 7
   # A clean verdict counts toward a merge, so the reviewers must have read the plan it implements.
   [ -n "$ctx" ] && [ -f "$ctx" ] || { echo "✖ relay --autonomous needs --context-file <plan> (an existing file): a round whose reviewers never saw the approved plan cannot be a merge candidate." >&2; return 7; }
+  # The context must BE a plan that reached consensus, byte for byte. Its hash goes into the verdict
+  # file, and the merge gate requires it to equal the PR's Plan-Key.
+  SF_RA_CSHA="$(sf_sha256 < "$ctx")"
+  [ -f "$(sf_auto_state)/consensus/plan-$SF_RA_CSHA.consensus" ] || { echo "✖ relay --autonomous: the --context-file is not a plan that reached consensus (no result for its SHA-256 $SF_RA_CSHA). Pass the approved plan file itself, unchanged." >&2; return 7; }
   command -v pr-review-relay >/dev/null 2>&1 || die "pr-review-relay not found on PATH (it is a dependency: https://github.com/hamen/pr-review-relay)."
   command -v gh >/dev/null 2>&1 || die "gh not found on PATH."
   repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || repo=""
@@ -1635,7 +1639,7 @@ sf_relay_auto_round() {
     fi
     # The relay numbers its rounds per reviewed SHA; this wrapper numbers them per PR. Record the PR
     # round, which is the one the merge gate binds to the file name and caps at 6.
-    { printf 'pr_round=%s\n' "$k" >> "$vf" && sf_num_put "$dir/rounds" "$k"; } 2>/dev/null \
+    { printf 'pr_round=%s\ncontext_sha256=%s\n' "$k" "$SF_RA_CSHA" >> "$vf" && sf_num_put "$dir/rounds" "$k"; } 2>/dev/null \
       || { rm -f "$vf"; echo "✖ relay --autonomous: cannot record round $k in $dir (read-only or full?). The round is not used. STOP and notify the human." >&2; return 4; }
     if [ "$ac" = true ]; then
       echo "  → relay --autonomous: round $k/$SF_AUTO_MAX_ROUNDS for $repo#$pr is all_clean. Run 'ship-feature merge-gate $pr --autonomous'." >&2
@@ -1689,7 +1693,7 @@ sf_gate_plan() {
   n="$(printf '%s\n' "$body" | grep -c '^Plan-Key:')"
   keys="$(printf '%s\n' "$body" | sed -n 's/^Plan-Key: \([0-9a-f]\{64\}\)[[:space:]]*$/\1/p')"
   [ "$n" = 1 ] && [ "$(printf '%s' "$keys" | grep -c .)" = 1 ] || { sf_gate_fail "the PR body must carry exactly one well-formed 'Plan-Key: <sha256>' line (found $n Plan-Key line(s))"; return 6; }
-  key="$keys"; cons="$state/consensus/plan-$key.consensus"
+  key="$keys"; cons="$state/consensus/plan-$key.consensus"; SF_G_PKEY="$key"
   [ -f "$cons" ] || { sf_gate_fail "no plan consensus result for Plan-Key $key"; return 6; }
   panel_now="$(sf_auto_plan_panel)" || { sf_gate_fail "$panel_now"; return 6; }
   [ "$(sf_kv_get "$cons" plan_panel)" = "$panel_now" ] || { sf_gate_fail "the plan panel changed since consensus (was $(sf_kv_get "$cons" plan_panel), now $panel_now)"; return 6; }
@@ -1740,6 +1744,7 @@ sf_gate_verdict() {
   [ "$best" -le "$SF_AUTO_MAX_ROUNDS" ] || { sf_gate_fail "round $best is past the cap of $SF_AUTO_MAX_ROUNDS"; return 6; }
   [ "$(sf_kv_get "$bestf" head_sha)" = "$SF_G_HEAD" ] || { sf_gate_fail "the verdict is for $(sf_kv_get "$bestf" head_sha | cut -c1-7), the PR head is $(printf '%s' "$SF_G_HEAD" | cut -c1-7)"; return 6; }
   [ "$(sf_kv_get "$bestf" exit)" = 0 ] || { sf_gate_fail "the relay round did not exit 0"; return 6; }
+  [ "$(sf_kv_get "$bestf" context_sha256)" = "$SF_G_PKEY" ] || { sf_gate_fail "the round's reviewers were given a context other than the plan named by Plan-Key"; return 6; }
   [ "$(sf_kv_get "$bestf" all_clean)" = true ] || { sf_gate_fail "the last full-panel round is not all_clean"; return 6; }
   cfg="$(sf_relay_cfg_reviewers)" || { sf_gate_fail "cannot read REVIEWERS from the relay config"; return 6; }
   author="$(sf_kv_get "$bestf" author)"
@@ -1834,6 +1839,8 @@ sf_gate_sensitive() {
   # A file that exists but cannot be read must not become an empty list (which allows every path).
   if [ -e "$pf" ]; then
     pats="$(cat "$pf" 2>/dev/null)" || { sf_gate_fail "cannot read $pf"; return 6; }
+    # A file with no active pattern would allow every path; that is never what an empty file means.
+    printf '%s\n' "$pats" | grep -Eqv '^[[:space:]]*(#|$)' || { sf_gate_fail "$pf has no active pattern (remove it to use the defaults)"; return 6; }
   else
     pats="$(sf_default_sensitive)"
   fi
@@ -1869,7 +1876,7 @@ cmd_merge_gate() {
   sf_auto_guard "$auto" || return 7
   command -v gh >/dev/null 2>&1 || { sf_gate_fail "gh not found on PATH"; return 6; }
   load_config
-  SF_G_REPO=""; SF_G_HEAD=""; SF_G_VFILE=""; SF_G_ROUND=""; SF_G_CONS=""; SF_G_CI=""; SF_G_FILES=""
+  SF_G_REPO=""; SF_G_HEAD=""; SF_G_VFILE=""; SF_G_ROUND=""; SF_G_CONS=""; SF_G_CI=""; SF_G_FILES=""; SF_G_PKEY=""
   sf_gate_plan "$pr"      || return 6
   sf_gate_pr "$pr"        || return 6
   sf_gate_verdict "$pr"   || return 6
@@ -1884,6 +1891,8 @@ cmd_merge_gate() {
   local head2 mc audit adir afile
   head2="$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)"
   [ "$head2" = "$SF_G_HEAD" ] || { sf_gate_fail "the PR head moved during the checks ($(printf '%s' "$SF_G_HEAD" | cut -c1-7) -> $(printf '%s' "$head2" | cut -c1-7))"; return 6; }
+  # CI again, on the same SHA: a check can be re-run or turn red after the first read.
+  sf_gate_ci "$pr" || { sf_gate_fail "CI changed after the checks; not merging"; return 6; }
   gh pr merge --help 2>&1 | grep -q -- '--match-head-commit' || { sf_gate_fail "this gh has no 'pr merge --match-head-commit'; update gh"; return 6; }
   sf_auto_guard 1 || return 7
   gh pr merge "$pr" --merge --match-head-commit "$SF_G_HEAD" || { sf_gate_fail "the merge call failed; nothing was retried"; return 6; }

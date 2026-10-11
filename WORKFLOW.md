@@ -363,7 +363,9 @@ result; a PR without exactly one key is refused.
 
 **The loop: `ship-feature relay --autonomous --context-file <plan>`.** Every round is a full-panel round
 on the relay's own quorum (`--reviewers`, `--verdict-file`, `--max-rounds` and `--reset` are refused, and
-so is a round without `--context-file`). Exit `0` is an `all_clean` round, exit `2` a counted round with
+so is a round without `--context-file`). The context file must be the approved plan itself, byte for
+byte: a file with no consensus result for its SHA-256 is refused (exit `7`), and the hash is recorded in
+the verdict file as `context_sha256`. Dispositions reach the reviewers as PR comments. Exit `0` is an `all_clean` round, exit `2` a counted round with
 findings. A verdict file that is missing, names another repo or PR, or has no `all_clean=true|false` is
 removed and counts as a failed attempt (exit `3`). A round state that cannot be written stops before the
 relay runs (exit `4`). The verdict file is
@@ -388,16 +390,16 @@ stops at the first failure (exit `6`); without `--merge` it only reports:
 3. the PR is open, not a draft, based on the repo's default branch, and `MERGEABLE` (`UNKNOWN` is read
    up to 5 times);
 4. the verdict file of the highest round is for this repo and PR, names the PR's current head SHA, has
-   `all_clean=true`, round at most 6, and the panel equals the relay's configured `REVIEWERS` without
-   the author;
+   `all_clean=true`, round at most 6, `context_sha256` equal to the PR's `Plan-Key`, and the panel
+   equals the relay's configured `REVIEWERS` without the author;
 5. no unresolved dispute and a latest disposition whose last non-empty line is `Disputed findings: none`;
 6. CI on that SHA: every check `SUCCESS` or `NEUTRAL` (nothing skipped, pending or missing); an empty
    result needs the repo listed in `~/.config/ship-feature/allow-no-ci`, a file a human creates;
 7. no sensitive file in the diff: the patterns in `~/.config/ship-feature/sensitive-paths`, else the
    built-in defaults (workflows, hooks, deploy and release scripts, keys, env files, anything named
-   secret or credential); a match leaves the PR to a human, and a patterns file that cannot be read is
-   exit `6`;
-8. the head is re-read and the kill switch re-checked, then exactly one
+   secret or credential); a match leaves the PR to a human, and a patterns file that cannot be read or
+   has no active pattern is exit `6`;
+8. the head and CI are re-read and the kill switch re-checked, then exactly one
    `gh pr merge <n> --merge --match-head-commit <verdict sha>` runs, followed by an audit comment (head
    SHA, merge commit, the verdict file, degraded seats, CI, files checked, `autonomous_env=1`). The text
    is kept in memory and also written to `audit.txt` when the state directory allows it. If the audit
