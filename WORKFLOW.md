@@ -368,8 +368,8 @@ byte: a file with no consensus result for its SHA-256 is refused (exit `7`), and
 the verdict file as `context_sha256`. The file is hashed again after the round, and a plan edited during
 the round is a failed attempt (exit `3`). Dispositions reach the reviewers as PR comments. Exit `0` is an `all_clean` round, exit `2` a counted round with
 findings. A verdict file that is missing, names another repo or PR, or has no `all_clean=true|false` is
-removed and counts as a failed attempt (exit `3`). A round state that cannot be written stops before the
-relay runs (exit `4`). The verdict file is
+removed and counts as a failed attempt (exit `3`), and so does any relay exit other than `0`, `3` or `4`.
+A round state that cannot be written stops before the relay runs (exit `4`). The verdict file is
 written at a path the tool computes. One counter per PR (not per SHA) allows at most 6 rounds; the 7th
 exits `4`, and so does the 4th failed attempt. The wrapper records the PR round in the verdict file as
 `pr_round` (the relay's own `round` counts per SHA). The relay also gets `--max-rounds 6`, which it
@@ -401,11 +401,14 @@ stops at the first failure (exit `6`); without `--merge` it only reports:
    built-in defaults (workflows, hooks, deploy and release scripts, keys, env files, anything named
    secret or credential); a match leaves the PR to a human, and a patterns file that cannot be read or
    has no active pattern is exit `6`;
-8. the head and CI are re-read and the kill switch re-checked, then exactly one
+8. under the same PR lock that `relay --autonomous` takes, the head, the highest verdict file (same file,
+   same `run_id` as check 4) and CI are re-read and the kill switch re-checked, then exactly one
    `gh pr merge <n> --merge --match-head-commit <verdict sha>` runs, followed by an audit comment (head
    SHA, merge commit, the verdict file, degraded seats, CI, files checked, `autonomous_env=1`). The text
-   is kept in memory and also written to `audit.txt` when the state directory allows it. If the audit
-   comment cannot be posted the command exits `8` and prints the text: post it.
+   is kept in memory and also written to `audit.txt` when the state directory allows it. The comment
+   states the number of files checked and lists them all, unless that would pass GitHub's comment size
+   limit: then it lists the first 200 and says where the full list is. If the audit comment cannot be
+   posted the command exits `8` and prints the text: post it.
 
 It never fixes, never retries a failed merge call and never loops.
 

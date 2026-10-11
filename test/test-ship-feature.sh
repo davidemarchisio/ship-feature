@@ -2219,6 +2219,7 @@ case "$1 $2" in
     case "$fld" in
       headRefOid) n=$(( $(cat "$GHF/head.count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GHF/head.count"
                   if [ "$n" = 2 ] && [ -e "$GHF/kill_on_second_head" ]; then : > "$(cat "$GHF/kill_on_second_head")"; fi
+                  if [ "$n" = 2 ] && [ -e "$GHF/on_second_head" ]; then bash "$GHF/on_second_head"; fi
                   seq_pop pr_headRefOid;;
       mergeable) seq_pop pr_mergeable;;
       statusCheckRollup) seq_pop pr_statusCheckRollup;;
@@ -2254,12 +2255,30 @@ cat >/dev/null
 printf 'review body from gemini\nVERDICT: clean\n'
 GSTUB
 chmod +x "$ABIN/gemini"
+# The other plan seats (claude, cursor, glm via opencode): a body and the verdict line.
+for _b in claude cursor-agent opencode; do
+  cat > "$ABIN/$_b" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$STUB_LOG.$_b"
+case " \$* " in *" --version "*|*" -v "*) echo "1.0.0"; exit 0;; esac
+cat >/dev/null
+printf 'review body from $_b\nVERDICT: clean\n'
+STUB
+  chmod +x "$ABIN/$_b"
+done
 # Fake pr-review-relay: record argv; write a verdict file when asked; exit with STUB_RELAY_RC.
 cat > "$ABIN/pr-review-relay" <<'RSTUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_RELAY_LOG"
 vf=""; prev=""; for a in "$@"; do [ "$prev" = "--verdict-file" ] && vf="$a"; prev="$a"; done
 [ -n "${STUB_RELAY_TOUCH:-}" ] && printf 'edited during the round\n' >> "$STUB_RELAY_TOUCH"
+if [ "${STUB_RELAY_A3:-0}" = 1 ] && [ -n "$vf" ]; then
+  # The shape pr-review-relay --verdict-file writes (sets space-separated, every key present).
+  { printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\nexit=0\nauthor=claude\n' "$(cat "$GHF/pr_headRefOid")"
+    printf 'configured=codex grok opencode\nrequested=codex grok opencode\nran=codex grok opencode\nbenched=\n'
+    printf 'seat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=0123456789abcdef\nts=2026-10-11T00:00:00Z\n'; } > "$vf"
+  exit "${STUB_RELAY_RC:-0}"
+fi
 [ "${STUB_RELAY_WRITE:-1}" = 1 ] && [ -n "$vf" ] && printf 'repo=%s\npr=7\nround=1\nall_clean=%s\n' "${STUB_RELAY_REPO:-o/r}" "${STUB_RELAY_CLEAN-true}" > "$vf"
 exit "${STUB_RELAY_RC:-0}"
 RSTUB
@@ -2405,6 +2424,20 @@ gate_case "CRLF paths from the diff still match an exact default pattern" 6 'pri
 gate_case "head moved before the merge call" 6 'printf "%s\n%s\n" "$HEAD40" "$OTHER40" > "$GH/pr_headRefOid.seq"' 'head moved'
 gate_case "CI turns red between the checks and the merge call" 6 'printf "COMPLETED|SUCCESS|-\nCOMPLETED|FAILURE|-\n" > "$GH/pr_statusCheckRollup.seq"' 'CI changed after the checks'
 gate_case "gh without --match-head-commit" 6 'printf "options:\n  --squash\n" > "$GH/merge_help"' 'match-head-commit'
+mk_world; printf 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=false/; s/^run_id=.*/run_id=y/" "%s" > "%s"\n' "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict" > "$GH/on_second_head"; run_gate; rc=$?
+check "merge-gate: a newer, non-clean round recorded during the checks stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
+mk_world; printf 'sed -i.bak "s/^run_id=.*/run_id=rewritten/" "%s"\n' "$VF" > "$GH/on_second_head"; run_gate; rc=$?
+check "merge-gate: the same round rewritten during the checks (new run_id) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'newer round' "$AH/gate.err")" "6|none|1"
+mk_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_gate; rc=$?
+check "merge-gate --merge: a live PR lock (a round in progress) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'holds the lock' "$AH/gate.err")" "6|none|1"
+mk_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/o_r/pr-7.lock/pid"; GATE_MERGE="" run_gate; rc=$?
+check "merge-gate without --merge takes no lock (reports 0 while a round runs)" "$rc" 0
+mk_world; run_gate; rc=$?
+check "merge-gate: the PR lock is released after the merge" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7.lock" ] && echo held || echo free)" "0|free"
+mk_world; for _i in $(seq 1 250); do printf 'src/f%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: 250 files are all listed in the audit comment, with the total" "$rc|$(grep -c '^    src/f[0-9]*\.js$' "$GH/audit_posted")|$(grep -c '^files_checked (250):$' "$GH/audit_posted")" "0|250|1"
+mk_world; for _i in $(seq 1 1500); do printf 'src/a/very/long/directory/name/for/the/audit/file_%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
+check "merge-gate: a list too long for one comment is shortened, says so, and audit.txt has every file" "$rc|$(grep -c '^files_checked (1500):$' "$GH/audit_posted")|$(grep -c '200 of 1500 files listed here; the full list is in .*audit.txt' "$GH/audit_posted")|$(grep -c 'file_[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|1|1|1500"
 mk_world; printf '1\n' > "$GH/merge_rc"; run_gate; rc=$?
 check "merge-gate: a failing merge call exits 6 and is not retried (one call logged)" "$rc|$(wc -l < "$GH/merge.log" | tr -d ' ')" "6|1"
 mk_world; printf '1\n' > "$GH/comment_rc"; run_gate; rc=$?
@@ -2481,14 +2514,29 @@ mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '%s\n' "$$" >
 check "relay --autonomous: a live lock on the PR refuses the round (4) and does not call the relay" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
 mk_relay_world; mkdir "$AH/state/autonomous/o_r/pr-7.lock"; printf '999999\n' > "$AH/state/autonomous/o_r/pr-7.lock/pid"; run_relay --pr 7; rc=$?
 check "relay --autonomous: a stale lock (owner gone) is taken over, and released after the round" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7.lock" ] && echo locked || echo free)|$([ -e "$AH/state/autonomous/o_r/pr-7.lock.takeover" ] && echo left || echo clean)" "0|free|clean"
+mk_relay_world; export STUB_RELAY_RC=1; run_relay --pr 7; rc=$?
+check "relay --autonomous: a relay exit outside 0/3/4 is a failed attempt (3), not a round" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/fails" 2>/dev/null)|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")" "3|1|0"
+run_relay --pr 7; run_relay --pr 7; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+check "relay --autonomous: unexpected relay exits are bounded by the same cap (the 4th exits 4)" "$rc" 4
 mk_relay_world; export STUB_RELAY_RC=4; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
 check "relay --autonomous passes the relay's exit 4 through" "$rc" 4
+
+# relay --autonomous → merge-gate, with a verdict file in the shape the real relay writes
+mk_relay_world; rm -f "$VF"; export STUB_RELAY_A3=1; run_relay --pr 7; rc=$?; unset STUB_RELAY_A3
+check "relay → merge-gate: relay --autonomous accepts an A3-shaped verdict as an all_clean round 1" "$rc|$(grep -c '^pr_round=1$' "$AH/state/autonomous/o_r/pr-7/round-1.verdict")|$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" "0|1|1"
+run_gate; rc=$?
+check "relay → merge-gate: merge-gate merges on the wrapper's own verdict file, once" "$rc|$(cat "$GH/merge.log" 2>/dev/null)" "0|pr merge 7 --merge --match-head-commit $HEAD40"
+mk_relay_world; rm -f "$VF"; export STUB_RELAY_A3=1; run_relay --pr 7; unset STUB_RELAY_A3; sed -i.bak 's/^seat.grok=.*/seat.grok=findings/' "$AH/state/autonomous/o_r/pr-7/round-1.verdict"; run_gate; rc=$?
+check "relay → merge-gate: the same chain with one seat 'findings' does not merge" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
 
 # plan-consensus
 mk_plan_world() { mk_world; PL="$AH/plan.md"; SL="$AH/stub.log"; rm -f "$AH/state/autonomous/consensus/"*; }
 run_pc() { # extra args
   ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH"
     [ -z "${PLAN_ENV:-}" ] || export SHIP_FEATURE_PLAN_REVIEWERS="$PLAN_ENV"
+    # The grok seat is degraded when the machine has no bwrap (a CI runner, for one). Pin the probe so
+    # the result does not depend on the machine; the =fail case below covers the degraded path.
+    export SHIP_FEATURE_FORCE_SANDBOX_PROBE="${SHIP_FEATURE_FORCE_SANDBOX_PROBE:-ok}"
     [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
     bash "$CLI" plan-consensus "$PL" --autonomous "$@" >"$AH/pc.out" 2>"$AH/pc.err" )
 }
@@ -2529,6 +2577,9 @@ mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
 check "plan-consensus: no degraded_note → nothing recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|"
 mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=agy,codex/' "$AH/relay.conf"; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
 check "plan-consensus: the antigravity seat (named agy) is always recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)|$(awk -F= '$1=="plan_panel"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)" "0|antigravity|antigravity,codex"
+mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=claude,codex,cursor,glm,grok,antigravity/' "$AH/relay.conf"; run_pc; rc=$?
+_c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"
+check "plan-consensus: every supported plan seat's verdict is read back by name (claude, codex, cursor, glm, grok, antigravity)" "$rc|$(for _s in claude codex cursor glm grok antigravity; do awk -F= -v k="seat.$_s" '$1==k{printf "%s ", $2}' "$_c" 2>/dev/null; done)" "0|clean clean clean clean clean clean "
 mk_plan_world; export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
 check "plan-consensus: a plan edited while the panel reads it → exit 3, no consensus file, no round" "$rc|$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0|0"
 mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan/$_pk.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/plan/$_pk.lock/pid"; run_pc; rc=$?
@@ -2578,7 +2629,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=530
+EXPECTED=543
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

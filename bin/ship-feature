@@ -1359,6 +1359,7 @@ SF_AUTO_MAX_ROUNDS=6          # relay rounds per PR (full panel each), counted p
 SF_AUTO_PLAN_MAX_ROUNDS=2     # plan-consensus rounds per plan
 SF_AUTO_PLAN_MAX_ATTEMPTS=3   # plan-consensus invocations per plan; the next one exits 5
 SF_AUTO_MAX_FAILS=4           # failed relay attempts per PR; at this count the next exits 4
+SF_AUDIT_MAX_BYTES=60000      # the audit comment stays under GitHub's comment size limit (65536)
 
 # The rules every reviewer prompt gets in autonomous mode (and only then): the verdict line is the
 # machine-read contract. Identical to the pr-review-relay prompt rules (its --verdict-file mode).
@@ -1667,7 +1668,12 @@ sf_relay_auto_round() {
        if [ "$fails" -ge "$SF_AUTO_MAX_FAILS" ]; then echo "✖ relay --autonomous: failed attempt $fails/$SF_AUTO_MAX_FAILS for $repo#$pr — cap reached. STOP and notify the human." >&2; return 4; fi
        echo "  → relay --autonomous: a seat failed (exit 3), attempt $fails/$SF_AUTO_MAX_FAILS — not counted as a round." >&2; return 3;;
     4) echo "  → relay: round cap reached (exit 4) — STOP and notify the human." >&2; return 4;;
-    *) return "$rc";;
+    *) # Any other exit (a usage error, a killed relay) is a failed attempt too, so it is bounded by the
+       # same cap and never loops. It is reported as 3: the round produced no usable verdict.
+       fails=$((fails + 1))
+       sf_num_put "$dir/fails" "$fails" 2>/dev/null || { echo "✖ relay --autonomous: cannot record the failed attempt in $dir. STOP and notify the human." >&2; return 4; }
+       if [ "$fails" -ge "$SF_AUTO_MAX_FAILS" ]; then echo "✖ relay --autonomous: the relay exited $rc; failed attempt $fails/$SF_AUTO_MAX_FAILS for $repo#$pr — cap reached. STOP and notify the human." >&2; return 4; fi
+       echo "✖ relay --autonomous: the relay exited $rc (not 0, 3 or 4), attempt $fails/$SF_AUTO_MAX_FAILS — not counted as a round." >&2; return 3;;
   esac
 }
 
@@ -1772,7 +1778,7 @@ sf_gate_verdict() {
   for s in $(printf '%s' "$want" | tr ',' ' '); do
     [ "$(sf_kv_get "$bestf" "seat.$s")" = clean ] || { sf_gate_fail "seat '$s' is not clean in the verdict"; return 6; }
   done
-  SF_G_VFILE="$bestf"; SF_G_ROUND="$best"
+  SF_G_VFILE="$bestf"; SF_G_ROUND="$best"; SF_G_RUNID="$(sf_kv_get "$bestf" run_id)"
   return 0
 }
 
@@ -1892,7 +1898,7 @@ cmd_merge_gate() {
   sf_auto_guard "$auto" || return 7
   command -v gh >/dev/null 2>&1 || { sf_gate_fail "gh not found on PATH"; return 6; }
   load_config
-  SF_G_REPO=""; SF_G_HEAD=""; SF_G_VFILE=""; SF_G_ROUND=""; SF_G_CONS=""; SF_G_CI=""; SF_G_FILES=""; SF_G_PKEY=""
+  SF_G_REPO=""; SF_G_HEAD=""; SF_G_VFILE=""; SF_G_ROUND=""; SF_G_CONS=""; SF_G_CI=""; SF_G_FILES=""; SF_G_PKEY=""; SF_G_RUNID=""
   sf_gate_plan "$pr"      || return 6
   sf_gate_pr "$pr"        || return 6
   sf_gate_verdict "$pr"   || return 6
@@ -1903,10 +1909,46 @@ cmd_merge_gate() {
     echo "✔ merge-gate: every check passes for $SF_G_REPO#$pr at $(printf '%s' "$SF_G_HEAD" | cut -c1-7) (round $SF_G_ROUND). Not merging: --merge was not given." >&2
     return 0
   fi
-  # Merge: re-read the head, recheck the kill switch, then ONE merge call pinned to the verdict SHA.
-  local head2 mc audit adir afile
+  # Merge, under the same PR lock that relay --autonomous takes, so no round can finish between the
+  # last read and the merge call.
+  local adir rc=0
+  adir="$(sf_auto_state)/$(printf '%s' "$SF_G_REPO" | tr '/' '_')/pr-$pr"
+  sf_mkdirp "$adir" 2>/dev/null || { sf_gate_fail "cannot create $adir"; return 6; }
+  sf_lock "$adir" || { sf_gate_fail "an autonomous round (or another merge-gate) holds the lock for $SF_G_REPO#$pr ($adir.lock); not merging"; return 6; }
+  sf_gate_merge "$pr" "$adir"; rc=$?
+  sf_unlock "$adir"
+  return "$rc"
+}
+
+# The audit comment's text. $1 = how many file names to list (empty: all of them). The total is
+# always stated, and a shortened list says so and where the full one is.
+sf_audit_text() {
+  local limit="$1" mc="$2" afile="$3" total
+  total="$(printf '%s\n' "$SF_G_FILES" | sed '/^$/d' | wc -l | tr -d ' ')"
+  printf 'Autonomous merge (ship-feature merge-gate)\n\n'
+  printf 'head_sha=%s\nmerge_commit=%s\nround=%s\nautonomous_env=1\n' "$SF_G_HEAD" "${mc:-unknown}" "$SF_G_ROUND"
+  printf 'plan_degraded_seats=%s\n\nci_checks (status|conclusion|state):\n' "$(sf_kv_get "$SF_G_CONS" degraded)"
+  printf '%s\n' "$SF_G_CI" | sed 's/^/    /'
+  printf '\nfiles_checked (%s):\n' "$total"
+  if [ -z "$limit" ] || [ "$total" -le "$limit" ]; then
+    printf '%s\n' "$SF_G_FILES" | sed '/^$/d; s/^/    /'
+  else
+    printf '%s\n' "$SF_G_FILES" | sed '/^$/d' | head -n "$limit" | sed 's/^/    /'
+    printf '    ... %s of %s files listed here; the full list is in %s\n' "$limit" "$total" "${afile:-the text printed by merge-gate}"
+  fi
+  printf '\nverdict file:\n'
+  sed 's/^/    /' "$SF_G_VFILE"
+}
+
+sf_gate_merge() {
+  local pr="$1" adir="$2" head2 mc audit full afile vfile1="$SF_G_VFILE" run1="$SF_G_RUNID"
+  # Re-read the head, the highest verdict (compared with what check 4 saw), and CI; recheck the kill
+  # switch; then ONE merge call pinned to the verdict SHA.
   head2="$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)"
   [ "$head2" = "$SF_G_HEAD" ] || { sf_gate_fail "the PR head moved during the checks ($(printf '%s' "$SF_G_HEAD" | cut -c1-7) -> $(printf '%s' "$head2" | cut -c1-7))"; return 6; }
+  sf_gate_verdict "$pr" || { sf_gate_fail "the verdict changed after the checks; not merging"; return 6; }
+  [ "$SF_G_VFILE" = "$vfile1" ] && [ "$SF_G_RUNID" = "$run1" ] \
+    || { sf_gate_fail "a newer round was recorded after the checks; not merging"; return 6; }
   # CI again, on the same SHA: a check can be re-run or turn red after the first read.
   sf_gate_ci "$pr" || { sf_gate_fail "CI changed after the checks; not merging"; return 6; }
   gh pr merge --help 2>&1 | grep -q -- '--match-head-commit' || { sf_gate_fail "this gh has no 'pr merge --match-head-commit'; update gh"; return 6; }
@@ -1914,21 +1956,17 @@ cmd_merge_gate() {
   gh pr merge "$pr" --merge --match-head-commit "$SF_G_HEAD" || { sf_gate_fail "the merge call failed; nothing was retried"; return 6; }
   mc="$(gh pr view "$pr" --json mergeCommit --jq .mergeCommit.oid 2>/dev/null)"
   # The audit text is built in memory first: the merge has happened, so a state directory that cannot
-  # be written must not lose it. The file is a copy; the comment and, on failure, stdout carry the text.
-  audit="$(
-    printf 'Autonomous merge (ship-feature merge-gate)\n\n'
-    printf 'head_sha=%s\nmerge_commit=%s\nround=%s\nautonomous_env=1\n' "$SF_G_HEAD" "${mc:-unknown}" "$SF_G_ROUND"
-    printf 'plan_degraded_seats=%s\n\nci_checks (status|conclusion|state):\n' "$(sf_kv_get "$SF_G_CONS" degraded)"
-    printf '%s\n' "$SF_G_CI" | sed 's/^/    /'
-    printf '\nfiles_checked:\n'
-    printf '%s\n' "$SF_G_FILES" | head -n 200 | sed 's/^/    /'
-    [ "$(printf '%s\n' "$SF_G_FILES" | wc -l | tr -d ' ')" -le 200 ] || printf '    ... (list truncated at 200 files)\n'
-    printf '\nverdict file:\n'
-    sed 's/^/    /' "$SF_G_VFILE"
-  )"
-  adir="$(sf_auto_state)/$(printf '%s' "$SF_G_REPO" | tr '/' '_')/pr-$pr"
+  # be written must not lose it. audit.txt holds the full text; the comment holds it too unless it would
+  # pass GitHub's comment size limit, in which case the file list is shortened and says so.
   afile="$adir/audit.txt"
-  { sf_mkdirp "$adir" && printf '%s\n' "$audit" > "$afile"; } 2>/dev/null || { echo "  ! cannot write $afile; the audit text is posted and printed instead" >&2; afile=""; }
+  full="$(sf_audit_text "" "$mc" "$afile")"
+  printf '%s\n' "$full" > "$afile" 2>/dev/null || { echo "  ! cannot write $afile; the audit text is posted and printed instead" >&2; afile=""; full="$(sf_audit_text "" "$mc" "")"; }
+  audit="$full"
+  if [ "${#full}" -gt "$SF_AUDIT_MAX_BYTES" ]; then
+    audit="$(sf_audit_text 200 "$mc" "$afile")"
+    # No file to point at: the full text goes to stdout, so the list is never lost.
+    [ -n "$afile" ] || printf '%s\n' "$full"
+  fi
   echo "✔ merge-gate: merged $SF_G_REPO#$pr as ${mc:-unknown}" >&2
   if ! printf '%s\n' "$audit" | gh pr comment "$pr" --body-file - >/dev/null 2>&1; then
     echo "✖ merged, audit comment NOT posted — post it. Text${afile:+ (also in $afile)}:" >&2
