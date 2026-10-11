@@ -1584,8 +1584,10 @@ cmd_relay_auto() {
       --verdict-file|--verdict-file=*|--max-rounds|--max-rounds=*|--reset) echo "✖ relay --autonomous sets its own verdict path and round cap and never resets; '$1' is refused." >&2; return 7;;
       --pr) [ $# -ge 2 ] || die "--pr needs a number."; pr="$2"; args+=("$1" "$2"); shift 2;;
       --pr=*) pr="${1#--pr=}"; args+=(--pr "$pr"); shift;;   # pr-review-relay takes only `--pr N`
-      --context-file) [ $# -ge 2 ] || die "--context-file needs a path."; ctx="$2"; args+=("$1" "$2"); shift 2;;
-      --context-file=*) ctx="${1#--context-file=}"; args+=("$1"); shift;;
+      --context-file|--context-file=*)
+        [ -z "$ctx" ] || { echo "✖ relay --autonomous: --context-file given twice; pass the approved plan once." >&2; return 7; }
+        if [ "$1" = --context-file ]; then [ $# -ge 2 ] || die "--context-file needs a path."; ctx="$2"; shift 2; else ctx="${1#--context-file=}"; shift; fi
+        args+=(--context-file "$ctx");;   # pr-review-relay takes only `--context-file <path>`
       *) args+=("$1"); shift;;
     esac
   done
@@ -1594,7 +1596,7 @@ cmd_relay_auto() {
   [ -n "$ctx" ] && [ -f "$ctx" ] || { echo "✖ relay --autonomous needs --context-file <plan> (an existing file): a round whose reviewers never saw the approved plan cannot be a merge candidate." >&2; return 7; }
   # The context must BE a plan that reached consensus, byte for byte. Its hash goes into the verdict
   # file, and the merge gate requires it to equal the PR's Plan-Key.
-  SF_RA_CSHA="$(sf_sha256 < "$ctx")"
+  SF_RA_CTX="$ctx"; SF_RA_CSHA="$(sf_sha256 < "$ctx")"
   [ -f "$(sf_auto_state)/consensus/plan-$SF_RA_CSHA.consensus" ] || { echo "✖ relay --autonomous: the --context-file is not a plan that reached consensus (no result for its SHA-256 $SF_RA_CSHA). Pass the approved plan file itself, unchanged." >&2; return 7; }
   command -v pr-review-relay >/dev/null 2>&1 || die "pr-review-relay not found on PATH (it is a dependency: https://github.com/hamen/pr-review-relay)."
   command -v gh >/dev/null 2>&1 || die "gh not found on PATH."
@@ -1628,6 +1630,16 @@ sf_relay_auto_round() {
     ac="$(sf_kv_get "$vf" all_clean)"
     # A round counts only when the file is this PR's and says true or false. Anything else is not a
     # verdict: a junk or foreign file must not count, and must not stay behind as the highest round.
+    # The context is hashed again: a plan edited while the panel read it means the reviewers did not see
+    # the text the recorded hash names.
+    if [ "$(sf_sha256 < "$SF_RA_CTX" 2>/dev/null)" != "$SF_RA_CSHA" ]; then
+      rm -f "$vf"
+      fails=$((fails + 1))
+      sf_num_put "$dir/fails" "$fails" 2>/dev/null || { echo "✖ relay --autonomous: cannot record the failed attempt in $dir. STOP and notify the human." >&2; return 4; }
+      echo "✖ relay --autonomous: the context file changed while the panel was reading it. Round not counted (failed attempt $fails/$SF_AUTO_MAX_FAILS)." >&2
+      [ "$fails" -ge "$SF_AUTO_MAX_FAILS" ] && return 4
+      return 3
+    fi
     if [ ! -s "$vf" ] || [ "$(sf_kv_get "$vf" repo)" != "$repo" ] || [ "$(sf_kv_get "$vf" pr)" != "$pr" ] \
        || { [ "$ac" != true ] && [ "$ac" != false ]; }; then
       rm -f "$vf"
@@ -1698,7 +1710,8 @@ sf_gate_plan() {
   panel_now="$(sf_auto_plan_panel)" || { sf_gate_fail "$panel_now"; return 6; }
   [ "$(sf_kv_get "$cons" plan_panel)" = "$panel_now" ] || { sf_gate_fail "the plan panel changed since consensus (was $(sf_kv_get "$cons" plan_panel), now $panel_now)"; return 6; }
   pp="$(sf_kv_get "$cons" plan_path)"
-  if [ -n "$pp" ] && [ -f "$pp" ]; then
+  [ -n "$pp" ] || { sf_gate_fail "the consensus result names no plan_path"; return 6; }
+  if [ -f "$pp" ]; then
     [ "$(sf_sha256 < "$pp")" = "$key" ] || { sf_gate_fail "the plan file changed after consensus ($pp)"; return 6; }
   fi
   SF_G_CONS="$cons"
@@ -1754,6 +1767,7 @@ sf_gate_verdict() {
   [ -n "$want" ] && [ "$want" = "$have" ] || { sf_gate_fail "the verdict's panel ($have) is not the relay's configured panel without the author ($want)"; return 6; }
   [ "$(sf_norm_set "$(sf_kv_get "$bestf" requested)")" = "$want" ] || { sf_gate_fail "the round did not request the full panel"; return 6; }
   [ "$(sf_norm_set "$(sf_kv_get "$bestf" ran)")" = "$want" ] || { sf_gate_fail "not every seat of the panel ran"; return 6; }
+  grep -q '^benched=' "$bestf" || { sf_gate_fail "the verdict file has no benched key"; return 6; }
   [ -z "$(sf_kv_get "$bestf" benched)" ] || { sf_gate_fail "a seat was benched"; return 6; }
   for s in $(printf '%s' "$want" | tr ',' ' '); do
     [ "$(sf_kv_get "$bestf" "seat.$s")" = clean ] || { sf_gate_fail "seat '$s' is not clean in the verdict"; return 6; }
@@ -1834,11 +1848,13 @@ EOF
 sf_gate_sensitive() {
   local pr="$1" files f pat pf pats match=0
   files="$(gh pr diff "$pr" --name-only 2>/dev/null)" || { sf_gate_fail "cannot read the PR file list"; return 6; }
+  files="$(printf '%s\n' "$files" | tr -d '\r')"
   [ -n "$files" ] || { sf_gate_fail "the PR file list is empty"; return 6; }
   pf="$(sf_auto_cfg_dir)/sensitive-paths"
   # A file that exists but cannot be read must not become an empty list (which allows every path).
   if [ -e "$pf" ]; then
     pats="$(cat "$pf" 2>/dev/null)" || { sf_gate_fail "cannot read $pf"; return 6; }
+    pats="$(printf '%s\n' "$pats" | tr -d '\r')"   # a CRLF file must not turn every pattern into one that matches nothing
     # A file with no active pattern would allow every path; that is never what an empty file means.
     printf '%s\n' "$pats" | grep -Eqv '^[[:space:]]*(#|$)' || { sf_gate_fail "$pf has no active pattern (remove it to use the defaults)"; return 6; }
   else

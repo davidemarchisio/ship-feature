@@ -365,7 +365,8 @@ result; a PR without exactly one key is refused.
 on the relay's own quorum (`--reviewers`, `--verdict-file`, `--max-rounds` and `--reset` are refused, and
 so is a round without `--context-file`). The context file must be the approved plan itself, byte for
 byte: a file with no consensus result for its SHA-256 is refused (exit `7`), and the hash is recorded in
-the verdict file as `context_sha256`. Dispositions reach the reviewers as PR comments. Exit `0` is an `all_clean` round, exit `2` a counted round with
+the verdict file as `context_sha256`. The file is hashed again after the round, and a plan edited during
+the round is a failed attempt (exit `3`). Dispositions reach the reviewers as PR comments. Exit `0` is an `all_clean` round, exit `2` a counted round with
 findings. A verdict file that is missing, names another repo or PR, or has no `all_clean=true|false` is
 removed and counts as a failed attempt (exit `3`). A round state that cannot be written stops before the
 relay runs (exit `4`). The verdict file is
@@ -386,7 +387,8 @@ a dispute, because the human who settled disputes at Gate 2 is gone.
 **Replacing Gate 2: `ship-feature merge-gate <pr> --autonomous [--merge]`.** It checks, in order, and
 stops at the first failure (exit `6`); without `--merge` it only reports:
 1. both keys present, kill switch absent (exit `7`);
-2. plan binding: one `Plan-Key`, a consensus result for it, the plan panel unchanged, the plan unedited;
+2. plan binding: one `Plan-Key`, a consensus result for it that names its `plan_path`, the plan panel
+   unchanged, the plan unedited;
 3. the PR is open, not a draft, based on the repo's default branch, and `MERGEABLE` (`UNKNOWN` is read
    up to 5 times);
 4. the verdict file of the highest round is for this repo and PR, names the PR's current head SHA, has

@@ -2245,11 +2245,21 @@ exit 0
 STUB
   chmod +x "$ABIN/$_s"
 done
+# The antigravity seat runs `gemini`: the suite's gemini stub answers the version probe; a review is a
+# body and the verdict line (the suite's stub echoes the prompt, whose rules quote both verdict forms).
+cat > "$ABIN/gemini" <<GSTUB
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in --version|-v) exec "$PBIN/gemini" "\$@";; esac; done
+cat >/dev/null
+printf 'review body from gemini\nVERDICT: clean\n'
+GSTUB
+chmod +x "$ABIN/gemini"
 # Fake pr-review-relay: record argv; write a verdict file when asked; exit with STUB_RELAY_RC.
 cat > "$ABIN/pr-review-relay" <<'RSTUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_RELAY_LOG"
 vf=""; prev=""; for a in "$@"; do [ "$prev" = "--verdict-file" ] && vf="$a"; prev="$a"; done
+[ -n "${STUB_RELAY_TOUCH:-}" ] && printf 'edited during the round\n' >> "$STUB_RELAY_TOUCH"
 [ "${STUB_RELAY_WRITE:-1}" = 1 ] && [ -n "$vf" ] && printf 'repo=%s\npr=7\nround=1\nall_clean=%s\n' "${STUB_RELAY_REPO:-o/r}" "${STUB_RELAY_CLEAN-true}" > "$vf"
 exit "${STUB_RELAY_RC:-0}"
 RSTUB
@@ -2351,6 +2361,8 @@ gate_case "the relay's per-SHA round (1) differs from the PR round (2): accepted
 gate_case "a verdict file with no pr_round (not written by relay --autonomous)" 6 'sed -i.bak "/^pr_round=/d" "$VF"' 'pr_round'
 gate_case "the round's context was not the Plan-Key plan" 6 'sed -i.bak "s/^context_sha256=.*/context_sha256=$OTHER64/" "$VF"' 'context other than the plan'
 gate_case "a verdict file with no context_sha256" 6 'sed -i.bak "/^context_sha256=/d" "$VF"' 'context other than the plan'
+gate_case "a verdict file with no benched key" 6 'sed -i.bak "/^benched=/d" "$VF"' 'no benched key'
+gate_case "a consensus result with no plan_path" 6 'sed -i.bak "/^plan_path=/d" "$AH"/state/autonomous/consensus/plan-*.consensus; printf "edited\n" >> "$AH/plan.md"' 'no plan_path'
 gate_case "no verdict file" 6 'rm -f "$VF"'
 # disputes
 gate_case "no disposition comment" 6 ': > "$GH/pr_comments"' 'no author disposition'
@@ -2377,7 +2389,7 @@ gate_case "CI entry with null state" 6 'printf -- "-|-|-\n" > "$GH/pr_statusChec
 gate_case "empty CI refused by default" 6 ': > "$GH/pr_statusCheckRollup"' 'no CI checks'
 gate_case "empty CI allowed only by the allow-no-ci file" 0 ': > "$GH/pr_statusCheckRollup"; printf "o/r\n" > "$AH/.config/ship-feature/allow-no-ci"'
 # sensitive files
-for _pat in '.github/workflows/ci.yml' '.githooks/pre-push' 'ios/Fastfile' 'deploy.yml' 'config/deploy.yml' 'keys/AuthKey_X.p8' 'a/b.jks' 'x.keystore' '.env' 'app/.env.production' 'lib/secrets.rb' 'src/credentials.json' 'bin/mac-ios-build.sh' 'bin/build-ios-ipa.sh' 'android/build-android.sh' 'ios/hooks/x'; do
+for _pat in '.kamal/hooks.d/x' '.kamal/x' '.github/workflows/ci.yml' '.githooks/pre-push' 'ios/Fastfile' 'deploy.yml' 'config/deploy.yml' 'keys/AuthKey_X.p8' 'a/b.jks' 'x.keystore' '.env' 'app/.env.production' 'lib/secrets.rb' 'src/credentials.json' 'bin/mac-ios-build.sh' 'bin/build-ios-ipa.sh' 'android/build-android.sh' 'ios/hooks/x'; do
   gate_case "sensitive default pattern: $_pat" 6 "printf 'src/a.js\\n%s\\n' '$_pat' > \"\$GH/diff\"" "sensitive path"
 done
 gate_case "custom sensitive-paths file overrides the defaults" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf "docs/x.md\n" > "$GH/diff"'
@@ -2387,6 +2399,8 @@ gate_case "an empty sensitive-paths file is refused, not read as allow-all" 6 ':
 gate_case "a sensitive-paths file of comments and blanks is refused" 6 'printf "# none\n\n   \n" > "$AH/.config/ship-feature/sensitive-paths"' 'no active pattern'
 mk_world; printf 'src/a$(touch %s/pwned1)`touch %s/pwned2`.js\n' "$AH" "$AH" > "$GH/diff"; printf 'x$(touch %s/pwned3)\n*$(touch*\n' "$AH" > "$AH/.config/ship-feature/sensitive-paths"; run_gate; rc=$?
 check "merge-gate: \$(...) and backticks in a path or a pattern are never run, and the path is matched as written" "$rc|$(ls "$AH" | grep -c pwned)|$(grep -c 'sensitive path' "$AH/gate.err")" "6|0|1"
+gate_case "a CRLF sensitive-paths file still matches" 6 'printf ".github/workflows/*\r\n" > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"' 'sensitive path'
+gate_case "CRLF paths from the diff still match an exact default pattern" 6 'printf "src/a.js\r\nbin/mac-ios-build.sh\r\n" > "$GH/diff"' 'sensitive path'
 # the merge call itself
 gate_case "head moved before the merge call" 6 'printf "%s\n%s\n" "$HEAD40" "$OTHER40" > "$GH/pr_headRefOid.seq"' 'head moved'
 gate_case "CI turns red between the checks and the merge call" 6 'printf "COMPLETED|SUCCESS|-\nCOMPLETED|FAILURE|-\n" > "$GH/pr_statusCheckRollup.seq"' 'CI changed after the checks'
@@ -2419,6 +2433,14 @@ mk_relay_world; : > "$GH/pr_number"; run_relay; rc=$?
 check "relay --autonomous: an unresolvable PR is refused (4) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
 mk_relay_world; run_relay --pr=7; rc=$?
 check "relay --autonomous: the --pr=N form is honoured and passed to the relay as --pr N" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)|$(grep -c -- '--pr 7 ' "$RL")|$(grep -c -- '--pr=7' "$RL")" "0|yes|1|0"
+check "relay --autonomous: --context-file reaches the relay as two fields" "$(grep -c -- "--context-file $AH/plan.md " "$RL")" 1
+mk_relay_world; run_relay --pr 7 --context-file="$AH/plan.md"; rc=$?
+check "relay --autonomous: a second --context-file (here the = form) is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
+mk_relay_world; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file="$AH/plan.md" >/dev/null 2>&1 ); rc=$?
+check "relay --autonomous: the --context-file=PATH form is passed to the relay as two fields" "$rc|$(grep -c -- "--context-file $AH/plan.md " "$RL")|$(grep -c -- '--context-file=' "$RL")" "0|1|0"
+mk_relay_world; export STUB_RELAY_TOUCH="$AH/plan.md"; run_relay --pr 7; rc=$?; unset STUB_RELAY_TOUCH
+check "relay --autonomous: a plan edited during the round is not a round (3) and leaves no verdict" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|0|gone"
+mk_relay_world; run_relay --pr=7
 check "relay --autonomous: the verdict file records the context's SHA-256" "$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" 1
 mk_relay_world; printf 'not the plan\n' > "$AH/other.md"; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file "$AH/other.md" >/dev/null 2>"$AH/relay.err" ); rc=$?
 check "relay --autonomous: a context file that is not a consensus plan is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
@@ -2501,6 +2523,12 @@ check "plan-review (plain, clean): still prints the human closing lines" "$(grep
 printf 'plan\n' | ( export STUB_LOG="$AH/p4.log" STUB_FAIL_grok="$AH/fail_grok"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
 check "plan-review (plain, seat failed): still prints the drop-the-reviewer line" "$(grep -c 'drop that one reviewer' "$PR_OUT")" 1
 unset STUB_FAIL_grok
+mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail run_pc; rc=$?
+check "plan-consensus: a real degraded_note (grok without its sandbox) is recorded as degraded=grok" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|grok"
+mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
+check "plan-consensus: no degraded_note → nothing recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|"
+mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=agy,codex/' "$AH/relay.conf"; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
+check "plan-consensus: the antigravity seat (named agy) is always recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)|$(awk -F= '$1=="plan_panel"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)" "0|antigravity|antigravity,codex"
 mk_plan_world; export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
 check "plan-consensus: a plan edited while the panel reads it → exit 3, no consensus file, no round" "$rc|$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0|0"
 mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan/$_pk.lock"; printf '%s\n' "$$" > "$AH/state/autonomous/plan/$_pk.lock/pid"; run_pc; rc=$?
@@ -2550,7 +2578,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=517
+EXPECTED=530
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
