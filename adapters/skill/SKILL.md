@@ -50,7 +50,10 @@ The essentials you must honor:
    classified, authorizes one more round with explicit reasoning, or drops the change). Do not write
    to the source repository before that.
 3. Implement in a **git worktree** (never the main tree), stage explicit paths, open a **PR**. Run
-   `ship-feature preflight` first.
+   `ship-feature preflight` first. It refuses a repo without a committed `.githooks/pre-push` that git
+   runs on push: the pre-push hook must run the tests, a linter and a formatter check. Read the hook and
+   the script it calls, and name those checks in the PR's implementation notes; a repo without a hook
+   adds it in its own PR first.
 4. Run the **cross-review**: `ship-feature relay --author <self> --context-file ~/.config/ship-feature/plans/<repo>-<slug>.md`
    (**no `--reviewers`** — `relay` injects your configured quorum, `SHIP_FEATURE_REVIEWERS`, which
    ship-feature's own config can set and otherwise takes from `REVIEWERS` in

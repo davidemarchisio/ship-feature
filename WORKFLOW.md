@@ -184,6 +184,15 @@ change. Do not touch the source repository until the human says go.
   never shows up in anyone's status.
 - Branch off the repository's **default branch** (`origin/HEAD`), not a hardcoded name.
 - **Stage explicit paths** — never `git add -A`/`git add .` (tools drop stray files).
+- **The repository has a pre-push hook that runs the tests, a linter and a formatter check.** It is a
+  committed `.githooks/pre-push` with mode `100755`, and `core.hooksPath` is `.githooks` (once per
+  clone: `git config core.hooksPath .githooks`). `ship-feature preflight` refuses a worktree whose hook is
+  missing, not committed, not executable, changed on disk, or not the file git runs on push. A repo
+  without one adds it in its own PR first: commit the hook, then run `preflight`. Read
+  `.githooks/pre-push` and the script it calls (for example `bin/ci`), and name in the PR's
+  implementation notes the tests, the linter and the formatter check it runs; a hook that lacks one is
+  fixed in its own PR first. `preflight` cannot check what the hook runs: that is your reading job.
+  Never bypass the hook.
 - One coherent change per PR. Ship tests at the level you touched.
 - Open the PR.
 
@@ -406,14 +415,20 @@ stops at the first failure (exit `6`); without `--merge` it only reports:
 5. no unresolved dispute and a latest disposition whose last non-empty line is `Disputed findings: none`.
    When every counted round of the PR was `all_clean` (no round had findings), no disposition is needed;
    any `- DISPUTED:` line by the author still stops it;
-6. CI on that SHA: every check `SUCCESS` or `NEUTRAL` (nothing skipped, pending or missing); an empty
-   result needs the repo listed in `~/.config/ship-feature/allow-no-ci`, a file a human creates;
+6. the pre-push hook on both sides of the merge, for every PR: a `100755` `.githooks/pre-push` in the PR
+   head and in the base tip (`baseRefOid`), read from a checkout of the repository in which both commits
+   are present (run `git fetch` first: a stale clone stops with exit `6`); then CI on that SHA: every
+   check `SUCCESS` or `NEUTRAL` (nothing skipped, pending or missing); an empty result needs the repo
+   listed in `~/.config/ship-feature/allow-no-ci`, a file a human creates. The human who lists a repo
+   there accepts its pre-push hook as its gate, and reads the hook first;
 7. no sensitive file in the PR: the file list comes from the PR files API, every page, and each pattern is
    matched against the new name and, for a rename, the old name too; a list shorter than the PR's
    `changedFiles` is exit `6`. The patterns are in `~/.config/ship-feature/sensitive-paths`, else the
    built-in defaults (workflows, hooks, deploy and release scripts, keys, env files, anything named
    secret or credential); a match leaves the PR to a human, and a patterns file that cannot be read or
-   has no active pattern is exit `6`;
+   has no active pattern is exit `6`. The gate's entry points `.githooks/*`, `bin/ci` and `config/ci.rb`
+   are always sensitive, also with a custom patterns file: a PR that adds or changes the pre-push hook or
+   the script it calls is merged by a human, so the agent never changes its own gate alone;
 8. under the same PR lock that `relay --autonomous` takes, the head, the highest verdict file (same file,
    same `run_id` as check 4), the disputes and CI are re-read and the kill switch re-checked, then exactly one
    `gh pr merge <n> --merge --match-head-commit <verdict sha>` runs, followed by an audit comment (head
@@ -453,7 +468,12 @@ times; the relay side at most 9 times (6 rounds plus 3 failed attempts, or 5 plu
 attempt is the last dispatch, and a 7th round is never dispatched). A relay exit `4` updates neither
 counter: the tool does not record that call, and it is a stop, not a retry. Seat runs per change are at
 most the dispatches times the seats in the config: (9 × plan seats) + (9 × relay seats), 54 with 3 + 3
-seats.
+seats. The pre-push hook: neither `preflight` nor the merge gate can prove what the hook runs, or that it
+passed on the PR head. It ran there only because the agent never pushes with `--no-verify`, and nothing
+records that run. A PR can weaken the gate without touching its entry points (delete a test, relax a
+linter or formatter config, change a package script or a build file): the full panel on the exact SHA is
+the protection there. `preflight` runs once, before the implementation, so a working-tree edit of the
+hook after that (edit, push, restore) leaves no trace in any commit.
 
 ---
 

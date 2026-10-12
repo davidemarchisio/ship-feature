@@ -147,13 +147,24 @@ echo "ship-feature tests:"
 # --- build a real remote + clone + feature worktree --------------------------
 REMOTE="$WORK/remote.git"; git init -q --bare "$REMOTE"
 MAIN="$WORK/main"; git clone -q "$REMOTE" "$MAIN"
-( cd "$MAIN" && git commit -q --allow-empty -m "seed" && git push -q origin HEAD:main && git remote set-head origin main >/dev/null 2>&1 )
+# The seed carries the repository's gate: a committed .githooks/pre-push. `git add --chmod=+x` records
+# 100755 whatever the host's core.filemode says; chmod +x makes the checked-out file executable too.
+sf_seed_hook() {  # sf_seed_hook <dir>: writes and stages a do-nothing .githooks/pre-push
+  mkdir -p "$1/.githooks" && printf '#!/bin/sh\nexit 0\n' > "$1/.githooks/pre-push" && chmod +x "$1/.githooks/pre-push" \
+    && git -C "$1" add --chmod=+x .githooks/pre-push
+}
+( cd "$MAIN" && sf_seed_hook . && git commit -q -m "seed" && git push -q origin HEAD:main && git remote set-head origin main >/dev/null 2>&1 )
 git -C "$REMOTE" symbolic-ref HEAD refs/heads/main   # so fresh clones resolve origin/HEAD = main
 printf '.claude/\n' >> "$MAIN/.git/info/exclude"
 ( cd "$MAIN" && git worktree add -q -b feat .claude/worktrees/feat origin/main )
 
+# sf_isolate_git points core.hooksPath (environment config, key 2) at a directory that does not exist, so
+# no ambient hook runs in a fixture. A preflight that must find the gate overrides that one value for
+# that one call: `pf` is preflight with core.hooksPath=.githooks.
+pf() { GIT_CONFIG_VALUE_2=.githooks bash "$CLI" preflight "$@"; }
+
 # preflight: correct worktree setup → pass
-( cd "$MAIN/.claude/worktrees/feat" && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight passes in a proper feature worktree" $? 0
+( cd "$MAIN/.claude/worktrees/feat" && pf >/dev/null 2>&1 ); check "preflight passes in a proper feature worktree" $? 0
 # preflight: on the default branch → fail
 ( cd "$MAIN" && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails on the default branch" $? 1
 # preflight: on a feature branch but NOT a linked worktree → fail
@@ -170,7 +181,84 @@ MAINB="$WORK/mainb"; git clone -q "$REMOTE" "$MAINB"
 # (c) behind the default branch → fail, unless SHIP_FEATURE_ALLOW_BEHIND
 ( cd "$MAIN" && git checkout -q main && git commit -q --allow-empty -m "advance main" && git push -q origin main )
 ( cd "$MAIN/.claude/worktrees/feat" && git fetch -q origin && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails when behind the default branch" $? 1
-( cd "$MAIN/.claude/worktrees/feat" && SHIP_FEATURE_ALLOW_BEHIND=1 bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight passes behind with SHIP_FEATURE_ALLOW_BEHIND" $? 0
+( cd "$MAIN/.claude/worktrees/feat" && SHIP_FEATURE_ALLOW_BEHIND=1 pf >/dev/null 2>&1 ); check "preflight passes behind with SHIP_FEATURE_ALLOW_BEHIND" $? 0
+
+# --- preflight: the repository's pre-push hook (.githooks/pre-push) ------------------------------
+# Each case gets a fresh remote + clone + feature worktree whose seed commit carries a 100755 hook.
+HKN=0
+mk_hk() {  # sets HKM (the main tree) and HKW (the feature worktree)
+  HKN=$((HKN + 1)); local r="$WORK/hk$HKN"
+  git init -q --bare "$r.git"; git clone -q "$r.git" "$r" 2>/dev/null
+  ( cd "$r" && sf_seed_hook . && git commit -q -m seed && git push -q origin HEAD:main && git remote set-head origin main >/dev/null 2>&1 )
+  git -C "$r.git" symbolic-ref HEAD refs/heads/main
+  printf '.claude/\n' >> "$r/.git/info/exclude"
+  ( cd "$r" && git worktree add -q -b hk .claude/worktrees/hk origin/main )
+  HKM="$r"; HKW="$r/.claude/worktrees/hk"
+}
+# hk_pf <dir> [VAR=value ...]: preflight in <dir> with core.hooksPath=.githooks unless a VAR overrides
+# it; stdout to $WORK/pf.out, stderr to $WORK/pf.err.
+hk_pf() { local d="$1"; shift; ( cd "$d" && env GIT_CONFIG_VALUE_2=.githooks "$@" bash "$CLI" preflight >"$WORK/pf.out" 2>"$WORK/pf.err" ); }
+# hk_case <desc> <want_rc> <file: out|err> <extended-regex>: the exit code AND the message, from the
+# stream that carries it (ok writes to stdout, die to stderr).
+hk_case() {
+  local desc="$1" want="$2" rc="$3" stream="$4" re="$5" got
+  got="$rc"; [ "$rc" = "$want" ] && ! grep -Eq -- "$re" "$WORK/pf.$stream" && got="wrong-reason($(tr '\n' ' ' < "$WORK/pf.$stream" | cut -c1-110))"
+  check "preflight hook: $desc" "$got" "$want"
+}
+mk_hk; hk_pf "$HKW"; hk_case "a committed 100755 .githooks/pre-push that git runs passes" 0 $? out 'pre-push hook: \.githooks/pre-push'
+mk_hk; mkdir -p "$HKW/sub/dir"; hk_pf "$HKW/sub/dir"; hk_case "the same from a subdirectory passes (a relative --git-path joined to the root)" 0 $? out '\.githooks/pre-push'
+mk_hk; git -C "$HKW" rm -q .githooks/pre-push && git -C "$HKW" commit -q -m rm; hk_pf "$HKW"
+hk_case "no .githooks/pre-push fails and says what the hook must run" 1 $? err 'no pre-push hook.*tests, a linter and a formatter'
+mk_hk; chmod -x "$HKW/.githooks/pre-push"; hk_pf "$HKW"; hk_case "a hook without the executable bit on disk fails" 1 $? err 'not executable'
+mk_hk; git -C "$HKW" add --chmod=-x .githooks/pre-push && git -C "$HKW" commit -q -m demote; hk_pf "$HKW"
+hk_case "a hook executable on disk but committed 100644 fails and names the fix" 1 $? err '100644, not 100755.*--chmod=\+x'
+mk_hk; rm "$HKW/.githooks/pre-push"; mkdir "$HKW/.githooks/pre-push"; hk_pf "$HKW"; hk_case "a directory named pre-push fails" 1 $? err 'not a regular file'
+mk_hk; git -C "$HKW" rm -q --cached .githooks/pre-push && git -C "$HKW" commit -q -m untrack; hk_pf "$HKW"
+hk_case "an untracked hook fails" 1 $? err 'not committed'
+git -C "$HKW" add --chmod=+x .githooks/pre-push; hk_pf "$HKW"; hk_case "a staged, not committed hook fails" 1 $? err 'not committed'
+git -C "$HKW" commit -q -m retrack; hk_pf "$HKW"; hk_case "the same hook passes once it is committed" 0 $? out 'pre-push hook'
+mk_hk; printf 'exit 0 # edited\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"; hk_case "a hook edited on disk and not committed fails" 1 $? err 'differs from the committed'
+mk_hk; printf '#!/bin/sh\necho other\n' > "$WORK/other-hook$HKN"; chmod +x "$WORK/other-hook$HKN"
+rm "$HKW/.githooks/pre-push"; ln -s "$WORK/other-hook$HKN" "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "a hook replaced by an uncommitted symlink to another script fails" 1 $? err 'reached through a symlink'
+# The same with a link target that holds the committed bytes: -f, hash-object and -ef all follow it.
+mk_hk; cp "$HKW/.githooks/pre-push" "$WORK/same-hook$HKN"; chmod +x "$WORK/same-hook$HKN"
+rm "$HKW/.githooks/pre-push"; ln -s "$WORK/same-hook$HKN" "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "an uncommitted symlink to a file with the committed bytes fails" 1 $? err 'reached through a symlink'
+mk_hk; mkdir "$WORK/same-dir$HKN"; cp -p "$HKW/.githooks/pre-push" "$WORK/same-dir$HKN/"
+rm -r "$HKW/.githooks"; ln -s "$WORK/same-dir$HKN" "$HKW/.githooks"; hk_pf "$HKW"
+hk_case "a .githooks directory replaced by a symlink to a copy with the committed bytes fails" 1 $? err 'reached through a symlink'
+mk_hk; git -C "$HKW" update-index --assume-unchanged .githooks/pre-push; printf 'exit 0 # hidden\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "an assume-unchanged hook edited on disk fails (blob ids, not git diff)" 1 $? err 'differs from the committed'
+mk_hk; printf 'exit 0 # staged\n' >> "$HKW/.githooks/pre-push"; git -C "$HKW" add .githooks/pre-push; git -C "$HKW" show HEAD:.githooks/pre-push > "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "a staged edit that differs from HEAD fails although the disk matches HEAD" 1 $? err 'differs from the committed'
+# A clean filter that turns the edited file back into the committed bytes: hash-object would apply it.
+mk_hk; cp "$HKW/.githooks/pre-push" "$WORK/clean-copy$HKN"; git -C "$HKW" config filter.hide.clean "cat '$WORK/clean-copy$HKN'"
+printf '.githooks/pre-push filter=hide\n' >> "$(git -C "$HKW" rev-parse --path-format=absolute --git-path info/attributes)"
+printf 'exit 0 # hidden by a clean filter\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "a hook edit hidden by a clean filter fails (the bytes on disk, --no-filters)" 1 $? err 'differs from the committed'
+# The committed hook with CRLF line ends on disk and core.autocrlf=true: the conversion would hash it
+# to the committed blob, but git runs the CRLF bytes (#!/bin/sh followed by a carriage return).
+mk_hk; git -C "$HKW" config core.autocrlf true; awk '{ printf "%s\r\n", $0 }' "$HKW/.githooks/pre-push" > "$WORK/crlf$HKN"
+cat "$WORK/crlf$HKN" > "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "the committed hook with CRLF line ends on disk fails (core.autocrlf=true, --no-filters)" 1 $? err 'differs from the committed'
+mk_hk; ( cd "$HKW" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink ); hk_pf "$HKW"
+hk_case "a committed symlink at .githooks/pre-push, checked out as a link, fails" 1 $? err 'reached through a symlink'
+# The same commit with a regular file on disk in place of the link: HEAD still holds mode 120000.
+( cd "$HKW" && rm .githooks/pre-push && cp -p .githooks/real-hook .githooks/pre-push ); hk_pf "$HKW"
+hk_case "a regular file on disk over a symlink committed in HEAD fails (mode 120000)" 1 $? err 'not a 100755 file \(mode 120000\)'
+# core.hooksPath unset: key 2 becomes a dummy key (GIT_CONFIG_COUNT stays 7), and no real global or
+# system config can supply a value.
+mkdir -p "$WORK/hk-home"
+HK_UNSET="GIT_CONFIG_KEY_2=sf.dummy GIT_CONFIG_VALUE_2=x HOME=$WORK/hk-home XDG_CONFIG_HOME=$WORK/hk-home GIT_CONFIG_NOSYSTEM=1"
+mk_hk; ( unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM; hk_pf "$HKW" $HK_UNSET ); hk_case "core.hooksPath unset fails and names the fix" 1 $? err 'git config core.hooksPath \.githooks'
+mk_hk; ln -s "$HKM/.githooks/pre-push" "$HKM/.git/hooks/pre-push"; ( unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM; hk_pf "$HKW" $HK_UNSET )
+hk_case "core.hooksPath unset, .git/hooks/pre-push a symlink to the main tree's copy, fails" 1 $? err 'not this worktree'
+mk_hk; mkdir -p "$WORK/hk-link$HKN"; ln -s "$HKW/.githooks/pre-push" "$WORK/hk-link$HKN/pre-push"; hk_pf "$HKW" GIT_CONFIG_VALUE_2="$WORK/hk-link$HKN"
+hk_case "core.hooksPath at a symlink to this worktree's own hook passes (-ef, not a string compare)" 0 $? out 'pre-push hook'
+mk_hk; hk_pf "$HKW" GIT_CONFIG_VALUE_2="$HKM/.githooks"; hk_case "an absolute core.hooksPath into the main tree fails and names the fix" 1 $? err 'not this worktree.*core\.hooksPath \.githooks'
+mk_hk; HK_OTHER="$HKM"; mk_hk; hk_pf "$HKW" GIT_CONFIG_VALUE_2="$HK_OTHER/.githooks"; hk_case "core.hooksPath into another repository's hooks fails" 1 $? err 'not this worktree'
+mk_hk; hk_pf "$HKW" GIT_CONFIG_VALUE_2=; hk_case "an empty core.hooksPath fails" 1 $? err 'not this worktree'
 
 # --- relay passthrough: exit code + stdout preserved -------------------------
 BIN="$WORK/bin"; mkdir -p "$BIN"
@@ -2235,11 +2323,44 @@ sf_plan_tool_clause_notclean() {  # same pattern as sf_plan_tool_clause, but for
 sf_plan_tool_clause_notclean "drop the reviewer on a second consecutive attempt" 'second consecutive attempt.{0,60}drop'
 sf_plan_tool_clause_notclean "tell the human about the reduced panel"           'reduced panel'
 
+# The pre-push hook rule (Fizzy #1370): WORKFLOW.md and the three adapters, then the files that carry
+# the merge-gate and CLI text.
+sf_clause "preflight refuses a repo without the hook" 'preflight`[^`]{0,30}refuses'
+sf_clause "the hook lives at .githooks/pre-push" '\.githooks/pre-push'
+sf_clause "the hook runs the tests, a linter and a formatter check" 'tests, a linter and a formatter'
+sf_clause "the agent names the hook's checks in the implementation notes" 'implementation notes'
+sf_doc() {  # sf_doc <label> <file> <extended-regex>
+  tr '\n' ' ' < "$HERE/../$2" | tr -s ' ' | grep -Eqi -- "$3" \
+    && { echo "  ok   [-] $2 states: $1"; PASS=$((PASS+1)); } \
+    || { echo "  FAIL $2 does not state: $1"; FAIL=$((FAIL+1)); }
+}
+sf_doc "check 6 reads the hook in the PR head and the base tip" WORKFLOW.md 'pre-push hook on both sides of the merge, for every PR: a `100755` `\.githooks/pre-push` in the PR head and in the base tip'
+sf_doc "check 6 needs both commits fetched" WORKFLOW.md 'run `git fetch` first'
+sf_doc "check 7 always treats the gate's entry points as sensitive" WORKFLOW.md 'entry points `\.githooks/\*`, `bin/ci` and `config/ci\.rb` are always sensitive, also with a custom patterns file'
+sf_doc "the residual risks name what the tool cannot prove about the hook" WORKFLOW.md 'neither `preflight` nor the merge gate can prove what the hook runs'
+sf_doc "the preflight bullet names the hook" README.md 'ship-feature preflight` — .{0,200}`\.githooks/pre-push`'
+sf_doc "the sensitive-paths note names the always-added entry points" config.example '\.githooks/\*, bin/ci and config/ci\.rb are always added'
+bash "$CLI" help | grep -q '\.githooks/pre-push'; check "ship-feature help names the pre-push hook in preflight" $? 0
+
 # --- autonomous mode (experimental): plan-consensus, relay --autonomous, merge-gate ----------------
 # Fake gh / pr-review-relay / reviewers; no network. The merge call is the thing under test: every
 # failing case also asserts the fake `gh pr merge` log stayed empty.
 ABIN="$WORK/abin"; mkdir -p "$ABIN"
-HEAD40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+# A real repository for check 6, which reads .githooks/pre-push from the PR head and the base tip:
+# BASE40 and HEAD40 carry a 100755 hook; NOHOOK40, MODE644_40 and SYML40 do not carry a usable one.
+# run_gate runs merge-gate inside it.
+GREPO="$WORK/gate-repo"; git init -q "$GREPO"
+( cd "$GREPO" && sf_seed_hook . && git commit -q -m base )
+BASE40="$(git -C "$GREPO" rev-parse HEAD)"
+( cd "$GREPO" && printf 'x\n' > a.txt && git add a.txt && git commit -q -m head )
+HEAD40="$(git -C "$GREPO" rev-parse HEAD)"
+( cd "$GREPO" && git rm -q .githooks/pre-push && git commit -q -m nohook )
+NOHOOK40="$(git -C "$GREPO" rev-parse HEAD)"
+( cd "$GREPO" && git checkout -q "$HEAD40" && chmod -x .githooks/pre-push && git add --chmod=-x .githooks/pre-push && git commit -q -m mode644 )
+MODE644_40="$(git -C "$GREPO" rev-parse HEAD)"
+( cd "$GREPO" && git checkout -q "$HEAD40" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink )
+SYML40="$(git -C "$GREPO" rev-parse HEAD)"
+git -C "$GREPO" checkout -q "$HEAD40"; mkdir -p "$GREPO/sub/dir"
 OTHER40=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 OTHER64=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 cat > "$ABIN/gh" <<'GHSTUB'
@@ -2261,6 +2382,7 @@ case "$1 $2" in
                   if [ "$n" = 2 ] && [ -e "$GHF/on_second_head" ]; then bash "$GHF/on_second_head"; fi
                   seq_pop pr_headRefOid;;
       mergeable) seq_pop pr_mergeable;;
+      baseRefOid) n=$(( $(cat "$GHF/base.count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GHF/base.count"; seq_pop pr_baseRefOid;;
       statusCheckRollup) seq_pop pr_statusCheckRollup;;
       changedFiles) if [ -e "$GHF/pr_changedFiles" ]; then f pr_changedFiles; else grep -c . "$GHF/diff"; fi;;
       *) f "pr_$fld";;
@@ -2340,7 +2462,7 @@ mk_world() {
   printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\npr_round=1\ncontext_sha256=%s\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" "$PKEY" > "$VF"
   printf 'o/r\n' > "$GH/repo"; printf 'main\n' > "$GH/defb"
   printf 'OPEN\n' > "$GH/pr_state"; printf 'false\n' > "$GH/pr_isDraft"; printf 'main\n' > "$GH/pr_baseRefName"
-  printf 'MERGEABLE\n' > "$GH/pr_mergeable"; printf '%s\n' "$HEAD40" > "$GH/pr_headRefOid"
+  printf 'MERGEABLE\n' > "$GH/pr_mergeable"; printf '%s\n' "$HEAD40" > "$GH/pr_headRefOid"; printf '%s\n' "$BASE40" > "$GH/pr_baseRefOid"
   printf 'summary\n\nPlan-Key: %s\n' "$PKEY" > "$GH/pr_body"
   printf 'alice\n' > "$GH/pr_author"
   printf 'alice\t%s\n' "$(printf 'Disposition, round 1 (reviewed sha 1234567):\n- fixed it\nDisputed findings: none\n' | b64_of)" > "$GH/pr_comments"
@@ -2350,8 +2472,8 @@ mk_world() {
   printf 'cccccccccccccccccccccccccccccccccccccccc\n' > "$GH/pr_mergeCommit"
   KILL="$AH/.config/ship-feature/AUTONOMOUS_OFF"
 }
-run_gate() { # run_gate [extra args]; env: SHIP_FEATURE_AUTONOMOUS unless AUTO_ENV=0
-  ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" SHIP_FEATURE_MERGEABLE_SLEEP=0 PR_RELAY_CONFIG="$AH/relay.conf" SHIP_FEATURE_PLAN_REVIEWERS="${GATE_PANEL:-codex,grok}" PATH="$ABIN:$PATH"
+run_gate() { # run_gate [extra args]; env: SHIP_FEATURE_AUTONOMOUS unless AUTO_ENV=0; runs in GATE_CWD, else $GREPO
+  ( cd "${GATE_CWD:-$GREPO}" || exit 99; export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" SHIP_FEATURE_MERGEABLE_SLEEP=0 PR_RELAY_CONFIG="$AH/relay.conf" SHIP_FEATURE_PLAN_REVIEWERS="${GATE_PANEL:-codex,grok}" PATH="$ABIN:$PATH"
     [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
     bash "$CLI" merge-gate 7 ${GATE_FLAG---autonomous} ${GATE_MERGE---merge} "$@" >"$AH/gate.out" 2>"$AH/gate.err" )
 }
@@ -2490,6 +2612,39 @@ gate_case "CRLF paths from the diff still match an exact default pattern" 6 'pri
 # the merge call itself
 gate_case "head moved before the merge call" 6 'printf "%s\n%s\n" "$HEAD40" "$OTHER40" > "$GH/pr_headRefOid.seq"' 'head moved'
 gate_case "CI turns red between the checks and the merge call" 6 'printf "COMPLETED|SUCCESS|-\nCOMPLETED|FAILURE|-\n" > "$GH/pr_statusCheckRollup.seq"' 'CI changed after the checks'
+
+# Check 6, the pre-push hook on both sides of the merge: every PR, with CI or without.
+mk_world; run_gate
+grep -q "pre-push hook: .githooks/pre-push 100755 at head $(printf '%s' "$HEAD40" | cut -c1-7) and base $(printf '%s' "$BASE40" | cut -c1-7)" "$GH/audit_posted"
+check "merge-gate happy path: the audit names the pre-push hook on both sides" $? 0
+mk_world; : > "$GH/pr_statusCheckRollup"; printf "o/r\n" > "$AH/.config/ship-feature/allow-no-ci"; run_gate; rc=$?
+check "merge-gate: the allow-no-ci path still merges, and its audit names the hook" \
+  "$rc|$(grep -c 'allowed by the allow-no-ci file' "$GH/audit_posted")|$(grep -c 'pre-push hook: .githooks/pre-push 100755 at head' "$GH/audit_posted")" "0|1|1"
+gate_head_case() {  # gate_head_case <desc> <head sha> <why>: the PR head, and the verdict's head_sha, is <sha>
+  local keep="$HEAD40"; HEAD40="$2"; gate_case "$1" 6 ':' "$3"; HEAD40="$keep"
+}
+gate_head_case "check 6: the PR head has no .githooks/pre-push, with green CI" "$NOHOOK40" 'head [0-9a-f]{7} has no \.githooks/pre-push with mode 100755'
+gate_head_case "check 6: the hook is 100644 in the PR head" "$MODE644_40" 'head [0-9a-f]{7} has no \.githooks/pre-push with mode 100755'
+gate_head_case "check 6: the hook is a symlink in the PR head" "$SYML40" 'head [0-9a-f]{7} has no \.githooks/pre-push with mode 100755'
+gate_head_case "check 6: the PR head is not in this checkout (the fork fetch is named)" "$OTHER40" 'head bbbbbbb is not in this checkout: run git fetch origin \(for a PR from a fork: git fetch origin pull/7/head\)'
+gate_case "check 6: the base tip has no .githooks/pre-push" 6 'printf "%s\n" "$NOHOOK40" > "$GH/pr_baseRefOid"' 'base [0-9a-f]{7} has no \.githooks/pre-push with mode 100755'
+gate_case "check 6: the base tip is not in this checkout" 6 'printf "%s\n" "$OTHER40" > "$GH/pr_baseRefOid"' 'base bbbbbbb is not in this checkout'
+gate_case "check 6: an unreadable base tip" 6 ': > "$GH/pr_baseRefOid"' "cannot read the PR's base tip"
+# The base loses the hook between the checks and the merge call. The base read is the trigger, and
+# head.count=2 proves the check-8 re-read in sf_gate_merge ran (one head read there, one in sf_gate_pr).
+mk_world; printf '%s\n%s\n' "$BASE40" "$NOHOOK40" > "$GH/pr_baseRefOid.seq"; run_gate; rc=$?
+check "merge-gate: the base loses the hook at the check-8 re-read (6, no merge, the hook reason only, the re-read ran)" \
+  "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)|$(grep -c 'base [0-9a-f]\{7\} has no .githooks/pre-push' "$AH/gate.err")|$(grep -c 'CI changed after the checks' "$AH/gate.err")|$(cat "$GH/base.count" 2>/dev/null)|$(cat "$GH/head.count" 2>/dev/null)" \
+  "6|none|1|0|2|2"
+mk_world; GATE_CWD="$GREPO/sub/dir" run_gate; check "merge-gate: the happy path from a subdirectory of the checkout" "$?" 0
+mkdir -p "$WORK/not-a-repo"; mk_world; GATE_CWD="$WORK/not-a-repo" GIT_CEILING_DIRECTORIES="$WORK" run_gate; rc=$?
+check "merge-gate: run outside a checkout of the repository (6, the reason named, no merge)" \
+  "$rc|$(grep -c 'must run from a checkout of the repository' "$AH/gate.err")|$([ -s "$GH/merge.log" ] && echo called || echo none)" "6|1|none"
+# Check 7: the gate's entry points are always sensitive, also with a custom patterns file.
+gate_case "check 7: bin/ci is sensitive with the built-in defaults" 6 'printf "bin/ci\n" > "$GH/diff"' "matches 'bin/ci'"
+gate_case "check 7: a custom sensitive-paths file still stops .githooks/pre-push" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf ".githooks/pre-push\n" > "$GH/diff"' "matches '\.githooks/\*'"
+gate_case "check 7: a custom sensitive-paths file still stops bin/ci" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf "bin/ci\n" > "$GH/diff"' "matches 'bin/ci'"
+gate_case "check 7: a custom sensitive-paths file still stops config/ci.rb" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf "config/ci.rb\n" > "$GH/diff"' "matches 'config/ci\.rb'"
 gate_case "gh without --match-head-commit" 6 'printf "options:\n  --squash\n" > "$GH/merge_help"' 'match-head-commit'
 mk_world; printf 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=false/; s/^run_id=.*/run_id=y/" "%s" > "%s"\n' "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict" > "$GH/on_second_head"; run_gate; rc=$?
 check "merge-gate: a newer, non-clean round recorded during the checks stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
@@ -2789,7 +2944,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=606
+EXPECTED=658
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
