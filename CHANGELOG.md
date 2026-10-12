@@ -18,6 +18,19 @@ All notable changes to **ship-feature** are documented here. This project follow
   `allow-no-ci` live next to it. It is a guard against accidents, not a security boundary against the
   agent (see `WORKFLOW.md`). Needs a `pr-review-relay` with `--verdict-file`. Defaults are unchanged.
 
+### Fixed
+
+- **Autonomous locks cannot be held twice.** A lock is now a symlink whose target is the owner's pid,
+  made in one step, and every acquisition runs inside `<lock>.guard`. Before, an owner that stalled more
+  than a minute between creating the lock directory and writing its pid lost the lock to a takeover and
+  then wrote its pid into the new owner's lock; and a waiter could remove a lock that a third process had
+  just taken. Age no longer frees a lock. An old-format lock directory is never taken over: a human
+  removes it (see Locks in `WORKFLOW.md`). Fizzy #1361.
+- **merge-gate: a PR whose every round was clean can merge.** Check 5 required a disposition comment, and
+  no round with findings ever asked for one, so a PR clean in round 1 stopped with exit 6. Check 5 now
+  needs no disposition when every counted round of the PR was `all_clean` and the author disputed
+  nothing. Fizzy #1361.
+
 ## [0.6.0] — 2026-09-25
 
 ### Changed
