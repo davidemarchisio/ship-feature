@@ -220,13 +220,23 @@ git -C "$HKW" commit -q -m retrack; hk_pf "$HKW"; hk_case "the same hook passes 
 mk_hk; printf 'exit 0 # edited\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"; hk_case "a hook edited on disk and not committed fails" 1 $? err 'differs from the committed'
 mk_hk; printf '#!/bin/sh\necho other\n' > "$WORK/other-hook$HKN"; chmod +x "$WORK/other-hook$HKN"
 rm "$HKW/.githooks/pre-push"; ln -s "$WORK/other-hook$HKN" "$HKW/.githooks/pre-push"; hk_pf "$HKW"
-hk_case "a hook replaced by an uncommitted symlink to another script fails" 1 $? err 'differs from the committed'
+hk_case "a hook replaced by an uncommitted symlink to another script fails" 1 $? err 'reached through a symlink'
+# The same with a link target that holds the committed bytes: -f, hash-object and -ef all follow it.
+mk_hk; cp "$HKW/.githooks/pre-push" "$WORK/same-hook$HKN"; chmod +x "$WORK/same-hook$HKN"
+rm "$HKW/.githooks/pre-push"; ln -s "$WORK/same-hook$HKN" "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "an uncommitted symlink to a file with the committed bytes fails" 1 $? err 'reached through a symlink'
+mk_hk; mkdir "$WORK/same-dir$HKN"; cp -p "$HKW/.githooks/pre-push" "$WORK/same-dir$HKN/"
+rm -r "$HKW/.githooks"; ln -s "$WORK/same-dir$HKN" "$HKW/.githooks"; hk_pf "$HKW"
+hk_case "a .githooks directory replaced by a symlink to a copy with the committed bytes fails" 1 $? err 'reached through a symlink'
 mk_hk; git -C "$HKW" update-index --assume-unchanged .githooks/pre-push; printf 'exit 0 # hidden\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"
 hk_case "an assume-unchanged hook edited on disk fails (blob ids, not git diff)" 1 $? err 'differs from the committed'
 mk_hk; printf 'exit 0 # staged\n' >> "$HKW/.githooks/pre-push"; git -C "$HKW" add .githooks/pre-push; git -C "$HKW" show HEAD:.githooks/pre-push > "$HKW/.githooks/pre-push"; hk_pf "$HKW"
 hk_case "a staged edit that differs from HEAD fails although the disk matches HEAD" 1 $? err 'differs from the committed'
 mk_hk; ( cd "$HKW" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink ); hk_pf "$HKW"
-hk_case "a committed symlink at .githooks/pre-push fails (mode 120000)" 1 $? err 'not a 100755 file \(mode 120000\)'
+hk_case "a committed symlink at .githooks/pre-push, checked out as a link, fails" 1 $? err 'reached through a symlink'
+# The same commit with a regular file on disk in place of the link: HEAD still holds mode 120000.
+( cd "$HKW" && rm .githooks/pre-push && cp -p .githooks/real-hook .githooks/pre-push ); hk_pf "$HKW"
+hk_case "a regular file on disk over a symlink committed in HEAD fails (mode 120000)" 1 $? err 'not a 100755 file \(mode 120000\)'
 # core.hooksPath unset: key 2 becomes a dummy key (GIT_CONFIG_COUNT stays 7), and no real global or
 # system config can supply a value.
 mkdir -p "$WORK/hk-home"
@@ -2924,7 +2934,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=653
+EXPECTED=656
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

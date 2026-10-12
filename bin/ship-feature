@@ -378,6 +378,11 @@ sf_prepush_hook() {
   local need="every repo shipped with ship-feature needs a committed .githooks/pre-push (mode 100755) that runs the tests, a linter and a formatter check, and 'git config core.hooksPath .githooks'. A repo without one adds it in its own PR first: commit the hook, then run preflight again"
   own="$top/.githooks/pre-push"
   if [ ! -e "$own" ] && [ ! -L "$own" ]; then echo "no pre-push hook: $own does not exist — $need." >&2; return 1; fi
+  # No symlink at the hook or at its directory: -f, hash-object and -ef all follow one, so a link to a
+  # file with the committed bytes would pass while git runs a file that no commit holds.
+  if [ -L "$top/.githooks" ] || [ -L "$own" ]; then
+    echo ".githooks/pre-push is reached through a symlink (at .githooks or at .githooks/pre-push), which is not accepted: git runs the file the link points to, and this check cannot tie that file to a commit. The hook must be a regular file. A link that is not committed: restore the committed hook with git checkout HEAD -- .githooks. A committed link: replace it with the hook file itself and commit that with git add --chmod=+x .githooks/pre-push." >&2; return 1
+  fi
   # -f, not -e: a directory named pre-push would pass -e and -x while git ran nothing.
   [ -f "$own" ] || { echo "$own is not a regular file — $need." >&2; return 1; }
   [ -x "$own" ] || { echo "$own is not executable — git skips a non-executable hook without a word. Run: chmod +x .githooks/pre-push" >&2; return 1; }
