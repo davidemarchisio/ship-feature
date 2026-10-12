@@ -1492,6 +1492,8 @@ cmd_plan_consensus() {
   done
   sf_auto_guard "$auto" || return 7
   [ -n "$file" ] && [ -f "$file" ] || die "plan-consensus needs an existing plan file."
+  # plan-review refuses an empty plan too, but only after the attempt is counted: refuse it here.
+  [ -n "$(tr -d '[:space:]' < "$file")" ] || die "plan-consensus: the plan file is empty: $file"
   load_config
   local panel seats s abs state key pdir
   panel="$(sf_auto_plan_panel)" || { echo "✖ plan-consensus: $panel" >&2; return 5; }

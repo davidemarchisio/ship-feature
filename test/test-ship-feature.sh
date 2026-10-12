@@ -2700,7 +2700,7 @@ pc_attempts() { local _k="$1"; _seq=""; for _i in $(seq 1 "$_k"); do run_pc; _rc
 mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8
 check "plan-consensus: attempts 1 to 8 with a seat failure each exit 3 and print attempt N/9" "$_seq" "$_want8"
 run_pc; rc=$?
-check "plan-consensus: the 9th seat failure exits 5 (no attempts left), does not say to run again, counts no round" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")|$(cat "$(pc_dir)/rounds" 2>/dev/null || echo 0)" "5|1|0|0"
+check "plan-consensus: the 9th seat failure exits 5 (no attempts left), does not say to run again, counts no round" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(cat "$(pc_dir)/rounds" 2>/dev/null || echo 0)" "5|1|0|9|0"
 n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?; unset STUB_FAIL_grok
 check "plan-consensus: a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
 mk_plan_world; export STUB_LAST_grok=""; pc_attempts 8
@@ -2724,9 +2724,11 @@ check "plan-consensus: 4 seat failures, then rounds 1 to 4 exit 2 and round 5 (a
 mk_plan_world; export STUB_LAST_grok="$FINDINGS"; run_pc; unset STUB_LAST_grok
 _a1="$(cat "$(pc_dir)/attempts")"; n_before="$(wc -l < "$SL.codex" | tr -d ' ')"
 sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; rc=$?; mv "$AH/relay.conf.bak" "$AH/relay.conf"
-check "plan-consensus: a refused call (no panel) leaves the attempts file unchanged and runs no reviewer" "$rc|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$_a1|$n_before"
+check "plan-consensus: a refused call (no panel) leaves the attempts file unchanged and runs no reviewer" "$rc|$_a1|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
 ( export TMPDIR="$AH/no-such-dir"; run_pc ); rc=$?
-check "plan-consensus: a temp-dir failure exits 5, leaves the attempts file unchanged and runs no reviewer" "$rc|$(grep -c 'cannot create a temp dir' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|$_a1|$n_before"
+check "plan-consensus: a temp-dir failure exits 5, leaves the attempts file unchanged and runs no reviewer" "$rc|$(grep -c 'cannot create a temp dir' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
+mk_plan_world; printf ' \n\t\n' > "$AH/plan.md"; run_pc; rc=$?
+check "plan-consensus: an empty plan is refused before any counter or lock and runs no reviewer" "$rc|$(ls "$AH/state/autonomous/plan" 2>/dev/null | wc -l | tr -d ' ')|$([ -e "$SL.codex" ] && echo ran || echo none)" "1|0|none"
 mk_plan_world; sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; check "plan-consensus: PLAN_REVIEWERS unset → exit 5" "$?" 5
 mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=, ,/' "$AH/relay.conf"; run_pc; rc=$?
 check "plan-consensus: PLAN_REVIEWERS that names no seat → exit 5, no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)" "5|none"
@@ -2772,7 +2774,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=602
+EXPECTED=603
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
