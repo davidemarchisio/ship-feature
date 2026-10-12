@@ -232,6 +232,16 @@ mk_hk; git -C "$HKW" update-index --assume-unchanged .githooks/pre-push; printf 
 hk_case "an assume-unchanged hook edited on disk fails (blob ids, not git diff)" 1 $? err 'differs from the committed'
 mk_hk; printf 'exit 0 # staged\n' >> "$HKW/.githooks/pre-push"; git -C "$HKW" add .githooks/pre-push; git -C "$HKW" show HEAD:.githooks/pre-push > "$HKW/.githooks/pre-push"; hk_pf "$HKW"
 hk_case "a staged edit that differs from HEAD fails although the disk matches HEAD" 1 $? err 'differs from the committed'
+# A clean filter that turns the edited file back into the committed bytes: hash-object would apply it.
+mk_hk; cp "$HKW/.githooks/pre-push" "$WORK/clean-copy$HKN"; git -C "$HKW" config filter.hide.clean "cat '$WORK/clean-copy$HKN'"
+printf '.githooks/pre-push filter=hide\n' >> "$(git -C "$HKW" rev-parse --path-format=absolute --git-path info/attributes)"
+printf 'exit 0 # hidden by a clean filter\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "a hook edit hidden by a clean filter fails (the bytes on disk, --no-filters)" 1 $? err 'differs from the committed'
+# The committed hook with CRLF line ends on disk and core.autocrlf=true: the conversion would hash it
+# to the committed blob, but git runs the CRLF bytes (#!/bin/sh followed by a carriage return).
+mk_hk; git -C "$HKW" config core.autocrlf true; awk '{ printf "%s\r\n", $0 }' "$HKW/.githooks/pre-push" > "$WORK/crlf$HKN"
+cat "$WORK/crlf$HKN" > "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+hk_case "the committed hook with CRLF line ends on disk fails (core.autocrlf=true, --no-filters)" 1 $? err 'differs from the committed'
 mk_hk; ( cd "$HKW" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink ); hk_pf "$HKW"
 hk_case "a committed symlink at .githooks/pre-push, checked out as a link, fails" 1 $? err 'reached through a symlink'
 # The same commit with a regular file on disk in place of the link: HEAD still holds mode 120000.
@@ -2934,7 +2944,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=656
+EXPECTED=658
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

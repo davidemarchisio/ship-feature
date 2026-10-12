@@ -396,8 +396,10 @@ sf_prepush_hook() {
   esac
   # The file on disk is the committed one. Blob ids, not `git diff`: diff skips a file marked
   # assume-unchanged or skip-worktree. And the index must not carry a different version either.
+  # --no-filters: the bytes git runs, as they are; a clean filter or an end-of-line conversion could
+  # turn a different file into the committed blob id.
   blob="$(git -C "$top" rev-parse -q --verify "HEAD:.githooks/pre-push" 2>/dev/null)"
-  disk="$(git -C "$top" hash-object -- "$own" 2>/dev/null)"
+  disk="$(git -C "$top" hash-object --no-filters -- "$own" 2>/dev/null)"
   if [ -z "$blob" ] || [ "$disk" != "$blob" ] || ! git -C "$top" diff --quiet --cached HEAD -- .githooks/pre-push 2>/dev/null; then
     echo ".githooks/pre-push differs from the committed one (on disk or staged) — commit the change, or restore it: git checkout HEAD -- .githooks/pre-push" >&2; return 1
   fi
