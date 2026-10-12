@@ -174,7 +174,8 @@ SHIP_FEATURE_DENYLIST=/path/to/your/denylist.txt
 #   ~/.config/ship-feature/sensitive-paths  one bash `case` pattern per line (`*` also matches `/`);
 #                                        a PR touching a match is never merged automatically. Replaces
 #                                        the built-in defaults (workflows, hooks, deploy/release scripts,
-#                                        keys, env files, *secret*, *credential*) when present
+#                                        keys, env files, *secret*, *credential*) when present; the gate's
+#                                        entry points .githooks/*, bin/ci and config/ci.rb are always added
 #   ~/.config/ship-feature/allow-no-ci   one `owner/repo` per line: repos allowed to merge with no CI
 #   SHIP_FEATURE_STATE_DIR               where round counters, verdict files and consensus results live
 #                                        (default ~/.local/state/ship-feature)

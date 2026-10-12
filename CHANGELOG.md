@@ -20,6 +20,15 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Changed
 
+- **Every repo needs a committed `.githooks/pre-push`, and the tool checks it.** `preflight` refuses a
+  worktree whose `.githooks/pre-push` is missing, not committed with mode `100755`, not executable,
+  changed on disk or in the index, or not the file git runs on push (`core.hooksPath` must resolve to
+  it; the fix is `git config core.hooksPath .githooks`). No flag or variable skips it. WORKFLOW step 4:
+  the hook runs the tests, a linter and a formatter check; the agent reads it and names those checks in
+  the PR's implementation notes. `merge-gate --autonomous` check 6 needs a `100755` `.githooks/pre-push`
+  in the PR head and in the base tip for every PR, read from a checkout that has both commits (so the
+  gate now needs a checkout of the repository); check 7 always treats `.githooks/*`, `bin/ci` and
+  `config/ci.rb` as sensitive, also with a custom `sensitive-paths` file. Fizzy #1370.
 - **Plan review iterates to consensus, up to 6 rounds, without asking.** After a round with a Blocker or
   a plan-qualifying Should-fix the agent revises the plan and runs the next round at once, with the same
   full panel; it never asks the human for one more round, and an unreviewed plan revision never reaches

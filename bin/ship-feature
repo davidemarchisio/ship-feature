@@ -3,7 +3,8 @@
 #
 # v1 commands:
 #   ship-feature preflight   Assert the working copy is set up for step 4 (worktree, feature
-#                            branch off origin/HEAD, excluded marker, ancestry). Non-zero on failure.
+#                            branch off origin/HEAD, excluded marker, ancestry, and a committed
+#                            .githooks/pre-push that git runs on push). Non-zero on failure.
 #   ship-feature relay [..]  Transparent pass-through to `pr-review-relay`: forwards all args, preserves
 #                            stdout and the EXACT exit code, and prints (on stderr) a one-line reminder of
 #                            what each code means for the workflow.
@@ -367,6 +368,43 @@ default_branch() {
   printf '%s\n' "$ref"
 }
 
+# The repository's gate: a committed, executable `.githooks/pre-push` that git really runs on push.
+# $1 = the worktree root. Prints nothing on success; on failure, the reason on stderr and non-zero.
+# Never changes directory. The path is fixed, so the merge gate can check the commit under test and
+# check 7 can treat it as sensitive. What the hook runs (tests, a linter, a formatter check) is not
+# checked here: WORKFLOW.md step 4 makes that the agent's reading job.
+sf_prepush_hook() {
+  local top="$1" own line blob disk h
+  local need="every repo shipped with ship-feature needs a committed .githooks/pre-push (mode 100755) that runs the tests, a linter and a formatter check, and 'git config core.hooksPath .githooks'. A repo without one adds it in its own PR first: commit the hook, then run preflight again"
+  own="$top/.githooks/pre-push"
+  if [ ! -e "$own" ] && [ ! -L "$own" ]; then echo "no pre-push hook: $own does not exist — $need." >&2; return 1; fi
+  # -f, not -e: a directory named pre-push would pass -e and -x while git ran nothing.
+  [ -f "$own" ] || { echo "$own is not a regular file — $need." >&2; return 1; }
+  [ -x "$own" ] || { echo "$own is not executable — git skips a non-executable hook without a word. Run: chmod +x .githooks/pre-push" >&2; return 1; }
+  # HEAD, not the index: preflight never passes on a hook that no commit holds.
+  line="$(git -C "$top" ls-tree HEAD -- .githooks/pre-push 2>/dev/null)"
+  [ -n "$line" ] || { echo ".githooks/pre-push is not committed on this branch (HEAD has no such file) — commit it, then run preflight again. $need." >&2; return 1; }
+  case "$line" in
+    "100755 blob "*) ;;
+    "100644 blob "*) echo ".githooks/pre-push is committed as 100644, not 100755: a fresh clone checks it out without the executable bit, and git skips it. Run: git add --chmod=+x .githooks/pre-push (a plain git add records 100644 when core.filemode is false), then commit." >&2; return 1;;
+    *) echo ".githooks/pre-push in HEAD is not a 100755 file (mode ${line%% *}); a symlink or a directory there is not accepted." >&2; return 1;;
+  esac
+  # The file on disk is the committed one. Blob ids, not `git diff`: diff skips a file marked
+  # assume-unchanged or skip-worktree. And the index must not carry a different version either.
+  blob="$(git -C "$top" rev-parse -q --verify "HEAD:.githooks/pre-push" 2>/dev/null)"
+  disk="$(git -C "$top" hash-object -- "$own" 2>/dev/null)"
+  if [ -z "$blob" ] || [ "$disk" != "$blob" ] || ! git -C "$top" diff --quiet --cached HEAD -- .githooks/pre-push 2>/dev/null; then
+    echo ".githooks/pre-push differs from the committed one (on disk or staged) — commit the change, or restore it: git checkout HEAD -- .githooks/pre-push" >&2; return 1
+  fi
+  # Git runs that file. Ask git rather than copy its rules for core.hooksPath. A relative answer is
+  # relative to $top (git -C does not move this process), so join it before comparing. -ef compares
+  # device and inode after symlinks, so no path normalization is needed.
+  h="$(git -C "$top" rev-parse --git-path hooks/pre-push 2>/dev/null)" || h=""
+  case "$h" in /*) ;; *) h="$top/$h";; esac
+  [ "$h" -ef "$own" ] || { echo "git runs $h on push, not this worktree's .githooks/pre-push — set the hook path once per clone: git config core.hooksPath .githooks" >&2; return 1; }
+  return 0
+}
+
 cmd_preflight() {
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not inside a git working tree."
   load_config
@@ -429,6 +467,12 @@ cmd_preflight() {
   else
     die "no common history with origin/$def — did you branch off the default branch?"
   fi
+
+  # The repository's gate. Last, so every earlier failure keeps its own message. No flag and no
+  # variable skips it: a bypass written into the tooling is what the rule exists to prevent.
+  local hook_err
+  hook_err="$(sf_prepush_hook "$top" 2>&1)" || die "pre-push hook: $hook_err"
+  ok "pre-push hook: .githooks/pre-push (committed, 100755, the hook git runs)"
 
   echo "✔ preflight passed."
 }
@@ -1885,12 +1929,40 @@ sf_gate_disputes() {
   return "$rc"
 }
 
-# Check 6: CI on the verdict SHA. SUCCESS / NEUTRAL only; empty needs a file a human created.
+# Check 6, first half: the pre-push hook on both sides of the merge, for every PR. `gh pr merge --merge`
+# makes a new commit of the base tip and the PR head, so the head alone is not enough. When both hold a
+# 100755 .githooks/pre-push, a three-way merge keeps it with that mode (a content conflict makes the PR
+# not MERGEABLE, which check 3 refuses). Reads commits, never the local files or the local config.
+sf_gate_hook() {
+  local pr="$1" top base side sha line
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  [ -n "$top" ] || { sf_gate_fail "merge-gate must run from a checkout of the repository: it reads .githooks/pre-push from the PR head and the base tip"; return 6; }
+  base="$(gh pr view "$pr" --json baseRefOid --jq .baseRefOid 2>/dev/null)"
+  case "$base" in ''|*[!0-9a-f]*) sf_gate_fail "cannot read the PR's base tip (baseRefOid)"; return 6;; esac
+  for side in head base; do
+    if [ "$side" = head ]; then sha="$SF_G_HEAD"; else sha="$base"; fi
+    git -C "$top" cat-file -e "$sha^{commit}" 2>/dev/null \
+      || { sf_gate_fail "the PR $side $(printf '%s' "$sha" | cut -c1-7) is not in this checkout: run git fetch origin (for a PR from a fork: git fetch origin pull/$pr/head)"; return 6; }
+    # -C "$top": ls-tree reads the pathspec relative to the current directory.
+    line="$(git -C "$top" ls-tree "$sha" -- .githooks/pre-push 2>/dev/null)"
+    case "$line" in
+      "100755 blob "*) ;;
+      *) sf_gate_fail "the PR $side $(printf '%s' "$sha" | cut -c1-7) has no .githooks/pre-push with mode 100755: every repo shipped with ship-feature needs a committed pre-push hook that runs the tests, a linter and a formatter check"; return 6;;
+    esac
+  done
+  SF_G_HOOK="pre-push hook: .githooks/pre-push 100755 at head $(printf '%s' "$SF_G_HEAD" | cut -c1-7) and base $(printf '%s' "$base" | cut -c1-7)"
+  return 0
+}
+
+# Check 6: the hook (above), then CI on the verdict SHA. SUCCESS / NEUTRAL only; empty needs a file a
+# human created. SF_G_HOOKFAIL tells the check-8 re-read that the hook, not CI, failed.
 sf_gate_ci() {
   local pr="$1" rows st co sa
+  SF_G_HOOKFAIL=""
+  sf_gate_hook "$pr" || { SF_G_HOOKFAIL=1; return 6; }
   rows="$(gh pr view "$pr" --json statusCheckRollup --jq '.statusCheckRollup[]? | "\(.status // "-")|\(.conclusion // "-")|\(.state // "-")"' 2>/dev/null)" || { sf_gate_fail "cannot read the CI checks"; return 6; }
   if [ -z "$rows" ]; then
-    if grep -qxF -- "$SF_G_REPO" "$(sf_auto_cfg_dir)/allow-no-ci" 2>/dev/null; then SF_G_CI="(none: allowed by the allow-no-ci file)"; return 0; fi
+    if grep -qxF -- "$SF_G_REPO" "$(sf_auto_cfg_dir)/allow-no-ci" 2>/dev/null; then SF_G_CI="(none: allowed by the allow-no-ci file)"$'\n'"$SF_G_HOOK"; return 0; fi
     sf_gate_fail "the PR reports no CI checks (a human can allow this repo in $(sf_auto_cfg_dir)/allow-no-ci)"; return 6
   fi
   while IFS='|' read -r st co sa; do
@@ -1902,7 +1974,7 @@ sf_gate_ci() {
   done <<EOF
 $rows
 EOF
-  SF_G_CI="$rows"
+  SF_G_CI="$rows"$'\n'"$SF_G_HOOK"
   return 0
 }
 
@@ -1939,6 +2011,12 @@ EOF
   else
     pats="$(sf_default_sensitive)"
   fi
+  # The gate's entry points are always sensitive, also with a custom file: the agent never changes its
+  # own gate alone. Added only after the custom file passed the check above, so an empty or
+  # comments-only file still fails closed.
+  for pat in '.githooks/*' 'bin/ci' 'config/ci.rb'; do
+    printf '%s\n' "$pats" | grep -qxF -- "$pat" || pats="$pats"$'\n'"$pat"
+  done
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     while IFS= read -r pat; do
@@ -1971,7 +2049,7 @@ cmd_merge_gate() {
   sf_auto_guard "$auto" || return 7
   command -v gh >/dev/null 2>&1 || { sf_gate_fail "gh not found on PATH"; return 6; }
   load_config
-  SF_G_REPO=""; SF_G_HEAD=""; SF_G_VFILE=""; SF_G_ROUND=""; SF_G_CONS=""; SF_G_CI=""; SF_G_FILES=""; SF_G_PKEY=""; SF_G_RUNID=""
+  SF_G_REPO=""; SF_G_HEAD=""; SF_G_VFILE=""; SF_G_ROUND=""; SF_G_CONS=""; SF_G_CI=""; SF_G_FILES=""; SF_G_PKEY=""; SF_G_RUNID=""; SF_G_HOOK=""; SF_G_HOOKFAIL=""
   sf_gate_plan "$pr"      || return 6
   sf_gate_pr "$pr"        || return 6
   sf_gate_verdict "$pr"   || return 6
@@ -2024,8 +2102,9 @@ sf_gate_merge() {
     || { sf_gate_fail "a newer round was recorded after the checks; not merging"; return 6; }
   # Disputes again: a '- DISPUTED:' line posted after check 5 must stop the merge too.
   sf_gate_disputes "$pr" || { sf_gate_fail "a dispute appeared after the checks; not merging"; return 6; }
-  # CI again, on the same SHA: a check can be re-run or turn red after the first read.
-  sf_gate_ci "$pr" || { sf_gate_fail "CI changed after the checks; not merging"; return 6; }
+  # CI again, on the same SHA: a check can be re-run or turn red after the first read. The hook is read
+  # again too, on the same head and the base tip as it is now; a hook failure keeps its own reason.
+  sf_gate_ci "$pr" || { [ "$SF_G_HOOKFAIL" = 1 ] || sf_gate_fail "CI changed after the checks; not merging"; return 6; }
   gh pr merge --help 2>&1 | grep -q -- '--match-head-commit' || { sf_gate_fail "this gh has no 'pr merge --match-head-commit'; update gh"; return 6; }
   sf_auto_guard 1 || return 7
   gh pr merge "$pr" --merge --match-head-commit "$SF_G_HEAD" || { sf_gate_fail "the merge call failed; nothing was retried"; return 6; }

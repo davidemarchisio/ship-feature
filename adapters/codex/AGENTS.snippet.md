@@ -35,7 +35,10 @@ Non-negotiable points:
   where the human can accept it as classified, authorize one more round with explicit reasoning, or drop
   the change. A human-authorized extra round is not an agent-initiated round: it either resolves
   cleanly, or produces an updated disagreement summary and returns to Gate 1 again.
-- Implement in a **git worktree**, stage explicit paths, open a PR.
+- Implement in a **git worktree**, stage explicit paths, open a PR. Run `ship-feature preflight` first:
+  it refuses a repo without a committed `.githooks/pre-push` that git runs on push. The pre-push hook
+  must run the tests, a linter and a formatter check; read it and the script it calls, and name those
+  checks in the PR's implementation notes. A repo without a hook adds it in its own PR first.
 - Cross-review with `ship-feature relay --author codex --context-file ~/.config/ship-feature/plans/<repo>-<slug>.md`
   — **no `--reviewers`**: `relay` injects your configured quorum, `SHIP_FEATURE_REVIEWERS` (set in
   ship-feature's config, else `REVIEWERS` in `~/.config/pr-review-relay/config`), and a typed list

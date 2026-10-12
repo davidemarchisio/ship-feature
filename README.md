@@ -135,10 +135,10 @@ it goes to you at the merge gate — which is a change to what that gate *receiv
 ## Autonomous mode (experimental)
 
 Opt-in, off by default: `plan-consensus`, `relay --autonomous` and `merge-gate` replace the two human
-gates with machine-checked ones (panel unanimity on the exact SHA, CI, a sensitive-file stop, a kill
-switch, an audit comment). It needs both `--autonomous` and `SHIP_FEATURE_AUTONOMOUS=1`. It is a
-guard against accidents, **not** a security boundary against the agent. Read the "Autonomous mode"
-section of [`WORKFLOW.md`](WORKFLOW.md) first.
+gates with machine-checked ones (panel unanimity on the exact SHA, the pre-push hook on both sides of
+the merge, CI, a sensitive-file stop, a kill switch, an audit comment). It needs both `--autonomous`
+and `SHIP_FEATURE_AUTONOMOUS=1`. It is a guard against accidents, **not** a security boundary against
+the agent. Read the "Autonomous mode" section of [`WORKFLOW.md`](WORKFLOW.md) first.
 
 ## Install
 
@@ -159,7 +159,9 @@ ship-feature skill for any feature/fix.
 ## The CLI
 
 - `ship-feature preflight` — assert you're in a feature worktree branched off the default branch, with
-  the worktree marker git-excluded (run before you start implementing).
+  the worktree marker git-excluded and a committed `.githooks/pre-push` that git runs on push — the
+  pre-push hook every repo needs, running the tests, a linter and a formatter check (run before you
+  start implementing).
 - `ship-feature plan-review [<file>] [--reviewers a,b,c] [--sequential]` — step 2: fan an implementation
   plan (a file — keep it in `~/.config/ship-feature/plans/`, see WORKFLOW.md §1 — or stdin) out to a panel
   of agents for a **read-only** review and print each
