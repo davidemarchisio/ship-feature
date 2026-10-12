@@ -2706,7 +2706,7 @@ check "plan-consensus: a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l < 
 mk_plan_world; export STUB_LAST_grok=""; pc_attempts 8
 check "plan-consensus: attempts 1 to 8 with an unusable verdict each exit 3 and print attempt N/9" "$_seq" "$_want8"
 run_pc; rc=$?
-check "plan-consensus: the 9th unusable verdict exits 5 (no attempts left) and does not say to run again" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")" "5|1|0"
+check "plan-consensus: the 9th unusable verdict exits 5 (no attempts left), does not say to run again, counts no round" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(cat "$(pc_dir)/rounds" 2>/dev/null || echo 0)" "5|1|0|9|0"
 n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?; unset STUB_LAST_grok
 check "plan-consensus: after nine unusable verdicts a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
 mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8; unset STUB_FAIL_grok; run_pc; rc=$?
@@ -2725,7 +2725,10 @@ mk_plan_world; export STUB_LAST_grok="$FINDINGS"; run_pc; unset STUB_LAST_grok
 _a1="$(cat "$(pc_dir)/attempts")"; n_before="$(wc -l < "$SL.codex" | tr -d ' ')"
 sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; rc=$?; mv "$AH/relay.conf.bak" "$AH/relay.conf"
 check "plan-consensus: a refused call (no panel) leaves the attempts file unchanged and runs no reviewer" "$rc|$_a1|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
-( export TMPDIR="$AH/no-such-dir"; run_pc ); rc=$?
+# A stub mktemp that always fails: TMPDIR set to a missing directory does not make mktemp fail on macOS
+# (the CI job ran the panel). The first mktemp on the plan-consensus path is the panel's temp dir.
+mkdir -p "$AH/mkbin"; printf '#!/bin/sh\nexit 1\n' > "$AH/mkbin/mktemp"; chmod +x "$AH/mkbin/mktemp"
+( export PATH="$AH/mkbin:$PATH"; run_pc ); rc=$?
 check "plan-consensus: a temp-dir failure exits 5, leaves the attempts file unchanged and runs no reviewer" "$rc|$(grep -c 'cannot create a temp dir' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
 mk_plan_world; printf ' \n\t\n' > "$AH/plan.md"; run_pc; rc=$?
 check "plan-consensus: an empty plan is refused before any counter or lock and runs no reviewer" "$rc|$(ls "$AH/state/autonomous/plan" 2>/dev/null | wc -l | tr -d ' ')|$([ -e "$SL.codex" ] && echo ran || echo none)" "1|0|none"

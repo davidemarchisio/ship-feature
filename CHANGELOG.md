@@ -27,7 +27,7 @@ All notable changes to **ship-feature** are documented here. This project follow
   Round 6 with a finding still open stops: the plan and a disagreement summary go to Gate 1. Was a
   2-round cap. `plan-consensus --autonomous` gets the same cap (6 rounds, 9 attempts); an attempt is now
   counted only when the panel is dispatched, the last attempt stops (exit 5) instead of asking for
-  another run, and the "no usable verdict" line says to run again. Fizzy #1351.
+  another run, and before the last attempt the "no usable verdict" line says to run again. Fizzy #1351.
 
 ### Fixed
 
