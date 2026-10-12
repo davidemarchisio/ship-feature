@@ -2730,6 +2730,18 @@ check "plan-consensus: a refused call (no panel) leaves the attempts file unchan
 mkdir -p "$AH/mkbin"; printf '#!/bin/sh\nexit 1\n' > "$AH/mkbin/mktemp"; chmod +x "$AH/mkbin/mktemp"
 ( export PATH="$AH/mkbin:$PATH"; run_pc ); rc=$?
 check "plan-consensus: a temp-dir failure exits 5, leaves the attempts file unchanged and runs no reviewer" "$rc|$(grep -c 'cannot create a temp dir' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
+# plan-review's own refusals (an invalid setting, its own temp dir) come before the count: plan-review
+# records the attempt right before the first seat starts (Gate 2 of #33).
+( export SHIP_FEATURE_PLAN_TIMEOUT=abc; run_pc ); rc=$?
+check "plan-consensus: a setting plan-review refuses (SHIP_FEATURE_PLAN_TIMEOUT=abc) spends no attempt and runs no reviewer" "$rc|$(grep -c 'invalid SHIP_FEATURE_PLAN_TIMEOUT' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "1|1|1|$n_before"
+# A stub mktemp that runs the real one once, then fails: the first call is plan-consensus's temp dir,
+# the second is plan-review's own.
+mkdir -p "$AH/mk2bin"
+printf '#!/bin/sh\nc="$0.count"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$c"; [ "$n" -ge 2 ] && exit 1; exec "%s" "$@"\n' "$(command -v mktemp)" > "$AH/mk2bin/mktemp"; chmod +x "$AH/mk2bin/mktemp"
+( export PATH="$AH/mk2bin:$PATH"; run_pc ); rc=$?
+check "plan-consensus: plan-review's own temp dir failing (the second mktemp) spends no attempt and runs no reviewer" "$rc|$(grep -c 'cannot create temp dir' "$AH/pc.err")|$(cat "$AH/mk2bin/mktemp.count")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "1|1|2|1|$n_before"
+printf 'plan\n' | ( export STUB_LOG="$AH/p5.log" SF_ATTEMPT_FILE="$AH/att"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 ); rc=$?
+check "plan-review: an attempt file with no valid attempt number stops before any seat (5)" "$rc|$([ -e "$AH/p5.log.codex" ] && echo ran || echo none)|$([ -e "$AH/att" ] && echo written || echo none)" "5|none|none"
 mk_plan_world; printf ' \n\t\n' > "$AH/plan.md"; run_pc; rc=$?
 check "plan-consensus: an empty plan is refused before any counter or lock and runs no reviewer" "$rc|$(ls "$AH/state/autonomous/plan" 2>/dev/null | wc -l | tr -d ' ')|$([ -e "$SL.codex" ] && echo ran || echo none)" "1|0|none"
 mk_plan_world; sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; check "plan-consensus: PLAN_REVIEWERS unset → exit 5" "$?" 5
@@ -2777,7 +2789,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=603
+EXPECTED=606
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

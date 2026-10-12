@@ -1255,6 +1255,15 @@ $SF_VERDICT_RULES"
     else echo ok > "$STATUS_DIR/$key"; fi
   }
 
+  # plan-consensus counts its attempt HERE: after every check above that can refuse the run (this
+  # function's own temp dir included) and right before the first seat starts, so only a dispatched
+  # panel spends an attempt. The write is checked: one that fails silently would leave the old value,
+  # and the cap would never bind.
+  if [ -n "${SF_ATTEMPT_FILE:-}" ]; then
+    case "${SF_ATTEMPT_N:-}" in ''|*[!0-9]*) echo "✖ plan-consensus: no valid attempt number to record. No reviewer ran. STOP and notify the human." >&2; return 5;; esac
+    sf_num_put "$SF_ATTEMPT_FILE" "$SF_ATTEMPT_N" || { echo "✖ plan-consensus: cannot record the attempt in ${SF_ATTEMPT_FILE%/*} (read-only or full?). No reviewer ran. STOP and notify the human." >&2; return 5; }
+  fi
+
   # Dispatch, de-duping the panel. `set -f` guards the word-split from pathname expansion
   # (an unquoted `$reviewers` would otherwise glob a value like `a*`).
   local r rk tool seen="" order="" warned_grok45high=0
@@ -1531,15 +1540,14 @@ sf_plan_consensus_run() {
   # The plan is hashed BEFORE the panel reads it and again after: a clean result must describe the text
   # the reviewers actually saw, not a file edited under them.
   sha_before="$(sf_sha256 < "$file")"
-  # An attempt is a call that dispatches the panel, so it is counted here, after the last check that can
-  # refuse the call: a refused call spends nothing. The write is checked BEFORE the panel runs: a write
-  # that fails silently would leave the old value, and the cap would never bind.
-  sf_num_put "$pdir/attempts" $((attempts + 1)) || { rm -rf "$vdir"; echo "✖ plan-consensus: cannot record the attempt in $pdir (read-only or full?). No reviewer ran. STOP and notify the human." >&2; return 5; }
+  # An attempt is a call that dispatches the panel: plan-review records it (SF_ATTEMPT_FILE) after every
+  # check that can refuse the run, right before the first seat starts, so a refused call spends nothing.
+  # A write that fails stops there with exit 5, before any seat runs.
   # On the last attempt no later call can dispatch, so a result that would say "run again" (exit 2 or 3)
   # is a stop (exit 5) instead. An all-clean round still exits 0.
   local last=0; [ $((attempts + 1)) -ge "$SF_AUTO_PLAN_MAX_ATTEMPTS" ] && last=1
   local rc=0
-  ( export SF_VERDICT_DIR="$vdir" SHIP_FEATURE_PLAN_REVIEWERS="$seats"; cmd_plan_review "$file" ); rc=$?
+  ( export SF_VERDICT_DIR="$vdir" SHIP_FEATURE_PLAN_REVIEWERS="$seats" SF_ATTEMPT_FILE="$pdir/attempts" SF_ATTEMPT_N=$((attempts + 1)); cmd_plan_review "$file" ); rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -rf "$vdir"
     if [ "$rc" = 3 ]; then
