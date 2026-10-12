@@ -2115,7 +2115,7 @@ sf_clause "the author classifies findings in writing"        'author classifies(
 sf_clause "plan-review round excludes exit 3"                'exit .?3.?.{0,200}does.{0,6}not.{0,6}count as a round'
 sf_clause "two consecutive exit-3s stop retrying and drop that reviewer" 'two consecutive attempts.{0,120}stop retrying.{0,160}drop that reviewer'
 sf_clause "a reduced panel is escalated to the human, not silent" '(tell the human|human.{0,20}call).{0,160}reduced panel|reduced panel.{0,160}(tell the human|human.{0,20}call)'
-sf_clause "plan-review cap is 2 rounds"                       '(2|two).{0,10}round.{0,40}cap|cap.{0,20}(2|two).{0,10}round'
+sf_clause "plan-review cap is 6 rounds"                       '(6|six).{0,10}round.{0,40}cap|cap.{0,20}(6|six).{0,10}round'
 sf_clause "a clean round 1 skips a wasted round 2"            'clean round 1|round 1 .{0,60}(raises no|no blocker).{0,120}gate 1'
 sf_clause "round 2 runs the same full panel, never narrowed" 'same full panel.{0,60}never.{0,10}narrow|never.{0,10}narrow.{0,120}same full panel'
 sf_clause "plan-qualifying is compared against PR-qualifying/qualifying Should-fix" 'plan-qualifying.{0,150}.{0,150}(qualifying should-fix|pr-qualifying)|(qualifying should-fix|pr-qualifying).{0,150}.{0,150}plan-qualifying'
@@ -2123,12 +2123,34 @@ sf_clause "plan-qualifying must not be conflated with PR-qualifying"       '(not
 sf_clause "plan-qualifying covers a missing edge case"                    'materially incomplete.{0,160}missing edge case|missing edge case.{0,160}materially incomplete'
 sf_clause "plan-qualifying covers an unhandled failure mode"              'materially incomplete.{0,160}failure mode|failure mode.{0,160}materially incomplete'
 sf_clause "plan-qualifying covers missing verification"                   'materially incomplete.{0,160}verification|verification.{0,160}materially incomplete'
-sf_clause "round 2 still open -> disagreement summary -> Gate 1" 'round 2.{0,150}.{0,150}disagreement summary.{0,200}gate 1|disagreement summary.{0,150}.{0,150}round 2'
+sf_clause "round 6 still open -> disagreement summary -> Gate 1" 'round 6.{0,150}.{0,150}disagreement summary.{0,200}gate 1|disagreement summary.{0,150}.{0,150}round 6'
 sf_clause "disagreement summary states objection + classification + reason" 'objection.{0,60}classification.{0,60}reason|disagreement summary.{0,200}.{0,200}(objection|classification|reason).{0,120}(objection|classification|reason).{0,120}(objection|classification|reason)'
-sf_clause "a human-authorized round is not a third autonomous round" 'human-authorized.{0,80}not a third autonomous'
+sf_clause "a human-authorized round is not an agent-initiated round" 'human-authorized.{0,80}not an agent-initiated round'
 sf_clause "a human-authorized round resolves clean or re-escalates" 'human-authorized.{0,200}(resolves cleanly|resolve).{0,160}(disagreement summary|gate 1)'
 sf_clause "Gate 1 accepts the plan plus a disagreement summary" 'plan plus a disagreement summary|plan.{0,20}disagreement summary'
 sf_clause "dropping the last reviewer is not a completed round" 'zero reviewers.{0,120}(not a completed round|isn.t a completed round)'
+# Iterate to consensus without asking (Fizzy #1351). The same four literals are in WORKFLOW.md, the three
+# adapters and the plan-review exit-0 echo, so one clause per literal checks every place.
+sf_clause "a qualifying finding: run the next round at once"   'run the next round at once'
+sf_clause "never ask the human for one more round"             'never ask the human for one more round'
+sf_clause "an unreviewed plan revision never reaches Gate 1"   'an unreviewed plan revision never reaches gate 1'
+sf_clause "round 6 still open: do not run a round 7"           'do not run a round 7 on your own'
+sf_clause "only a qualifying finding changes the plan; a Nit is recorded" 'change the plan only for a blocker or a plan-qualifying should-fix.{0,200}nit.{0,60}recorded.{0,40}not applied'
+# The old cap must be ABSENT, not merely outvoted: a file that says both teaches the old rule.
+# README.md and CHANGELOG.md keep the 2-round cap as history, so they are not scanned.
+sf_absent() {  # sf_absent <label> <extended-regex> [files]
+  local label="$1" re="$2" files="${3:-$SF_ADAPTERS}" f hit=""
+  for f in $files; do
+    tr '\n' ' ' < "$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" && hit="$hit $f"
+  done
+  [ -z "$hit" ] \
+    && { echo "  ok   [-] no adapter states: $label"; PASS=$((PASS+1)); } \
+    || { echo "  FAIL adapter consistency: '$label' still present in$hit"; FAIL=$((FAIL+1)); }
+}
+sf_absent "the old 'Cap: 2 rounds'"        'cap: 2 rounds'
+sf_absent "the old '2-round cap'"          '2-round cap'
+sf_absent "the old 'do not run a round 3'" 'do not run a round 3'
+sf_absent "the old 'revise **once**'"      'revise \*\*once\*\*' WORKFLOW.md
 
 # And the TOOL, not only the documents. `bin/ship-feature` prints the loop rule to the operator on
 # every relay run, which out-ranks any document nobody re-reads — so a revert of that one string must
@@ -2183,9 +2205,23 @@ for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md 
 done
 
 sf_plan_tool_clause "clean round goes straight to Gate 1"     'straight to gate 1'
-sf_plan_tool_clause "cap is 2 rounds"                         'cap.{0,10}(2|two) rounds'
-sf_plan_tool_clause "do not run a round 3 on your own"        'do not run a round 3'
+sf_plan_tool_clause "cap is 6 rounds"                         'cap.{0,10}(6|six) rounds'
+sf_plan_tool_clause "do not run a round 7 on your own"        'do not run a round 7 on your own'
 sf_plan_tool_clause "write a disagreement summary instead"    'disagreement summary'
+sf_plan_tool_clause "a qualifying finding: run the next round at once" 'run the next round at once'
+sf_plan_tool_clause "never ask the human for one more round"  'never ask the human for one more round'
+sf_plan_tool_clause "an unreviewed plan revision never reaches Gate 1" 'an unreviewed plan revision never reaches gate 1'
+sf_plan_tool_clause "keeps the review vocabulary (plan-qualifying)" 'plan-qualifying'
+# Every 'Plan review done' line: none may still state the old cap.
+sf_plan_tool_absent() {  # sf_plan_tool_absent <label> <extended-regex>
+  local label="$1" re="$2"
+  grep -E 'Plan review done' "$CLI" | grep -Eqi -- "$re" \
+    && { echo "  FAIL bin/ship-feature's plan-review exit-0 message still states: $label"; FAIL=$((FAIL+1)); } \
+    || { echo "  ok   [-] bin/ship-feature's plan-review exit-0 message does not state: $label"; PASS=$((PASS+1)); }
+}
+sf_plan_tool_absent "the old 'both times'"          'both times'
+sf_plan_tool_absent "the old 'do not run a round 3'" 'do not run a round 3'
+sf_plan_tool_absent "the old 2-round cap"           'cap.{0,10}(2|two) rounds'
 
 # The exit-3 (NOT clean) message gets the same treatment: it used to say "Fix and re-run" with no
 # mention of the two-consecutive-failure drop rule, which itself invites retrying the same reviewer
@@ -2595,17 +2631,26 @@ check "plan-consensus: result file binds the plan hash, panel and degraded seats
 grep -q 'VERDICT: clean' "$SL.codex" && grep -q 'VERDICT LINE' "$SL.codex"; check "plan-consensus: the verdict-line rules are added to the reviewer prompt" $? 0
 printf 'plan\n' | ( export STUB_LOG="$AH/p2.log"; PATH="$ABIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 )
 [ -s "$AH/p2.log.codex" ] && ! grep -q 'VERDICT LINE' "$AH/p2.log.codex"; check "plan-review (not autonomous) does NOT get the verdict-line rules" $? 0
-mk_plan_world; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; run_pc; rc=$?
-check "plan-consensus: one seat has findings in round 1 → exit 2 (revise)" "$rc" 2
+# The plan's state directory (rounds, attempts), keyed by the plan's absolute path.
+pc_dir() { printf '%s/state/autonomous/plan/%s' "$AH" "$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; }
+FINDINGS="VERDICT: findings blockers=0 should_fix=1"
+# Cap 6 rounds (Fizzy #1351): rounds 1 to 5 with findings exit 2, round 6 with findings exits 5.
+mk_plan_world; export STUB_LAST_grok="$FINDINGS"; _rcs=""
+for _i in 1 2 3 4 5; do run_pc; _rcs="$_rcs$? "; [ "$_i" = 2 ] && cp "$AH/pc.err" "$AH/pc.r2"; done
+check "plan-consensus: rounds 1 to 5 with findings each exit 2 (revise)" "$_rcs" "2 2 2 2 2 "
+check "plan-consensus: the exit-2 line names the round of 6, the attempt of 9 and says run plan-consensus again" "$(grep -c 'round 2 of 6 had findings' "$AH/pc.r2")|$(grep -c 'attempt 2/9' "$AH/pc.r2")|$(grep -c 'run plan-consensus again' "$AH/pc.r2")" "1|1|1"
 run_pc; rc=$?
-check "plan-consensus: still findings in round 2 → exit 5 (cap)" "$rc" 5
+check "plan-consensus: round 6 with findings → exit 5 (round cap)" "$rc|$(grep -c 'round 6 still has findings' "$AH/pc.err")" "5|1"
 n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?
-check "plan-consensus: a third invocation exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
+check "plan-consensus: a 7th call exits 5 on the round cap and runs no reviewer" "$rc|$(grep -c 'no more rounds and no reset' "$AH/pc.err")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|$n_before"
 unset STUB_LAST_grok
+mk_plan_world; export STUB_LAST_grok="$FINDINGS"; for _i in 1 2 3 4 5; do run_pc; done; unset STUB_LAST_grok
+_nc="$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')"; run_pc; rc=$?
+check "plan-consensus: five findings rounds write no consensus file, then a clean round 6 exits 0 with round=6" "$_nc|$rc|$(awk -F= '$1=="round"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)" "0|0|6"
 mk_plan_world; run_pc; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; n1="$(wc -l < "$SL.grok" | tr -d ' ')"; run_pc; rc=$?; unset STUB_LAST_grok
 check "plan-consensus: a re-run after consensus on the same text and panel exits 0 and runs no reviewer" "$rc|$(wc -l < "$SL.grok" | tr -d ' ')" "0|$n1"
 # Human-only closing lines must not leak into plan-consensus output (they contradict "never drop a seat").
-HUMAN_RE='drop that one reviewer|do not run a round 3|straight to Gate 1'
+HUMAN_RE='drop that one reviewer|do not run a round 7|straight to Gate 1'
 mk_plan_world; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"
 check "plan-consensus: a clean round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
 mk_plan_world; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"; unset STUB_LAST_grok
@@ -2616,10 +2661,13 @@ check "plan-consensus: its own exit-3 line says autonomous mode never drops a se
 unset STUB_FAIL_grok
 PR_OUT="$AH/plain.out"
 printf 'plan\n' | ( export STUB_LOG="$AH/p3.log"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
-check "plan-review (plain, clean): still prints the human closing lines" "$(grep -c 'straight to Gate 1' "$PR_OUT")|$(grep -c 'do not run a round 3' "$PR_OUT")" "1|1"
+check "plan-review (plain, clean): still prints the human closing lines" "$(grep -c 'straight to Gate 1' "$PR_OUT")|$(grep -c 'do not run a round 7' "$PR_OUT")" "1|1"
 printf 'plan\n' | ( export STUB_LOG="$AH/p4.log" STUB_FAIL_grok="$AH/fail_grok"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
 check "plan-review (plain, seat failed): still prints the drop-the-reviewer line" "$(grep -c 'drop that one reviewer' "$PR_OUT")" 1
 unset STUB_FAIL_grok
+mk_plan_world; export STUB_LAST_grok=""; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"; unset STUB_LAST_grok
+check "plan-consensus: an unusable-verdict round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
+check "plan-consensus: its no-usable-verdict line says autonomous mode never drops a seat" "$(grep -c 'Run plan-consensus again; autonomous mode never drops a seat\.' "$AH/pc.all")" 1
 mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail run_pc; rc=$?
 check "plan-consensus: a real degraded_note (grok without its sandbox) is recorded as degraded=grok" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|grok"
 mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
@@ -2644,8 +2692,58 @@ mk_plan_world; export STUB_LAST_grok="VERDICT: clean   "; run_pc; rc=$?; unset S
 check "plan-consensus: trailing blanks after the verdict are unknown → exit 3" "$rc" 3
 mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; run_pc; rc=$?
 check "plan-consensus: a failed seat → exit 3, no round counted" "$rc|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0"
-run_pc; run_pc; run_pc; rc=$?; unset STUB_FAIL_grok
-check "plan-consensus: the 4th attempt exits 5" "$rc" 5
+unset STUB_FAIL_grok
+# Cap 9 attempts (Fizzy #1351). An attempt is a call that dispatches the panel. On the 9th attempt a
+# result that would say "run again" (exit 2 or 3) is exit 5: no later call can dispatch.
+_want8=""; for _i in 1 2 3 4 5 6 7 8; do _want8="${_want8}3:attempt $_i/9 "; done
+pc_attempts() { local _k="$1"; _seq=""; for _i in $(seq 1 "$_k"); do run_pc; _rc=$?; _seq="$_seq$_rc:$(grep -o 'attempt [0-9]*/9' "$AH/pc.err" | head -n1) "; done; }
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8
+check "plan-consensus: attempts 1 to 8 with a seat failure each exit 3 and print attempt N/9" "$_seq" "$_want8"
+run_pc; rc=$?
+check "plan-consensus: the 9th seat failure exits 5 (no attempts left), does not say to run again, counts no round" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(cat "$(pc_dir)/rounds" 2>/dev/null || echo 0)" "5|1|0|9|0"
+n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?; unset STUB_FAIL_grok
+check "plan-consensus: a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
+mk_plan_world; export STUB_LAST_grok=""; pc_attempts 8
+check "plan-consensus: attempts 1 to 8 with an unusable verdict each exit 3 and print attempt N/9" "$_seq" "$_want8"
+run_pc; rc=$?
+check "plan-consensus: the 9th unusable verdict exits 5 (no attempts left), does not say to run again, counts no round" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(cat "$(pc_dir)/rounds" 2>/dev/null || echo 0)" "5|1|0|9|0"
+n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: after nine unusable verdicts a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8; unset STUB_FAIL_grok; run_pc; rc=$?
+check "plan-consensus: eight seat failures, then a clean panel on attempt 9 exits 0 and writes the consensus file" "$rc|$([ -f "$AH/state/autonomous/consensus/plan-$PKEY.consensus" ] && echo written)" "0|written"
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8; unset STUB_FAIL_grok
+export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
+check "plan-consensus: a plan edited under the panel on attempt 9 exits 5 (no attempts left), not 3" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")" "5|1|0"
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 3; unset STUB_FAIL_grok
+export STUB_LAST_grok="$FINDINGS"; _rcs=""; for _i in 1 2 3 4 5; do run_pc; _rcs="$_rcs$? "; done; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: 3 seat failures, then rounds 1 to 5 exit 2 and round 6 (attempt 9) exits 5 on the round cap" "$_rcs|$rc|$(grep -c 'round 6 still has findings' "$AH/pc.err")" "2 2 2 2 2 |5|1"
+mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 4; unset STUB_FAIL_grok
+export STUB_LAST_grok="$FINDINGS"; _rcs=""; for _i in 1 2 3 4; do run_pc; _rcs="$_rcs$? "; done; run_pc; rc=$?; unset STUB_LAST_grok
+check "plan-consensus: 4 seat failures, then rounds 1 to 4 exit 2 and round 5 (attempt 9) exits 5 with its verdicts, not 2" "$_rcs|$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -c 'seat.grok=findings' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")" "2 2 2 2 |5|1|1|0"
+# A call refused before dispatch spends no attempt.
+mk_plan_world; export STUB_LAST_grok="$FINDINGS"; run_pc; unset STUB_LAST_grok
+_a1="$(cat "$(pc_dir)/attempts")"; n_before="$(wc -l < "$SL.codex" | tr -d ' ')"
+sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; rc=$?; mv "$AH/relay.conf.bak" "$AH/relay.conf"
+check "plan-consensus: a refused call (no panel) leaves the attempts file unchanged and runs no reviewer" "$rc|$_a1|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
+# A stub mktemp that always fails: TMPDIR set to a missing directory does not make mktemp fail on macOS
+# (the CI job ran the panel). The first mktemp on the plan-consensus path is the panel's temp dir.
+mkdir -p "$AH/mkbin"; printf '#!/bin/sh\nexit 1\n' > "$AH/mkbin/mktemp"; chmod +x "$AH/mkbin/mktemp"
+( export PATH="$AH/mkbin:$PATH"; run_pc ); rc=$?
+check "plan-consensus: a temp-dir failure exits 5, leaves the attempts file unchanged and runs no reviewer" "$rc|$(grep -c 'cannot create a temp dir' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
+# plan-review's own refusals (an invalid setting, its own temp dir) come before the count: plan-review
+# records the attempt right before the first seat starts (Gate 2 of #33).
+( export SHIP_FEATURE_PLAN_TIMEOUT=abc; run_pc ); rc=$?
+check "plan-consensus: a setting plan-review refuses (SHIP_FEATURE_PLAN_TIMEOUT=abc) spends no attempt and runs no reviewer" "$rc|$(grep -c 'invalid SHIP_FEATURE_PLAN_TIMEOUT' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "1|1|1|$n_before"
+# A stub mktemp that runs the real one once, then fails: the first call is plan-consensus's temp dir,
+# the second is plan-review's own.
+mkdir -p "$AH/mk2bin"
+printf '#!/bin/sh\nc="$0.count"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$c"; [ "$n" -ge 2 ] && exit 1; exec "%s" "$@"\n' "$(command -v mktemp)" > "$AH/mk2bin/mktemp"; chmod +x "$AH/mk2bin/mktemp"
+( export PATH="$AH/mk2bin:$PATH"; run_pc ); rc=$?
+check "plan-consensus: plan-review's own temp dir failing (the second mktemp) spends no attempt and runs no reviewer" "$rc|$(grep -c 'cannot create temp dir' "$AH/pc.err")|$(cat "$AH/mk2bin/mktemp.count")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "1|1|2|1|$n_before"
+printf 'plan\n' | ( export STUB_LOG="$AH/p5.log" SF_ATTEMPT_FILE="$AH/att"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 ); rc=$?
+check "plan-review: an attempt file with no valid attempt number stops before any seat (5)" "$rc|$([ -e "$AH/p5.log.codex" ] && echo ran || echo none)|$([ -e "$AH/att" ] && echo written || echo none)" "5|none|none"
+mk_plan_world; printf ' \n\t\n' > "$AH/plan.md"; run_pc; rc=$?
+check "plan-consensus: an empty plan is refused before any counter or lock and runs no reviewer" "$rc|$(ls "$AH/state/autonomous/plan" 2>/dev/null | wc -l | tr -d ' ')|$([ -e "$SL.codex" ] && echo ran || echo none)" "1|0|none"
 mk_plan_world; sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; check "plan-consensus: PLAN_REVIEWERS unset → exit 5" "$?" 5
 mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=, ,/' "$AH/relay.conf"; run_pc; rc=$?
 check "plan-consensus: PLAN_REVIEWERS that names no seat → exit 5, no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)" "5|none"
@@ -2664,6 +2762,19 @@ mk_plan_world; AUTO_ENV=0 run_pc; check "plan-consensus without the env key is r
 mk_plan_world; : > "$KILL"; run_pc; check "plan-consensus with the kill switch is refused (7)" "$?" 7
 mk_plan_world; ( export HOME="$AH" SHIP_FEATURE_AUTONOMOUS=1 SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH" SHIP_FEATURE_PLAN_REVIEWERS=codex,grok; bash "$CLI" plan-consensus "$PL" >/dev/null 2>&1 ); check "plan-consensus without --autonomous is refused (7)" "$?" 7
 
+# The autonomous texts no longer encode the 2-round cap (Fizzy #1351). Each extract is asserted
+# non-empty first, so a broken extract cannot pass by matching nothing. The code extract runs from each
+# function's first line to the first line that is exactly `}`: a bare `}` inside the function would
+# truncate it, which the 'reaches the exit-2 line' part catches.
+_pcx="$(sed -n -e '/^cmd_plan_consensus()/,/^}$/p' -e '/^sf_plan_consensus_run()/,/^}$/p' "$CLI")"
+check "plan-consensus code: the extract is non-empty, reaches the exit-2 line and has no 'no round 3' or 'once more'" "$([ -n "$_pcx" ] && echo nonempty)|$(printf '%s\n' "$_pcx" | grep -c 'Revise the plan and run plan-consensus again')|$(printf '%s\n' "$_pcx" | grep -Eci 'no round 3|once more')" "nonempty|1|0"
+_wfx="$(awk '/^\*\*Replacing Gate 1:/ { f = 1; print; next } f && /^\*\*/ { exit } f' "$HERE/../WORKFLOW.md")"
+check "WORKFLOW.md 'Replacing Gate 1': non-empty, states the 6-round cap and has no 'no round 3' or 'once more'" "$([ -n "$_wfx" ] && echo nonempty)|$(printf '%s\n' "$_wfx" | tr '\n' ' ' | grep -c 'Cap: 6 rounds and 9 attempts')|$(printf '%s\n' "$_wfx" | grep -Eci 'no round 3|once more')" "nonempty|1|0"
+for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md adapters/skill/SKILL.md; do
+  _ax="$(grep -E '^(- )?\*\*Autonomous mode' "$HERE/../$adapter")"
+  check "$adapter autonomous paragraph: non-empty, says up to 6 rounds, no 'no round 3' or 'once more'" "$([ -n "$_ax" ] && echo nonempty)|$(printf '%s\n' "$_ax" | grep -c 'up to 6 rounds')|$(printf '%s\n' "$_ax" | grep -Eci 'no round 3|once more')" "nonempty|1|0"
+done
+
 # docs and adapters state the mode (consistency clauses: WORKFLOW.md and every adapter)
 sf_clause "autonomous mode exists, is experimental and is off by default" 'autonomous mode.{0,200}(experimental|off by default)'
 sf_clause "autonomous mode needs the env key SHIP_FEATURE_AUTONOMOUS" 'SHIP_FEATURE_AUTONOMOUS'
@@ -2678,7 +2789,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=566
+EXPECTED=606
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

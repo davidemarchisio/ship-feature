@@ -146,22 +146,27 @@ exists, not a **PR** under cross-review, so "plan-qualifying" below is a distinc
   step 5's initial or closing round is the human's call, not a silent substitution. **If dropping the
   reviewer leaves zero reviewers, that is not a completed round at all** — stop and take the failure
   itself to Gate 1 (a plan nobody reviewed is not "the agreed plan").
-- **Cap: 2 rounds.** Round 1 is the full configured panel (`SHIP_FEATURE_PLAN_REVIEWERS`, or a
+- **Cap: 6 rounds.** Round 1 is the full configured panel (`SHIP_FEATURE_PLAN_REVIEWERS`, or a
   `--reviewers` override). If round 1 raises no Blocker and no plan-qualifying Should-fix, **stop — go straight
-  to Gate 1.** Do not spend a second round confirming an already-clean plan. If round 1 raised a
-  plan-qualifying finding, revise **once** and run round 2 against **the same full panel — never a
-  narrowed one.** A plan-review panel is 2–3 reviewers, too small to narrow the way step 5 narrows a PR
-  panel; unlike step 5, there is no narrow phase here at all.
+  to Gate 1.** Do not spend a second round confirming an already-clean plan. If a round raises a
+  plan-qualifying finding, revise the plan and **run the next round at once**, against **the same full
+  panel — never a narrowed one.** A plan-review panel is 2–3 reviewers, too small to narrow the way step
+  5 narrows a PR panel; unlike step 5, there is no narrow phase here at all.
+- **Iterate without asking.** Between rounds, do not ask the human "accept it as is, or one more
+  round?": **never ask the human for one more round.** A revision that no reviewer has seen is not a
+  reviewed plan, so **an unreviewed plan revision never reaches Gate 1.** Gate 1 gets the plan when one
+  round is clean on the latest revision.
 - **Plan-qualifying** means: a **Blocker**, or a **Should-fix** saying the plan is wrong about the
   existing tree, unsafe to execute as written, or **materially incomplete** — a missing edge case, an
   unhandled failure mode, or missing verification that would let a broken change ship. A **Nit**, or a
   Should-fix that only expresses a stylistic or approach preference without any of the above, does not
-  reopen a round.
-- **If round 2 still has an open plan-qualifying finding, stop — do not run a round 3 on your own.**
+  reopen a round. **Change the plan only for a Blocker or a plan-qualifying Should-fix:** every change
+  needs one more round, so a Nit or a non-qualifying Should-fix is recorded at Gate 1, not applied.
+- **If round 6 still has an open plan-qualifying finding, stop — do not run a round 7 on your own.**
   Write a short **disagreement summary**: for each open finding, the reviewer's objection, your
   classification, and the reason. Take that summary to Gate 1 instead of "the agreed plan."
-- **A human-authorized extra round is not a third autonomous round.** If the human reviews the
-  disagreement summary at Gate 1 and asks for one more pass, that round runs like round 2: it either
+- **A human-authorized extra round is not an agent-initiated round.** If the human reviews the
+  disagreement summary at Gate 1 and asks for one more pass, that round runs like any other: it either
   resolves and reaches Gate 1 clean, or it produces an updated disagreement summary and returns to
   Gate 1 again. There is no agent-initiated round beyond the cap — only a human-authorized one.
 
@@ -347,10 +352,13 @@ the session). One key alone is refused (exit `7`).
 **Replacing Gate 1: `ship-feature plan-consensus <plan-file> --autonomous`.** Runs the full
 `PLAN_REVIEWERS` panel (never narrowed, no `--reviewers`, a file path and never stdin). Every seat must
 end its review with exactly `VERDICT: clean` as the last line, and be the only `VERDICT:` line, in the
-SAME round. Cap: 2 rounds and 3 attempts per plan path; a round counts only when every seat returned a
-verdict. Exit `0` consensus (a result file bound to the plan's SHA-256 is written), `2` findings: revise
-and run once more, `3` a seat failed or gave no usable verdict, `5` stop and notify. There is no round 3
-and no reset. The panel is `PLAN_REVIEWERS` in the relay config. A relay-only seat in it, a value that
+SAME round. Cap: 6 rounds and 9 attempts per plan path; a round counts only when every seat returned a
+verdict, and an attempt is a call that dispatches the panel, so a seat failure spends an attempt that a
+round could use. Exit `0` consensus (a result file bound to the plan's SHA-256 is written), `2` findings:
+revise the plan and run `plan-consensus` again, `3` a seat failed or gave no usable verdict: run
+`plan-consensus` again (autonomous mode never drops a seat), `5` stop and notify, including the 6th round
+with findings and the last attempt (on the 9th attempt a result that would be `2` or `3` is `5`). No more
+rounds after the 6th and no reset. The panel is `PLAN_REVIEWERS` in the relay config. A relay-only seat in it, a value that
 names no seat, an unset `PLAN_REVIEWERS`, or a `SHIP_FEATURE_PLAN_REVIEWERS` override (environment or
 ship-feature config) that names a different set is exit `5`, before any seat runs. A counter that cannot
 be written also stops before the panel runs (exit `5`). A re-run after consensus on the same text, path
@@ -440,7 +448,12 @@ dispositions posted before each re-run, no `--reset`.
 **Residual risks.** A seat can print `VERDICT: clean` over a wrong review. Degraded seats vote. The
 author can write a false `Disputed findings: none`. The panel definition is a config file the agent
 can edit; the audit comment records who ran. A merge is not undone by the tool: roll back with a
-revert PR.
+revert PR. The dispatch budget per change before a stop: the plan side dispatches the panel at most 9
+times; the relay side at most 9 times (6 rounds plus 3 failed attempts, or 5 plus 4: the 4th failed
+attempt is the last dispatch, and a 7th round is never dispatched). A relay exit `4` updates neither
+counter: the tool does not record that call, and it is a stop, not a retry. Seat runs per change are at
+most the dispatches times the seats in the config: (9 × plan seats) + (9 × relay seats), 54 with 3 + 3
+seats.
 
 ---
 

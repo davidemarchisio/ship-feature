@@ -21,7 +21,7 @@
 #                            error.
 #   ship-feature plan-consensus <plan-file> --autonomous
 #                            EXPERIMENTAL. Gate 1 without a human: the full PLAN_REVIEWERS panel must all
-#                            return `VERDICT: clean` in one round (cap 2 rounds, 3 attempts). Needs
+#                            return `VERDICT: clean` in one round (cap 6 rounds, 9 attempts). Needs
 #                            SHIP_FEATURE_AUTONOMOUS=1. Exit 0 consensus, 2 revise, 3 seat failed, 5 stop, 7 refused.
 #   ship-feature relay --autonomous [..]
 #                            EXPERIMENTAL. Full-panel rounds only, verdict file at a computed path, one round
@@ -1255,6 +1255,15 @@ $SF_VERDICT_RULES"
     else echo ok > "$STATUS_DIR/$key"; fi
   }
 
+  # plan-consensus counts its attempt HERE: after every check above that can refuse the run (this
+  # function's own temp dir included) and right before the first seat starts, so only a dispatched
+  # panel spends an attempt. The write is checked: one that fails silently would leave the old value,
+  # and the cap would never bind.
+  if [ -n "${SF_ATTEMPT_FILE:-}" ]; then
+    case "${SF_ATTEMPT_N:-}" in ''|*[!0-9]*) echo "✖ plan-consensus: no valid attempt number to record. No reviewer ran. STOP and notify the human." >&2; return 5;; esac
+    sf_num_put "$SF_ATTEMPT_FILE" "$SF_ATTEMPT_N" || { echo "✖ plan-consensus: cannot record the attempt in ${SF_ATTEMPT_FILE%/*} (read-only or full?). No reviewer ran. STOP and notify the human." >&2; return 5; }
+  fi
+
   # Dispatch, de-duping the panel. `set -f` guards the word-split from pathname expansion
   # (an unquoted `$reviewers` would otherwise glob a value like `a*`).
   local r rk tool seen="" order="" warned_grok45high=0
@@ -1334,7 +1343,7 @@ $SF_VERDICT_RULES"
     return 3
   fi
   if [ -z "${SF_VERDICT_DIR:-}" ]; then
-    echo "✔ Plan review done — $ran/$ran reviewer(s) responded (cap: 2 rounds, same full panel both times). READ the findings: no Blocker/plan-qualifying Should-fix → straight to Gate 1. Was this round 1 with a plan-qualifying finding → revise once and re-run. Was this round 2 with a plan-qualifying finding still open → do not run a round 3 on your own — write a disagreement summary (objection, classification, reason) and take it to Gate 1 instead." >&2
+    echo "✔ Plan review done — $ran/$ran reviewer(s) responded (cap: 6 rounds, same full panel every time). READ the findings: no Blocker/plan-qualifying Should-fix → straight to Gate 1. A Blocker or plan-qualifying Should-fix → revise the plan and run the next round at once; never ask the human for one more round; an unreviewed plan revision never reaches Gate 1. Round 6 with a plan-qualifying finding still open → do not run a round 7 on your own — write a disagreement summary (objection, classification, reason) and take it to Gate 1 instead." >&2
   else
     echo "✔ Plan review done — $ran/$ran reviewer(s) responded." >&2
   fi
@@ -1356,8 +1365,8 @@ $SF_VERDICT_RULES"
 #   6 merge-gate check failed: STOP    7 refused: keys missing or kill switch present
 #   8 merged, but the audit comment was NOT posted: post it
 SF_AUTO_MAX_ROUNDS=6          # relay rounds per PR (full panel each), counted per PR not per SHA
-SF_AUTO_PLAN_MAX_ROUNDS=2     # plan-consensus rounds per plan
-SF_AUTO_PLAN_MAX_ATTEMPTS=3   # plan-consensus invocations per plan; the next one exits 5
+SF_AUTO_PLAN_MAX_ROUNDS=6     # plan-consensus rounds per plan, the same cap as the relay's
+SF_AUTO_PLAN_MAX_ATTEMPTS=9   # plan-consensus calls that dispatch the panel, per plan; the next one exits 5
 SF_AUTO_MAX_FAILS=4           # failed relay attempts per PR; at this count the next exits 4
 SF_AUDIT_MAX_BYTES=60000      # the audit comment stays under GitHub's comment size limit (65536)
 
@@ -1492,6 +1501,8 @@ cmd_plan_consensus() {
   done
   sf_auto_guard "$auto" || return 7
   [ -n "$file" ] && [ -f "$file" ] || die "plan-consensus needs an existing plan file."
+  # plan-review refuses an empty plan too, but only after the attempt is counted: refuse it here.
+  [ -n "$(tr -d '[:space:]' < "$file")" ] || die "plan-consensus: the plan file is empty: $file"
   load_config
   local panel seats s abs state key pdir
   panel="$(sf_auto_plan_panel)" || { echo "✖ plan-consensus: $panel" >&2; return 5; }
@@ -1522,26 +1533,33 @@ sf_plan_consensus_run() {
     return 0
   fi
   rounds="$(sf_num_get "$pdir/rounds")"; attempts="$(sf_num_get "$pdir/attempts")"
-  if [ "$rounds" -ge "$SF_AUTO_PLAN_MAX_ROUNDS" ]; then echo "✖ plan-consensus: $rounds rounds already ran for this plan (cap $SF_AUTO_PLAN_MAX_ROUNDS). STOP and notify the human; there is no round 3 and no reset." >&2; return 5; fi
+  if [ "$rounds" -ge "$SF_AUTO_PLAN_MAX_ROUNDS" ]; then echo "✖ plan-consensus: $rounds rounds already ran for this plan (cap $SF_AUTO_PLAN_MAX_ROUNDS). STOP and notify the human; no more rounds and no reset." >&2; return 5; fi
   if [ "$attempts" -ge "$SF_AUTO_PLAN_MAX_ATTEMPTS" ]; then echo "✖ plan-consensus: $attempts attempts already ran for this plan (cap $SF_AUTO_PLAN_MAX_ATTEMPTS). STOP and notify the human." >&2; return 5; fi
-  # Every counter write is checked BEFORE the panel runs: a write that fails silently would leave the
-  # old value, and the caps would never bind.
-  sf_num_put "$pdir/attempts" $((attempts + 1)) || { echo "✖ plan-consensus: cannot record the attempt in $pdir (read-only or full?). No reviewer ran. STOP and notify the human." >&2; return 5; }
 
   vdir="$(mktemp -d)" || { echo "✖ cannot create a temp dir" >&2; return 5; }
   # The plan is hashed BEFORE the panel reads it and again after: a clean result must describe the text
   # the reviewers actually saw, not a file edited under them.
   sha_before="$(sf_sha256 < "$file")"
+  # An attempt is a call that dispatches the panel: plan-review records it (SF_ATTEMPT_FILE) after every
+  # check that can refuse the run, right before the first seat starts, so a refused call spends nothing.
+  # A write that fails stops there with exit 5, before any seat runs.
+  # On the last attempt no later call can dispatch, so a result that would say "run again" (exit 2 or 3)
+  # is a stop (exit 5) instead. An all-clean round still exits 0.
+  local last=0; [ $((attempts + 1)) -ge "$SF_AUTO_PLAN_MAX_ATTEMPTS" ] && last=1
   local rc=0
-  ( export SF_VERDICT_DIR="$vdir" SHIP_FEATURE_PLAN_REVIEWERS="$seats"; cmd_plan_review "$file" ); rc=$?
+  ( export SF_VERDICT_DIR="$vdir" SHIP_FEATURE_PLAN_REVIEWERS="$seats" SF_ATTEMPT_FILE="$pdir/attempts" SF_ATTEMPT_N=$((attempts + 1)); cmd_plan_review "$file" ); rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -rf "$vdir"
-    if [ "$rc" = 3 ]; then echo "✖ plan-consensus: a seat failed — no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS). Run plan-consensus again; autonomous mode never drops a seat." >&2; return 3; fi
+    if [ "$rc" = 3 ]; then
+      if [ "$last" = 1 ]; then echo "✖ plan-consensus: a seat failed — no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS). No attempts left: STOP and notify the human." >&2; return 5; fi
+      echo "✖ plan-consensus: a seat failed — no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS). Run plan-consensus again; autonomous mode never drops a seat." >&2; return 3
+    fi
     return "$rc"
   fi
   sha_after="$(sf_sha256 < "$file")"
   if [ "$sha_before" != "$sha_after" ]; then
     rm -rf "$vdir"
+    if [ "$last" = 1 ]; then echo "✖ plan-consensus: the plan file changed while the panel was reading it — no consensus, no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS). No attempts left: STOP and notify the human." >&2; return 5; fi
     echo "✖ plan-consensus: the plan file changed while the panel was reading it — no consensus, no round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS)." >&2
     return 3
   fi
@@ -1556,7 +1574,8 @@ sf_plan_consensus_run() {
   done
   rm -rf "$vdir"
   if [ "$unknown" = 1 ]; then
-    echo "✖ plan-consensus: a seat gave no usable VERDICT line —$verdicts. No round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS)." >&2
+    if [ "$last" = 1 ]; then echo "✖ plan-consensus: a seat gave no usable VERDICT line —$verdicts. No round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS). No attempts left: STOP and notify the human." >&2; return 5; fi
+    echo "✖ plan-consensus: a seat gave no usable VERDICT line —$verdicts. No round counted (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS). Run plan-consensus again; autonomous mode never drops a seat." >&2
     return 3
   fi
   rounds=$((rounds + 1))
@@ -1576,7 +1595,10 @@ sf_plan_consensus_run() {
   if [ "$rounds" -ge "$SF_AUTO_PLAN_MAX_ROUNDS" ]; then
     echo "✖ plan-consensus: round $rounds still has findings —$verdicts. Cap reached: STOP and notify the human." >&2; return 5
   fi
-  echo "✖ plan-consensus: round $rounds has findings —$verdicts. Revise the plan and run it once more." >&2
+  if [ "$last" = 1 ]; then
+    echo "✖ plan-consensus: round $rounds of $SF_AUTO_PLAN_MAX_ROUNDS had findings (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS) —$verdicts. No attempts left: STOP and notify the human." >&2; return 5
+  fi
+  echo "✖ plan-consensus: round $rounds of $SF_AUTO_PLAN_MAX_ROUNDS had findings (attempt $((attempts + 1))/$SF_AUTO_PLAN_MAX_ATTEMPTS) —$verdicts. Revise the plan and run plan-consensus again." >&2
   return 2
 }
 

@@ -26,7 +26,7 @@ The essentials you must honor:
    the startup lines and say which reviewers actually ran**: bare `opencode` is a relay-only name
    here, so if your panel falls back to `SHIP_FEATURE_REVIEWERS` it is skipped with a warning and
    the round still exits `0`. A single reviewer via `codex exec --sandbox read-only` still works.
-   **Plan-review has its own 2-round cap**, distinct from the cross-review loop below — its
+   **Plan-review has its own 6-round cap**, distinct from the cross-review loop below — its
    **plan-qualifying** term is not the same as, and must not be conflated with, the "qualifying
    Should-fix" used in cross-review. A round is one
    `plan-review` call where every reviewer responded — exit `3` does not count as a round, and if the
@@ -35,13 +35,16 @@ The essentials you must honor:
    rather than silently substituting (if that leaves zero reviewers, it isn't a completed round —
    take the failure itself to Gate 1). Iterate only for a Blocker or a **plan-qualifying** Should-fix
    (the plan is wrong about the tree, unsafe, or materially incomplete — a missing edge case, failure
-   mode, or verification gap — not a style/approach preference). A clean round 1 skips straight to
-   Gate 1; do not spend a round confirming an already-clean plan. Round 2, if it happens, runs against
-   **the same full panel — never narrowed**. If round 2 still has an open plan-qualifying finding,
-   **stop — do not run a round 3 on your own**; write a disagreement summary (each reviewer's
-   objection, your classification, the reason) and bring it to Gate 1 instead of "the agreed plan." A
-   human-authorized extra round is not a third autonomous round — it resolves cleanly or produces an
-   updated disagreement summary and returns to Gate 1 again.
+   mode, or verification gap — not a style/approach preference). Change the plan only for a Blocker
+   or a plan-qualifying Should-fix: every change needs one more round, so a Nit is recorded at Gate 1,
+   not applied. A clean round 1 skips straight to Gate 1; do not spend a round confirming an
+   already-clean plan. After a round with a plan-qualifying finding, revise the plan and **run the next
+   round at once**, against **the same full panel — never narrowed**; **never ask the human for one
+   more round**, because **an unreviewed plan revision never reaches Gate 1**. If round 6 still has an
+   open plan-qualifying finding, **stop — do not run a round 7 on your own**; write a disagreement
+   summary (each reviewer's objection, your classification, the reason) and bring it to Gate 1 instead
+   of "the agreed plan." A human-authorized extra round is not an agent-initiated round — it resolves
+   cleanly or produces an updated disagreement summary and returns to Gate 1 again.
 2. 🚦 **Stop for the human to approve the plan** — the agreed plan, or the plan plus a disagreement
    summary if the plan-review cap was hit with a finding still open (the human then accepts it as
    classified, authorizes one more round with explicit reasoning, or drops the change). Do not write
@@ -90,6 +93,6 @@ The essentials you must honor:
 For a trivial change, the human may say `--light` (may skip only the plan review — never the worktree,
 tests, cross-review, or merge gate).
 
-**Autonomous mode (experimental, off by default):** only when the human launched the session with `SHIP_FEATURE_AUTONOMOUS=1` AND the commands are given `--autonomous` (`plan-consensus`, `relay --autonomous`, `merge-gate`). The rules, the eight merge-gate checks, the kill switch and the stop-and-notify duty are in the "Autonomous mode" section of `WORKFLOW.md`; read it before using any of them. Without that variable, everything above stands and the agent never self-merges.
+**Autonomous mode (experimental, off by default):** only when the human launched the session with `SHIP_FEATURE_AUTONOMOUS=1` AND the commands are given `--autonomous` (`plan-consensus`, `relay --autonomous`, `merge-gate`). The rules, the eight merge-gate checks, the kill switch and the stop-and-notify duty are in the "Autonomous mode" section of `WORKFLOW.md`; read it before using any of them. `plan-consensus` runs up to 6 rounds: exit 2 means revise the plan and run `plan-consensus` again. Without that variable, everything above stands and the agent never self-merges.
 
 Read `WORKFLOW.md` now and follow it step by step.

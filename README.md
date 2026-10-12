@@ -112,7 +112,7 @@ The authoritative version is [`WORKFLOW.md`](WORKFLOW.md). At a glance:
 | Step | What happens | Gate |
 |:----:|--------------|:--|
 | 1 | **Plan** the change | |
-| 2 | A second agent **reviews the plan** (capped at 2 rounds; open disagreement → Gate 1) | |
+| 2 | A second agent **reviews the plan** (up to 6 rounds, no question between rounds; open disagreement → Gate 1) | |
 | 3 | You **approve the plan** | 🚦 **human gate** |
 | 4 | **Implement** in a worktree → open a **PR** | |
 | 5 | **Cross-review + tests** — the panel gets the **plan**, and iterates only for a Blocker or a *qualifying* Should-fix | |
