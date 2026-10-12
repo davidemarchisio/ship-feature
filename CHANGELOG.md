@@ -10,13 +10,24 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 - **Autonomous mode (experimental, off by default).** Three opt-in commands close the loop without a
   human gate: `ship-feature plan-consensus <plan> --autonomous` (the full plan panel must all return
-  `VERDICT: clean` in one round; 2 rounds, 3 attempts), `ship-feature relay --autonomous` (full-panel
+  `VERDICT: clean` in one round; 6 rounds, 9 attempts), `ship-feature relay --autonomous` (full-panel
   rounds only, a computed verdict-file path, one round counter per PR, cap 6) and
   `ship-feature merge-gate <pr> --autonomous [--merge]` (eight fail-closed checks, then one
   `gh pr merge --merge --match-head-commit`, then an audit comment). It needs BOTH the flag and
   `SHIP_FEATURE_AUTONOMOUS=1`; `~/.config/ship-feature/AUTONOMOUS_OFF` stops it; `sensitive-paths` and
   `allow-no-ci` live next to it. It is a guard against accidents, not a security boundary against the
   agent (see `WORKFLOW.md`). Needs a `pr-review-relay` with `--verdict-file`. Defaults are unchanged.
+
+### Changed
+
+- **Plan review iterates to consensus, up to 6 rounds, without asking.** After a round with a Blocker or
+  a plan-qualifying Should-fix the agent revises the plan and runs the next round at once, with the same
+  full panel; it never asks the human for one more round, and an unreviewed plan revision never reaches
+  Gate 1. Only a Blocker or a plan-qualifying Should-fix changes the plan; a Nit is recorded at Gate 1.
+  Round 6 with a finding still open stops: the plan and a disagreement summary go to Gate 1. Was a
+  2-round cap. `plan-consensus --autonomous` gets the same cap (6 rounds, 9 attempts); an attempt is now
+  counted only when the panel is dispatched, the last attempt stops (exit 5) instead of asking for
+  another run, and the "no usable verdict" line says to run again. Fizzy #1351.
 
 ### Fixed
 

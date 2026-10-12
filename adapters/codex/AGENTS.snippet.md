@@ -16,7 +16,7 @@ Non-negotiable points:
   scratchpad (`/tmp` is tmpfs on many setups: a reboot destroys it, and the plan has to outlive
   every review round).
 - Plan first; have it reviewed; then **stop for explicit human approval before writing to the source repo**.
-- **Plan-review has its own 2-round cap** (distinct from the PR cross-review loop below — its
+- **Plan-review has its own 6-round cap** (distinct from the PR cross-review loop below — its
   **plan-qualifying** term is not the same as, and must not be conflated with, the "qualifying
   Should-fix" used in cross-review). A round is
   one `plan-review` call where every reviewer responded — exit `3` does not count as a round, and if
@@ -25,13 +25,16 @@ Non-negotiable points:
   than silently substituting (if that leaves zero reviewers, it isn't a completed round — take the
   failure itself to Gate 1). Iterate only for a Blocker or a **plan-qualifying** Should-fix (the plan
   is wrong about the tree, unsafe, or materially incomplete — a missing edge case, failure mode, or
-  verification gap — not a style/approach preference). A clean round 1 skips straight to Gate 1. Round
-  2, if it happens, runs against **the same full panel — never narrowed**. If round 2 still has an open
-  plan-qualifying finding, **stop — do not run a round 3 on your own**; bring the plan plus a
-  disagreement summary (objection, your classification, reason) to Gate 1, where the human can accept
-  it as classified, authorize one more round with explicit reasoning, or drop the change. A
-  human-authorized extra round is not a third autonomous round: it either resolves cleanly, or produces
-  an updated disagreement summary and returns to Gate 1 again.
+  verification gap — not a style/approach preference). Change the plan only for a Blocker or a
+  plan-qualifying Should-fix: every change needs one more round, so a Nit is recorded at Gate 1, not
+  applied. A clean round 1 skips straight to Gate 1. After a round with a plan-qualifying finding,
+  revise the plan and **run the next round at once**, against **the same full panel — never narrowed**;
+  **never ask the human for one more round**, because **an unreviewed plan revision never reaches Gate
+  1**. If round 6 still has an open plan-qualifying finding, **stop — do not run a round 7 on your
+  own**; bring the plan plus a disagreement summary (objection, your classification, reason) to Gate 1,
+  where the human can accept it as classified, authorize one more round with explicit reasoning, or drop
+  the change. A human-authorized extra round is not an agent-initiated round: it either resolves
+  cleanly, or produces an updated disagreement summary and returns to Gate 1 again.
 - Implement in a **git worktree**, stage explicit paths, open a PR.
 - Cross-review with `ship-feature relay --author codex --context-file ~/.config/ship-feature/plans/<repo>-<slug>.md`
   — **no `--reviewers`**: `relay` injects your configured quorum, `SHIP_FEATURE_REVIEWERS` (set in
@@ -72,5 +75,5 @@ Non-negotiable points:
 - Disputed classifications do not block the stop; they go to **Gate 2** with both positions.
   Still two gates, never three.
 - **The human merges** — never self-merge.
-- **Autonomous mode (experimental, off by default):** only with `SHIP_FEATURE_AUTONOMOUS=1` set by the human AND `--autonomous` on `plan-consensus`, `relay` and `merge-gate`. See the "Autonomous mode" section of `WORKFLOW.md` for the rules, the kill switch and the stop-and-notify duty. Without that variable, never self-merge.
+- **Autonomous mode (experimental, off by default):** only with `SHIP_FEATURE_AUTONOMOUS=1` set by the human AND `--autonomous` on `plan-consensus`, `relay` and `merge-gate`. See the "Autonomous mode" section of `WORKFLOW.md` for the rules, the kill switch and the stop-and-notify duty. `plan-consensus` runs up to 6 rounds: exit 2 means revise the plan and run `plan-consensus` again. Without that variable, never self-merge.
 # <<< ship-feature <<<
