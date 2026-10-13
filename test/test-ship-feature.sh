@@ -4910,6 +4910,168 @@ sf_clause "autonomous mode needs the env key SHIP_FEATURE_AUTONOMOUS" 'SHIP_FEAT
 grep -q 'AUTONOMOUS_OFF' "$HERE/../WORKFLOW.md" && grep -q 'Plan-Key:' "$HERE/../WORKFLOW.md" && grep -q 'Disputed findings: none' "$HERE/../WORKFLOW.md" && grep -q -- '- DISPUTED:' "$HERE/../WORKFLOW.md" && grep -q 'Disposition,' "$HERE/../WORKFLOW.md"
 check "WORKFLOW.md documents the kill switch, Plan-Key and the disposition/dispute line formats" $? 0
 
+# --- this repo's own gate: .githooks/pre-push and bin/ci ----------------------
+# The hook runs bin/ci on every push, and bin/ci runs this suite as its last stage. So no case here
+# reaches the suite stage of the real checkout: the hook cases run a stub bin/ci, and the bin/ci
+# cases either fail before the suite stage or run a copy of bin/ci whose ROOT is a temp repo with a
+# stub suite. Every fixture lives under $WORK, never in the checkout, so the hook's "the gate
+# created untracked files" check cannot fire on a leftover.
+OWN="$HERE/.."
+
+_own_modes="$(git -C "$OWN" ls-files -s -- .githooks/pre-push bin/ci | awk '{ printf "%s %s;", $1, $4 }')"
+check "own gate: .githooks/pre-push and bin/ci are in the index with mode 100755" "$_own_modes" "100755 .githooks/pre-push;100755 bin/ci;"
+
+# The hook, by behavior: a temp repo with a copy of the committed hook, a stub bin/ci that leaves a
+# marker and exits with the code in $HK/rc, and a bare remote. Two commits, so HEAD~1 exists. The
+# files are executable on disk AND recorded 100755: git skips a hook file that is not executable on
+# disk, whatever the index says. core.hooksPath is the isolation's slot 2, set to .githooks for
+# the push only, as pf() does for preflight.
+HK="$WORK/own-hook"
+mkdir -p "$HK/repo/.githooks" "$HK/repo/bin"
+git init -q --bare "$HK/remote.git"
+git init -q -b main "$HK/repo"
+cp "$OWN/.githooks/pre-push" "$HK/repo/.githooks/pre-push"
+printf '#!/bin/sh\n: >"%s/ran"\nexit "$(cat "%s/rc")"\n' "$HK" "$HK" >"$HK/repo/bin/ci"
+printf 'ignored.txt\n' >"$HK/repo/.gitignore"
+chmod +x "$HK/repo/.githooks/pre-push" "$HK/repo/bin/ci"
+(
+  cd "$HK/repo" && git add --chmod=+x .githooks/pre-push bin/ci && git add .gitignore && git commit -q -m one &&
+    echo x >f && git add f && git commit -q -m two && git remote add origin "$HK/remote.git"
+)
+hk_push() { # hk_push <refspec>: sets _hk_rc; output in $HK/out
+  rm -f "$HK/ran"
+  (cd "$HK/repo" && GIT_CONFIG_VALUE_2=.githooks git push origin "$1" >"$HK/out" 2>&1)
+  _hk_rc=$?
+  [ "$_hk_rc" = 0 ] || _hk_rc=nonzero
+}
+hk_ran() { if [ -e "$HK/ran" ]; then echo ran; else echo not-run; fi; }
+hk_remote() { git -C "$HK/remote.git" rev-parse -q --verify "refs/heads/${1:-main}" || echo none; }
+hk_said() { if grep -qF -- "$1" "$HK/out"; then echo said; else echo silent; fi; }
+
+echo 0 >"$HK/rc"
+hk_push HEAD:main
+_hk_h1="$(git -C "$HK/repo" rev-parse HEAD)"
+check "own hook H1: bin/ci exits 0 -> the push goes through, bin/ci ran, the remote has HEAD" "$_hk_rc|$(hk_ran)|$(hk_remote)" "0|ran|$_hk_h1"
+# A new commit first, so the push carries code: pushing the same HEAD again sends nothing, and the
+# hook then exits 0 without running the gate.
+(cd "$HK/repo" && echo y >>f && git commit -q -am three)
+echo 1 >"$HK/rc"
+hk_push HEAD:main
+check "own hook H2: bin/ci exits 1 -> the push is refused, bin/ci ran, the remote stays at the H1 commit" "$_hk_rc|$(hk_ran)|$(hk_remote)" "nonzero|ran|$_hk_h1"
+echo 0 >"$HK/rc"
+echo z >>"$HK/repo/f"
+hk_push HEAD:main
+check "own hook H3: a dirty tracked file -> refused before bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'working tree has uncommitted changes')" "nonzero|not-run|$_hk_h1|said"
+git -C "$HK/repo" checkout -q -- f
+: >"$HK/repo/stray"
+hk_push HEAD:main
+check "own hook H4: an untracked file no rule ignores -> refused before bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'untracked files present')" "nonzero|not-run|$_hk_h1|said"
+rm -f "$HK/repo/stray"
+: >"$HK/repo/ignored.txt"
+hk_push HEAD:main
+check "own hook H5: an untracked file .gitignore covers does not block -> the push goes through, bin/ci ran" "$_hk_rc|$(hk_ran)|$(hk_remote)" "0|ran|$(git -C "$HK/repo" rev-parse HEAD)"
+rm -f "$HK/repo/ignored.txt"
+hk_push HEAD~1:refs/heads/other
+check "own hook H6: a push of a commit that is not HEAD -> refused before bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote other)|$(hk_said 'these refs are not your checked-out HEAD')" "nonzero|not-run|none|said"
+
+# bin/ci, with stub tools first on PATH. Each stub logs EVERY call, --version included, answers
+# --version as the real tool does with the version the case sets, and otherwise exits with the code
+# the case sets (default 1).
+CIS="$WORK/own-ci-stubs"
+mkdir -p "$CIS"
+cat >"$CIS/shellcheck" <<'EOF'
+#!/bin/sh
+echo "shellcheck $*" >>"$CISTUB_LOG"
+if [ "$1" = "--version" ]; then
+  printf 'ShellCheck - shell script analysis tool\nversion: %s\nlicense: GNU General Public License, version 3\nwebsite: https://www.shellcheck.net\n' "$CISTUB_SC_VERSION"
+  exit 0
+fi
+exit "${CISTUB_SC_RC:-1}"
+EOF
+cat >"$CIS/shfmt" <<'EOF'
+#!/bin/sh
+echo "shfmt $*" >>"$CISTUB_LOG"
+if [ "$1" = "--version" ]; then
+  printf 'v%s\n' "$CISTUB_FMT_VERSION"
+  exit 0
+fi
+exit "${CISTUB_FMT_RC:-1}"
+EOF
+chmod +x "$CIS/shellcheck" "$CIS/shfmt"
+_sc_pin="$(sed -n 's/^shellcheck[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$OWN/mise.toml")"
+_fmt_pin="$(sed -n 's/^shfmt[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$OWN/mise.toml")"
+export CISTUB_LOG="$WORK/own-ci.log" CISTUB_LOG2="$WORK/own-ci.log2"
+ci_run() { # ci_run <bin/ci>: env CISTUB_* from the caller; sets _ci_rc; output in $WORK/own-ci.out
+  : >"$CISTUB_LOG"
+  : >"$CISTUB_LOG2"
+  PATH="$CIS:$PATH" bash "$1" >"$WORK/own-ci.out" 2>&1
+  _ci_rc=$?
+  [ "$_ci_rc" = 0 ] || _ci_rc=nonzero
+}
+ci_said() { if grep -qF -- "$1" "$WORK/own-ci.out"; then echo said; else echo silent; fi; }
+# ci_calls <tool>: every call of one tool. ci_work <tool>: its calls other than --version.
+ci_calls() { grep -c "^$1 " "$CISTUB_LOG" | tr -d ' '; }
+ci_work() { grep "^$1 " "$CISTUB_LOG" | grep -vc ' --version$' | tr -d ' '; }
+# ci_files <tool>: "ok" when its non-version call lists every shell file and no other file.
+ci_files() {
+  local line f miss=""
+  line=" $(grep "^$1 " "$CISTUB_LOG" | grep -v ' --version$' | head -n 1) "
+  for f in .githooks/pre-push bin/ci bin/ship-feature install.sh scripts/scan-generic.sh scripts/scan-personal-data.sh test/test-ship-feature.sh; do
+    case "$line" in *" ./$f "*) ;; *) miss="$miss missing:$f" ;; esac
+  done
+  for f in README.md CHANGELOG.md LICENSE mise.toml test/fixtures/leaky.sample; do
+    case "$line" in *"$f"*) miss="$miss extra:$f" ;; esac
+  done
+  echo "${miss:-ok}"
+}
+
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION=0.0.1 ci_run "$OWN/bin/ci"
+check "own bin/ci C2: shfmt at another version -> fails at the tools stage, names both versions, runs no tool work and no suite" "$_ci_rc|$(ci_said "shfmt is v0.0.1, mise.toml pins v$_fmt_pin")|$(ci_work shellcheck)|$(ci_work shfmt)|$(ci_said '==> tests')" "nonzero|said|0|0|silent"
+CISTUB_SC_VERSION=0.0.1 CISTUB_FMT_VERSION="$_fmt_pin" ci_run "$OWN/bin/ci"
+check "own bin/ci C3: shellcheck at another version -> fails at the tools stage, names both versions, runs no tool work and no suite" "$_ci_rc|$(ci_said "shellcheck is 0.0.1, mise.toml pins $_sc_pin")|$(ci_work shellcheck)|$(ci_work shfmt)|$(ci_said '==> tests')" "nonzero|said|0|0|silent"
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=1 ci_run "$OWN/bin/ci"
+check "own bin/ci C4: a lint finding -> fails at the lint stage, one shellcheck call over every shell file, no format call" "$_ci_rc|$(ci_said 'bin/ci [lint]')|$(ci_work shellcheck)|$(ci_work shfmt)|$(ci_files shellcheck)" "nonzero|said|1|0|ok"
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=1 ci_run "$OWN/bin/ci"
+check "own bin/ci C5: a format difference -> fails at the format stage, one shfmt -d call over every shell file" "$_ci_rc|$(ci_said 'bin/ci [format]')|$(ci_work shfmt)|$(grep '^shfmt ' "$CISTUB_LOG" | grep -c ' -d ' | tr -d ' ')|$(ci_files shfmt)" "nonzero|said|1|1|ok"
+
+# A temp repo laid out like this one, with a copy of the real bin/ci (its ROOT is the temp repo).
+# bin/ci finds shell files through git ls-files, so every file a case needs it to see is committed.
+ci_repo() { # ci_repo <name> <mise.toml content>: prints the repo path
+  local r="$WORK/own-ci-$1"
+  mkdir -p "$r/bin" "$r/scripts" "$r/test"
+  git init -q "$r"
+  cp "$OWN/bin/ci" "$r/bin/ci"
+  printf '%s\n' "$2" >"$r/mise.toml"
+  echo "$r"
+}
+ci_commit() { # ci_commit <repo> [extra paths]: commits bin/ci, mise.toml and the named paths
+  local r="$1"
+  shift
+  (cd "$r" && git add --chmod=+x bin/ci && git add mise.toml "$@" && git commit -q -m fixture)
+}
+
+_r="$(ci_repo nopin "$(printf '[tools]\nshellcheck = "%s"\n' "$_sc_pin")")"
+ci_commit "$_r"
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" ci_run "$_r/bin/ci"
+check "own bin/ci C6: mise.toml with no shfmt pin -> fails and names it, before any tool is called" "$_ci_rc|$(ci_said 'mise.toml must pin shfmt exactly once')|$(ci_calls shellcheck)|$(ci_calls shfmt)" "nonzero|said|0|0"
+
+_r="$(ci_repo syntax "$(cat "$OWN/mise.toml")")"
+printf '#!/usr/bin/env bash\nif then\n' >"$_r/scripts/bad.sh"
+ci_commit "$_r" scripts/bad.sh
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 ci_run "$_r/bin/ci"
+check "own bin/ci C7: a syntax error -> fails at the syntax stage and names the file; lint and format do not run" "$_ci_rc|$(ci_said 'bin/ci [syntax]: bash -n failed on ./scripts/bad.sh')|$(ci_work shellcheck)|$(ci_work shfmt)" "nonzero|said|0|0"
+
+_r="$(ci_repo stages "$(cat "$OWN/mise.toml")")"
+printf '#!/usr/bin/env bash\necho scan >>"$CISTUB_LOG2"\nexit "${CISTUB_SCAN_RC:-0}"\n' >"$_r/scripts/scan-generic.sh"
+printf '#!/usr/bin/env bash\necho suite >>"$CISTUB_LOG2"\nexit "${CISTUB_SUITE_RC:-0}"\n' >"$_r/test/test-ship-feature.sh"
+ci_commit "$_r" scripts/scan-generic.sh test/test-ship-feature.sh
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 ci_run "$_r/bin/ci"
+check "own bin/ci C8a: every stage passes -> exit 0, the leak scan runs, then the suite" "$_ci_rc|$(tr '\n' ' ' <"$CISTUB_LOG2")" "0|scan suite "
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_SCAN_RC=1 ci_run "$_r/bin/ci"
+check "own bin/ci C8b: a leak-scan failure -> fails at that stage, the suite does not run" "$_ci_rc|$(ci_said 'bin/ci [leak scan]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan "
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_SUITE_RC=1 ci_run "$_r/bin/ci"
+check "own bin/ci C8c: a suite failure -> fails at the tests stage" "$_ci_rc|$(ci_said 'bin/ci [tests]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan suite "
+
 echo "-------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 # FAIL is checked FIRST: when a case fails, PASS is naturally short of the total, and reporting that
@@ -4918,7 +5080,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=658
+EXPECTED=674
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
