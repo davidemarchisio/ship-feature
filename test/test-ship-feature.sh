@@ -4937,7 +4937,8 @@ _own_modes="$(git -C "$OWN" ls-files -s -- .githooks/pre-push bin/ci | awk '{ pr
 check "own gate: .githooks/pre-push and bin/ci are in the index with mode 100755" "$_own_modes" "100755 .githooks/pre-push;100755 bin/ci;"
 
 # The hook, by behavior: a temp repo with a copy of the committed hook, a stub bin/ci that leaves a
-# marker and exits with the code in $HK/rc, and a bare remote. Two commits, so HEAD~1 exists. The
+# marker, runs the shell lines in $HK/act (empty unless a case needs the gate to change something)
+# and exits with the code in $HK/rc, and a bare remote. Two commits, so HEAD~1 exists. The
 # files are executable on disk AND recorded 100755: git skips a hook file that is not executable on
 # disk, whatever the index says. core.hooksPath is the isolation's slot 2, set to .githooks for
 # the push only, as pf() does for preflight.
@@ -4946,7 +4947,8 @@ mkdir -p "$HK/repo/.githooks" "$HK/repo/bin"
 git init -q --bare "$HK/remote.git"
 git init -q -b main "$HK/repo"
 cp "$OWN/.githooks/pre-push" "$HK/repo/.githooks/pre-push"
-printf '#!/bin/sh\n: >"%s/ran"\nexit "$(cat "%s/rc")"\n' "$HK" "$HK" >"$HK/repo/bin/ci"
+printf '#!/bin/sh\n: >"%s/ran"\n. "%s/act"\nexit "$(cat "%s/rc")"\n' "$HK" "$HK" "$HK" >"$HK/repo/bin/ci"
+: >"$HK/act"
 printf 'ignored.txt\n' >"$HK/repo/.gitignore"
 chmod +x "$HK/repo/.githooks/pre-push" "$HK/repo/bin/ci"
 (
@@ -4988,6 +4990,54 @@ check "own hook H5: an untracked file .gitignore covers does not block -> the pu
 rm -f "$HK/repo/ignored.txt"
 hk_push HEAD~1:refs/heads/other
 check "own hook H6: a push of a commit that is not HEAD -> refused before bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote other)|$(hk_said 'these refs are not your checked-out HEAD')" "nonzero|not-run|none|said"
+# The remote has HEAD since H5, so git runs the hook with no stdin lines. A failing gate shows that
+# the hook did not run it.
+echo 1 >"$HK/rc"
+hk_push HEAD:main
+check "own hook H7: a push with nothing to send -> exits 0, bin/ci does not run" "$_hk_rc|$(hk_ran)|$(hk_remote)" "0|not-run|$(git -C "$HK/repo" rev-parse HEAD)"
+git -C "$HK/remote.git" update-ref refs/heads/gone "$_hk_h1"
+echo z >>"$HK/repo/f"
+hk_push :refs/heads/gone
+check "own hook H8: a push that only deletes a ref, from a dirty tree with a failing gate -> goes through, bin/ci does not run" "$_hk_rc|$(hk_ran)|$(hk_remote gone)" "0|not-run|none"
+git -C "$HK/repo" checkout -q -- f
+# The gate passes but changes the checkout: each change is refused after bin/ci. A new commit first,
+# so the push carries code; every case is refused, so the remote stays at HEAD~1.
+(cd "$HK/repo" && echo v >>f && git commit -q -am four)
+_hk_h7="$(git -C "$HK/repo" rev-parse HEAD~1)"
+echo 0 >"$HK/rc"
+echo 'echo w >>f' >"$HK/act"
+hk_push HEAD:main
+check "own hook H9: bin/ci passes but edits a tracked file -> refused after bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'the gate MODIFIED tracked files')" "nonzero|ran|$_hk_h7|said"
+git -C "$HK/repo" checkout -q -- f
+echo ': >made-by-ci' >"$HK/act"
+hk_push HEAD:main
+check "own hook H10: bin/ci passes but creates an untracked file -> refused after bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'the gate CREATED untracked files')" "nonzero|ran|$_hk_h7|said"
+rm -f "$HK/repo/made-by-ci"
+echo 'git checkout -q --detach HEAD~1' >"$HK/act"
+hk_push HEAD:main
+check "own hook H11: bin/ci passes but moves HEAD -> refused after bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'the gate MOVED HEAD')" "nonzero|ran|$_hk_h7|said"
+git -C "$HK/repo" checkout -q main
+: >"$HK/act"
+# git diff does not look at a file marked assume-unchanged or skip-worktree, so an edit to one would
+# pass every tree check: the hook refuses the mark itself, and names the file.
+git -C "$HK/repo" update-index --assume-unchanged f
+echo w >>"$HK/repo/f"
+hk_push HEAD:main
+check "own hook H12: an edited file marked assume-unchanged -> refused before bin/ci, names the file" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'there are tracked files marked assume-unchanged or skip-worktree')|$(grep -cx '  f' "$HK/out")" "nonzero|not-run|$_hk_h7|said|1"
+git -C "$HK/repo" update-index --no-assume-unchanged f
+git -C "$HK/repo" checkout -q -- f
+git -C "$HK/repo" update-index --skip-worktree f
+echo w >>"$HK/repo/f"
+hk_push HEAD:main
+check "own hook H13: an edited file marked skip-worktree -> refused before bin/ci, names the file" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'there are tracked files marked assume-unchanged or skip-worktree')|$(grep -cx '  f' "$HK/out")" "nonzero|not-run|$_hk_h7|said|1"
+git -C "$HK/repo" update-index --no-skip-worktree f
+git -C "$HK/repo" checkout -q -- f
+echo 'git update-index --assume-unchanged f && echo w >>f' >"$HK/act"
+hk_push HEAD:main
+check "own hook H14: bin/ci passes but marks a file assume-unchanged and edits it -> refused after bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'the gate left tracked files marked assume-unchanged or skip-worktree')" "nonzero|ran|$_hk_h7|said"
+git -C "$HK/repo" update-index --no-assume-unchanged f
+git -C "$HK/repo" checkout -q -- f
+: >"$HK/act"
 
 # bin/ci, with stub tools first on PATH. Each stub logs EVERY call, --version included, answers
 # --version as the real tool does with the version the case sets, and otherwise exits with the code
@@ -5045,9 +5095,9 @@ check "own bin/ci C2: shfmt at another version -> fails at the tools stage, name
 CISTUB_SC_VERSION=0.0.1 CISTUB_FMT_VERSION="$_fmt_pin" ci_run "$OWN/bin/ci"
 check "own bin/ci C3: shellcheck at another version -> fails at the tools stage, names both versions, runs no tool work and no suite" "$_ci_rc|$(ci_said "shellcheck is 0.0.1, mise.toml pins $_sc_pin")|$(ci_work shellcheck)|$(ci_work shfmt)|$(ci_said '==> tests')" "nonzero|said|0|0|silent"
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=1 ci_run "$OWN/bin/ci"
-check "own bin/ci C4: a lint finding -> fails at the lint stage, one shellcheck call over every shell file, no format call" "$_ci_rc|$(ci_said 'bin/ci [lint]')|$(ci_work shellcheck)|$(ci_work shfmt)|$(ci_files shellcheck)" "nonzero|said|1|0|ok"
+check "own bin/ci C4: a lint finding -> fails at the lint stage, one shellcheck -S warning call over every shell file, no format call" "$_ci_rc|$(ci_said 'bin/ci [lint]')|$(ci_work shellcheck)|$(grep -c '^shellcheck -S warning \./' "$CISTUB_LOG" | tr -d ' ')|$(ci_work shfmt)|$(ci_files shellcheck)" "nonzero|said|1|1|0|ok"
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=1 ci_run "$OWN/bin/ci"
-check "own bin/ci C5: a format difference -> fails at the format stage, one shfmt -d call over every shell file" "$_ci_rc|$(ci_said 'bin/ci [format]')|$(ci_work shfmt)|$(grep '^shfmt ' "$CISTUB_LOG" | grep -c ' -d ' | tr -d ' ')|$(ci_files shfmt)" "nonzero|said|1|1|ok"
+check "own bin/ci C5: a format difference -> fails at the format stage, one shfmt -i 2 -ci -d call over every shell file" "$_ci_rc|$(ci_said 'bin/ci [format]')|$(ci_work shfmt)|$(grep -c '^shfmt -i 2 -ci -d \./' "$CISTUB_LOG" | tr -d ' ')|$(ci_files shfmt)" "nonzero|said|1|1|ok"
 
 # A temp repo laid out like this one, with a copy of the real bin/ci (its ROOT is the temp repo).
 # bin/ci finds shell files through git ls-files, so every file a case needs it to see is committed.
@@ -5095,7 +5145,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=675
+EXPECTED=683
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

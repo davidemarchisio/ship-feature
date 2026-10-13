@@ -18,7 +18,8 @@ All notable changes to **ship-feature** are documented here. This project follow
   `allow-no-ci` live next to it. It is a guard against accidents, not a security boundary against the
   agent (see `WORKFLOW.md`). Needs a `pr-review-relay` with `--verdict-file`. Defaults are unchanged.
 - **ship-feature has its own pre-push hook and `bin/ci`.** `.githooks/pre-push` (the app-tools
-  portfolio template) runs `bin/ci` on every push: `bash -n`, `shellcheck -S warning`, `shfmt -i 2 -ci
+  portfolio template, plus a refusal of tracked files marked assume-unchanged or skip-worktree, which
+  `git diff` cannot see) runs `bin/ci` on every push: `bash -n`, `shellcheck -S warning`, `shfmt -i 2 -ci
   -d` on every tracked shell file, the leak scan, then the suite. `shellcheck` 0.11.0 and `shfmt` 3.14.1
   are pinned in `mise.toml`, and `bin/ci` refuses any other version. CI runs the same `bin/ci` on ubuntu
   and macOS. The existing code got its 19 shellcheck warnings fixed and one reformat commit (tool output

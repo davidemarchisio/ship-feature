@@ -346,7 +346,8 @@ Then every agent or person who pushes from that clone needs the pinned tools on 
 the push is refused with the install hint. The fix is to install them, never to skip the hook. The
 hook also refuses a push of anything but the checked-out `HEAD`, a dirty tree, and an untracked file
 that no ignore rule covers (`.gitignore`, `.git/info/exclude` or your global ignore file): commit
-it, delete it, or ignore it. A push takes about 2 minutes, most of it the suite.
+it, delete it, or ignore it. It refuses a tracked file marked assume-unchanged or skip-worktree too,
+because `git diff` cannot see an edit to one. A push takes about 2 minutes, most of it the suite.
 
 One commit only reformatted the shell code with shfmt, and
 [`.git-blame-ignore-revs`](.git-blame-ignore-revs) lists it. GitHub skips it in blame on its own; for

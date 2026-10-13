@@ -100,6 +100,21 @@ if [ -n "$pushing_other" ]; then
   exit 1
 fi
 
+# `git diff` does not look at a tracked file marked assume-unchanged or skip-worktree (sparse checkout
+# sets the second): an edit to one is invisible to every tree check below, so the gate could test
+# bytes that are not the commit being pushed. Refuse while any file has such a mark, before the gate
+# and again after it.
+refuse_marked() { # refuse_marked <who>
+  local marked
+  marked="$(git ls-files -v | LC_ALL=C grep -E '^([a-z]|S) ' | cut -c3- || true)"
+  [ -z "$marked" ] && return 0
+  echo "pre-push: $1 tracked files marked assume-unchanged or skip-worktree — git diff cannot see edits to them, so a passing gate would not prove the pushed code:" >&2
+  printf '%s\n' "$marked" | sed 's/^/  /' >&2
+  echo "Clear the marks (git update-index --no-assume-unchanged / --no-skip-worktree <file>), then push again." >&2
+  exit 1
+}
+refuse_marked "there are"
+
 # Same reasoning one step further in: if the tree is dirty, the gate tests uncommitted changes while
 # a different (possibly broken) committed state is what actually gets pushed. Untracked files count
 # — a stray config, fixture or source file changes what bin/ci does just as much as a tracked edit.
@@ -159,6 +174,7 @@ env "${unset_flags[@]}" CI_MODE=push "$root/bin/ci"
 #
 # This is not theoretical: `bundle install` in a fresh worktree dropped a bundler line from
 # Gemfile.lock on 2026-08-01, and only the up-front check caught it, by luck of running twice.
+refuse_marked "the gate left"
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "pre-push: the gate MODIFIED tracked files while running — it passed against a tree that is not what you are pushing:" >&2
   git diff --name-only HEAD | sed 's/^/  /' >&2
