@@ -22,8 +22,14 @@ scan_one() {
   # link and read the target's contents, missing a leaked path like `link -> /home/user/secret`).
   if [ -L "$f" ]; then
     target=$(readlink "$f" 2>/dev/null || true)
-    printf '%s\n' "$target" | grep -qE "$HOME_RE" && { echo "  ✖ $f:symlink-target: $target" >&2; hits=$((hits + 1)); }
-    printf '%s\n' "$target" | grep -oE "$EMAIL_RE" | grep -qvE "$EMAIL_ALLOW" && { echo "  ✖ $f:symlink-target: $target" >&2; hits=$((hits + 1)); }
+    printf '%s\n' "$target" | grep -qE "$HOME_RE" && {
+      echo "  ✖ $f:symlink-target: $target" >&2
+      hits=$((hits + 1))
+    }
+    printf '%s\n' "$target" | grep -oE "$EMAIL_RE" | grep -qvE "$EMAIL_ALLOW" && {
+      echo "  ✖ $f:symlink-target: $target" >&2
+      hits=$((hits + 1))
+    }
     return 0
   fi
   [ -f "$f" ] || return 0
@@ -31,10 +37,12 @@ scan_one() {
   # an allowed placeholder is still caught (line-level filtering would drop the whole line). `-I` skips
   # binary files; `-- "$f"` handles filenames that start with a dash.
   while IFS= read -r line; do
-    echo "  ✖ $f:email: $line" >&2; hits=$((hits + 1))
+    echo "  ✖ $f:email: $line" >&2
+    hits=$((hits + 1))
   done < <(grep -oEI "$EMAIL_RE" -- "$f" 2>/dev/null | grep -vE "$EMAIL_ALLOW")
   while IFS= read -r line; do
-    echo "  ✖ $f:home-path: $line" >&2; hits=$((hits + 1))
+    echo "  ✖ $f:home-path: $line" >&2
+    hits=$((hits + 1))
   done < <(grep -nEI "$HOME_RE" -- "$f" 2>/dev/null)
 }
 
@@ -43,12 +51,19 @@ if [ "$#" -gt 0 ]; then
 else
   # NUL-delimited so paths with spaces/newlines are handled correctly. Fail CLOSED if the tracked-file
   # list can't be enumerated (else an empty set would produce a bogus "clean").
-  tmpf=$(mktemp) || { echo "mktemp failed" >&2; exit 2; }
-  if ! git ls-files -z > "$tmpf" 2>/dev/null; then rm -f "$tmpf"; echo "✖ git ls-files failed — cannot enumerate tracked files." >&2; exit 1; fi
+  tmpf=$(mktemp) || {
+    echo "mktemp failed" >&2
+    exit 2
+  }
+  if ! git ls-files -z >"$tmpf" 2>/dev/null; then
+    rm -f "$tmpf"
+    echo "✖ git ls-files failed — cannot enumerate tracked files." >&2
+    exit 1
+  fi
   while IFS= read -r -d '' f; do
-    case "$f" in test/fixtures/*|scripts/scan-generic.sh) continue;; esac
+    case "$f" in test/fixtures/* | scripts/scan-generic.sh) continue ;; esac
     scan_one "$f"
-  done < "$tmpf"
+  done <"$tmpf"
   rm -f "$tmpf"
 fi
 

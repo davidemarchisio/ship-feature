@@ -6,8 +6,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLI="$HERE/../bin/ship-feature"
 SCAN="$HERE/../scripts/scan-personal-data.sh"
-WORK="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 1; }
-[ -n "$WORK" ] && [ -d "$WORK" ] || { echo "no temp dir" >&2; exit 1; }
+WORK="$(mktemp -d)" || {
+  echo "mktemp failed" >&2
+  exit 1
+}
+[ -n "$WORK" ] && [ -d "$WORK" ] || {
+  echo "no temp dir" >&2
+  exit 1
+}
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 
@@ -59,7 +65,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT
 # suite would then run with the isolation half applied — precisely the fail-open this gate exists to
 # prevent. The value is deliberately unlikely to collide.
 _probe=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=sf.probe GIT_CONFIG_VALUE_0=sf-isolation-probe-ok \
-         git config --get sf.probe 2>/dev/null)
+  git config --get sf.probe 2>/dev/null)
 if [ "$_probe" != "sf-isolation-probe-ok" ]; then
   echo "ship-feature tests: need git 2.31+ (GIT_CONFIG_COUNT) to isolate the fixtures; found $(git --version)" >&2
   exit 2
@@ -76,8 +82,8 @@ sf_isolate_git() {
   while IFS= read -r _v; do [ -n "$_v" ] && unset "$_v"; done < <(git rev-parse --local-env-vars)
   unset _v
   export GIT_CONFIG_COUNT=7
-  export GIT_CONFIG_KEY_0=commit.gpgsign   GIT_CONFIG_VALUE_0=false
-  export GIT_CONFIG_KEY_1=tag.gpgsign      GIT_CONFIG_VALUE_1=false
+  export GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
+  export GIT_CONFIG_KEY_1=tag.gpgsign GIT_CONFIG_VALUE_1=false
   # Signing and hooks were the measured failures, but they are not the only ambient settings that
   # reach a fixture. core.excludesFile is the sharpest: a global ignore rule for `*.dat` makes the
   # binary-scan fixture's file invisible and that test fails for a reason nobody would guess.
@@ -86,11 +92,11 @@ sf_isolate_git() {
   # A path that does not exist: hooks are then simply never found. An ambient core.hooksPath can
   # otherwise fail or mutate every fixture commit — measured, a planted pre-commit made `git commit`
   # exit 1 until this was set.
-  export GIT_CONFIG_KEY_2=core.hooksPath      GIT_CONFIG_VALUE_2="${WORK:-/nonexistent}/no-such-hooks"
-  export GIT_CONFIG_KEY_3=core.excludesFile   GIT_CONFIG_VALUE_3=/dev/null
+  export GIT_CONFIG_KEY_2=core.hooksPath GIT_CONFIG_VALUE_2="${WORK:-/nonexistent}/no-such-hooks"
+  export GIT_CONFIG_KEY_3=core.excludesFile GIT_CONFIG_VALUE_3=/dev/null
   export GIT_CONFIG_KEY_4=core.attributesFile GIT_CONFIG_VALUE_4=/dev/null
-  export GIT_CONFIG_KEY_5=core.fsmonitor      GIT_CONFIG_VALUE_5=false
-  export GIT_CONFIG_KEY_6=color.ui            GIT_CONFIG_VALUE_6=false
+  export GIT_CONFIG_KEY_5=core.fsmonitor GIT_CONFIG_VALUE_5=false
+  export GIT_CONFIG_KEY_6=color.ui GIT_CONFIG_VALUE_6=false
   # DELIBERATELY NOT init.templateDir="". It was in the first version of this function, to stop a
   # global template installing hooks, and it is both redundant and harmful. Redundant because
   # core.hooksPath above already wins over anything a template drops in .git/hooks — measured, a
@@ -137,26 +143,35 @@ if ! sf_check_isolated; then
   exit 2
 fi
 
-PASS=0; FAIL=0
+PASS=0
+FAIL=0
 check() { # check <desc> <actual_rc> <want_rc>
-  if [ "$2" = "$3" ]; then echo "  ok   [$2] $1"; PASS=$((PASS+1)); else echo "  FAIL [got $2 want $3] $1"; FAIL=$((FAIL+1)); fi
+  if [ "$2" = "$3" ]; then
+    echo "  ok   [$2] $1"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $2 want $3] $1"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
 echo "ship-feature tests:"
 
 # --- build a real remote + clone + feature worktree --------------------------
-REMOTE="$WORK/remote.git"; git init -q --bare "$REMOTE"
-MAIN="$WORK/main"; git clone -q "$REMOTE" "$MAIN"
+REMOTE="$WORK/remote.git"
+git init -q --bare "$REMOTE"
+MAIN="$WORK/main"
+git clone -q "$REMOTE" "$MAIN"
 # The seed carries the repository's gate: a committed .githooks/pre-push. `git add --chmod=+x` records
 # 100755 whatever the host's core.filemode says; chmod +x makes the checked-out file executable too.
-sf_seed_hook() {  # sf_seed_hook <dir>: writes and stages a do-nothing .githooks/pre-push
-  mkdir -p "$1/.githooks" && printf '#!/bin/sh\nexit 0\n' > "$1/.githooks/pre-push" && chmod +x "$1/.githooks/pre-push" \
-    && git -C "$1" add --chmod=+x .githooks/pre-push
+sf_seed_hook() { # sf_seed_hook <dir>: writes and stages a do-nothing .githooks/pre-push
+  mkdir -p "$1/.githooks" && printf '#!/bin/sh\nexit 0\n' >"$1/.githooks/pre-push" && chmod +x "$1/.githooks/pre-push" &&
+    git -C "$1" add --chmod=+x .githooks/pre-push
 }
-( cd "$MAIN" && sf_seed_hook . && git commit -q -m "seed" && git push -q origin HEAD:main && git remote set-head origin main >/dev/null 2>&1 )
-git -C "$REMOTE" symbolic-ref HEAD refs/heads/main   # so fresh clones resolve origin/HEAD = main
-printf '.claude/\n' >> "$MAIN/.git/info/exclude"
-( cd "$MAIN" && git worktree add -q -b feat .claude/worktrees/feat origin/main )
+(cd "$MAIN" && sf_seed_hook . && git commit -q -m "seed" && git push -q origin HEAD:main && git remote set-head origin main >/dev/null 2>&1)
+git -C "$REMOTE" symbolic-ref HEAD refs/heads/main # so fresh clones resolve origin/HEAD = main
+printf '.claude/\n' >>"$MAIN/.git/info/exclude"
+(cd "$MAIN" && git worktree add -q -b feat .claude/worktrees/feat origin/main)
 
 # sf_isolate_git points core.hooksPath (environment config, key 2) at a directory that does not exist, so
 # no ambient hook runs in a fixture. A preflight that must find the gate overrides that one value for
@@ -165,135 +180,250 @@ printf '.claude/\n' >> "$MAIN/.git/info/exclude"
 pf() { GIT_CONFIG_VALUE_2=.githooks bash "$CLI" preflight "$@"; }
 
 # preflight: correct worktree setup → pass
-( cd "$MAIN/.claude/worktrees/feat" && pf >/dev/null 2>&1 ); check "preflight passes in a proper feature worktree" $? 0
+(cd "$MAIN/.claude/worktrees/feat" && pf >/dev/null 2>&1)
+check "preflight passes in a proper feature worktree" $? 0
 # preflight: on the default branch → fail
-( cd "$MAIN" && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails on the default branch" $? 1
+(cd "$MAIN" && bash "$CLI" preflight >/dev/null 2>&1)
+check "preflight fails on the default branch" $? 1
 # preflight: on a feature branch but NOT a linked worktree → fail
-( cd "$MAIN" && git checkout -q -b feat2 && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails outside a linked worktree" $? 1
+(cd "$MAIN" && git checkout -q -b feat2 && bash "$CLI" preflight >/dev/null 2>&1)
+check "preflight fails outside a linked worktree" $? 1
 
 # preflight negatives:
 # (a) worktree marker not git-ignored → fail (fresh clone, no exclude entry added)
-MAINB="$WORK/mainb"; git clone -q "$REMOTE" "$MAINB"
-( cd "$MAINB" && git worktree add -q -b featb .claude/worktrees/featb origin/main )
-( cd "$MAINB/.claude/worktrees/featb" && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails when the marker is not git-ignored" $? 1
+MAINB="$WORK/mainb"
+git clone -q "$REMOTE" "$MAINB"
+(cd "$MAINB" && git worktree add -q -b featb .claude/worktrees/featb origin/main)
+(cd "$MAINB/.claude/worktrees/featb" && bash "$CLI" preflight >/dev/null 2>&1)
+check "preflight fails when the marker is not git-ignored" $? 1
 # (b) worktree outside the configured root → fail
-( cd "$MAIN" && git worktree add -q -b featx "$WORK/elsewhere" origin/main )
-( cd "$WORK/elsewhere" && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails when worktree is outside the root" $? 1
+(cd "$MAIN" && git worktree add -q -b featx "$WORK/elsewhere" origin/main)
+(cd "$WORK/elsewhere" && bash "$CLI" preflight >/dev/null 2>&1)
+check "preflight fails when worktree is outside the root" $? 1
 # (c) behind the default branch → fail, unless SHIP_FEATURE_ALLOW_BEHIND
-( cd "$MAIN" && git checkout -q main && git commit -q --allow-empty -m "advance main" && git push -q origin main )
-( cd "$MAIN/.claude/worktrees/feat" && git fetch -q origin && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails when behind the default branch" $? 1
-( cd "$MAIN/.claude/worktrees/feat" && SHIP_FEATURE_ALLOW_BEHIND=1 pf >/dev/null 2>&1 ); check "preflight passes behind with SHIP_FEATURE_ALLOW_BEHIND" $? 0
+(cd "$MAIN" && git checkout -q main && git commit -q --allow-empty -m "advance main" && git push -q origin main)
+(cd "$MAIN/.claude/worktrees/feat" && git fetch -q origin && bash "$CLI" preflight >/dev/null 2>&1)
+check "preflight fails when behind the default branch" $? 1
+(cd "$MAIN/.claude/worktrees/feat" && SHIP_FEATURE_ALLOW_BEHIND=1 pf >/dev/null 2>&1)
+check "preflight passes behind with SHIP_FEATURE_ALLOW_BEHIND" $? 0
 
 # --- preflight: the repository's pre-push hook (.githooks/pre-push) ------------------------------
 # Each case gets a fresh remote + clone + feature worktree whose seed commit carries a 100755 hook.
 HKN=0
-mk_hk() {  # sets HKM (the main tree) and HKW (the feature worktree)
-  HKN=$((HKN + 1)); local r="$WORK/hk$HKN"
-  git init -q --bare "$r.git"; git clone -q "$r.git" "$r" 2>/dev/null
-  ( cd "$r" && sf_seed_hook . && git commit -q -m seed && git push -q origin HEAD:main && git remote set-head origin main >/dev/null 2>&1 )
+mk_hk() { # sets HKM (the main tree) and HKW (the feature worktree)
+  HKN=$((HKN + 1))
+  local r="$WORK/hk$HKN"
+  git init -q --bare "$r.git"
+  git clone -q "$r.git" "$r" 2>/dev/null
+  (cd "$r" && sf_seed_hook . && git commit -q -m seed && git push -q origin HEAD:main && git remote set-head origin main >/dev/null 2>&1)
   git -C "$r.git" symbolic-ref HEAD refs/heads/main
-  printf '.claude/\n' >> "$r/.git/info/exclude"
-  ( cd "$r" && git worktree add -q -b hk .claude/worktrees/hk origin/main )
-  HKM="$r"; HKW="$r/.claude/worktrees/hk"
+  printf '.claude/\n' >>"$r/.git/info/exclude"
+  (cd "$r" && git worktree add -q -b hk .claude/worktrees/hk origin/main)
+  HKM="$r"
+  HKW="$r/.claude/worktrees/hk"
 }
 # hk_pf <dir> [VAR=value ...]: preflight in <dir> with core.hooksPath=.githooks unless a VAR overrides
 # it; stdout to $WORK/pf.out, stderr to $WORK/pf.err.
-hk_pf() { local d="$1"; shift; ( cd "$d" && env GIT_CONFIG_VALUE_2=.githooks "$@" bash "$CLI" preflight >"$WORK/pf.out" 2>"$WORK/pf.err" ); }
+hk_pf() {
+  local d="$1"
+  shift
+  (cd "$d" && env GIT_CONFIG_VALUE_2=.githooks "$@" bash "$CLI" preflight >"$WORK/pf.out" 2>"$WORK/pf.err")
+}
 # hk_case <desc> <want_rc> <file: out|err> <extended-regex>: the exit code AND the message, from the
 # stream that carries it (ok writes to stdout, die to stderr).
 hk_case() {
   local desc="$1" want="$2" rc="$3" stream="$4" re="$5" got
-  got="$rc"; [ "$rc" = "$want" ] && ! grep -Eq -- "$re" "$WORK/pf.$stream" && got="wrong-reason($(tr '\n' ' ' < "$WORK/pf.$stream" | cut -c1-110))"
+  got="$rc"
+  [ "$rc" = "$want" ] && ! grep -Eq -- "$re" "$WORK/pf.$stream" && got="wrong-reason($(tr '\n' ' ' <"$WORK/pf.$stream" | cut -c1-110))"
   check "preflight hook: $desc" "$got" "$want"
 }
-mk_hk; hk_pf "$HKW"; hk_case "a committed 100755 .githooks/pre-push that git runs passes" 0 $? out 'pre-push hook: \.githooks/pre-push'
-mk_hk; mkdir -p "$HKW/sub/dir"; hk_pf "$HKW/sub/dir"; hk_case "the same from a subdirectory passes (a relative --git-path joined to the root)" 0 $? out '\.githooks/pre-push'
-mk_hk; git -C "$HKW" rm -q .githooks/pre-push && git -C "$HKW" commit -q -m rm; hk_pf "$HKW"
+mk_hk
+hk_pf "$HKW"
+hk_case "a committed 100755 .githooks/pre-push that git runs passes" 0 $? out 'pre-push hook: \.githooks/pre-push'
+mk_hk
+mkdir -p "$HKW/sub/dir"
+hk_pf "$HKW/sub/dir"
+hk_case "the same from a subdirectory passes (a relative --git-path joined to the root)" 0 $? out '\.githooks/pre-push'
+mk_hk
+git -C "$HKW" rm -q .githooks/pre-push && git -C "$HKW" commit -q -m rm
+hk_pf "$HKW"
 hk_case "no .githooks/pre-push fails and says what the hook must run" 1 $? err 'no pre-push hook.*tests, a linter and a formatter'
-mk_hk; chmod -x "$HKW/.githooks/pre-push"; hk_pf "$HKW"; hk_case "a hook without the executable bit on disk fails" 1 $? err 'not executable'
-mk_hk; git -C "$HKW" add --chmod=-x .githooks/pre-push && git -C "$HKW" commit -q -m demote; hk_pf "$HKW"
+mk_hk
+chmod -x "$HKW/.githooks/pre-push"
+hk_pf "$HKW"
+hk_case "a hook without the executable bit on disk fails" 1 $? err 'not executable'
+mk_hk
+git -C "$HKW" add --chmod=-x .githooks/pre-push && git -C "$HKW" commit -q -m demote
+hk_pf "$HKW"
 hk_case "a hook executable on disk but committed 100644 fails and names the fix" 1 $? err '100644, not 100755.*--chmod=\+x'
-mk_hk; rm "$HKW/.githooks/pre-push"; mkdir "$HKW/.githooks/pre-push"; hk_pf "$HKW"; hk_case "a directory named pre-push fails" 1 $? err 'not a regular file'
-mk_hk; git -C "$HKW" rm -q --cached .githooks/pre-push && git -C "$HKW" commit -q -m untrack; hk_pf "$HKW"
+mk_hk
+rm "$HKW/.githooks/pre-push"
+mkdir "$HKW/.githooks/pre-push"
+hk_pf "$HKW"
+hk_case "a directory named pre-push fails" 1 $? err 'not a regular file'
+mk_hk
+git -C "$HKW" rm -q --cached .githooks/pre-push && git -C "$HKW" commit -q -m untrack
+hk_pf "$HKW"
 hk_case "an untracked hook fails" 1 $? err 'not committed'
-git -C "$HKW" add --chmod=+x .githooks/pre-push; hk_pf "$HKW"; hk_case "a staged, not committed hook fails" 1 $? err 'not committed'
-git -C "$HKW" commit -q -m retrack; hk_pf "$HKW"; hk_case "the same hook passes once it is committed" 0 $? out 'pre-push hook'
-mk_hk; printf 'exit 0 # edited\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"; hk_case "a hook edited on disk and not committed fails" 1 $? err 'differs from the committed'
-mk_hk; printf '#!/bin/sh\necho other\n' > "$WORK/other-hook$HKN"; chmod +x "$WORK/other-hook$HKN"
-rm "$HKW/.githooks/pre-push"; ln -s "$WORK/other-hook$HKN" "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+git -C "$HKW" add --chmod=+x .githooks/pre-push
+hk_pf "$HKW"
+hk_case "a staged, not committed hook fails" 1 $? err 'not committed'
+git -C "$HKW" commit -q -m retrack
+hk_pf "$HKW"
+hk_case "the same hook passes once it is committed" 0 $? out 'pre-push hook'
+mk_hk
+printf 'exit 0 # edited\n' >>"$HKW/.githooks/pre-push"
+hk_pf "$HKW"
+hk_case "a hook edited on disk and not committed fails" 1 $? err 'differs from the committed'
+mk_hk
+printf '#!/bin/sh\necho other\n' >"$WORK/other-hook$HKN"
+chmod +x "$WORK/other-hook$HKN"
+rm "$HKW/.githooks/pre-push"
+ln -s "$WORK/other-hook$HKN" "$HKW/.githooks/pre-push"
+hk_pf "$HKW"
 hk_case "a hook replaced by an uncommitted symlink to another script fails" 1 $? err 'reached through a symlink'
 # The same with a link target that holds the committed bytes: -f, hash-object and -ef all follow it.
-mk_hk; cp "$HKW/.githooks/pre-push" "$WORK/same-hook$HKN"; chmod +x "$WORK/same-hook$HKN"
-rm "$HKW/.githooks/pre-push"; ln -s "$WORK/same-hook$HKN" "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+mk_hk
+cp "$HKW/.githooks/pre-push" "$WORK/same-hook$HKN"
+chmod +x "$WORK/same-hook$HKN"
+rm "$HKW/.githooks/pre-push"
+ln -s "$WORK/same-hook$HKN" "$HKW/.githooks/pre-push"
+hk_pf "$HKW"
 hk_case "an uncommitted symlink to a file with the committed bytes fails" 1 $? err 'reached through a symlink'
-mk_hk; mkdir "$WORK/same-dir$HKN"; cp -p "$HKW/.githooks/pre-push" "$WORK/same-dir$HKN/"
-rm -r "$HKW/.githooks"; ln -s "$WORK/same-dir$HKN" "$HKW/.githooks"; hk_pf "$HKW"
+mk_hk
+mkdir "$WORK/same-dir$HKN"
+cp -p "$HKW/.githooks/pre-push" "$WORK/same-dir$HKN/"
+rm -r "$HKW/.githooks"
+ln -s "$WORK/same-dir$HKN" "$HKW/.githooks"
+hk_pf "$HKW"
 hk_case "a .githooks directory replaced by a symlink to a copy with the committed bytes fails" 1 $? err 'reached through a symlink'
-mk_hk; git -C "$HKW" update-index --assume-unchanged .githooks/pre-push; printf 'exit 0 # hidden\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+mk_hk
+git -C "$HKW" update-index --assume-unchanged .githooks/pre-push
+printf 'exit 0 # hidden\n' >>"$HKW/.githooks/pre-push"
+hk_pf "$HKW"
 hk_case "an assume-unchanged hook edited on disk fails (blob ids, not git diff)" 1 $? err 'differs from the committed'
-mk_hk; printf 'exit 0 # staged\n' >> "$HKW/.githooks/pre-push"; git -C "$HKW" add .githooks/pre-push; git -C "$HKW" show HEAD:.githooks/pre-push > "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+mk_hk
+printf 'exit 0 # staged\n' >>"$HKW/.githooks/pre-push"
+git -C "$HKW" add .githooks/pre-push
+git -C "$HKW" show HEAD:.githooks/pre-push >"$HKW/.githooks/pre-push"
+hk_pf "$HKW"
 hk_case "a staged edit that differs from HEAD fails although the disk matches HEAD" 1 $? err 'differs from the committed'
 # A clean filter that turns the edited file back into the committed bytes: hash-object would apply it.
-mk_hk; cp "$HKW/.githooks/pre-push" "$WORK/clean-copy$HKN"; git -C "$HKW" config filter.hide.clean "cat '$WORK/clean-copy$HKN'"
-printf '.githooks/pre-push filter=hide\n' >> "$(git -C "$HKW" rev-parse --path-format=absolute --git-path info/attributes)"
-printf 'exit 0 # hidden by a clean filter\n' >> "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+mk_hk
+cp "$HKW/.githooks/pre-push" "$WORK/clean-copy$HKN"
+git -C "$HKW" config filter.hide.clean "cat '$WORK/clean-copy$HKN'"
+printf '.githooks/pre-push filter=hide\n' >>"$(git -C "$HKW" rev-parse --path-format=absolute --git-path info/attributes)"
+printf 'exit 0 # hidden by a clean filter\n' >>"$HKW/.githooks/pre-push"
+hk_pf "$HKW"
 hk_case "a hook edit hidden by a clean filter fails (the bytes on disk, --no-filters)" 1 $? err 'differs from the committed'
 # The committed hook with CRLF line ends on disk and core.autocrlf=true: the conversion would hash it
 # to the committed blob, but git runs the CRLF bytes (#!/bin/sh followed by a carriage return).
-mk_hk; git -C "$HKW" config core.autocrlf true; awk '{ printf "%s\r\n", $0 }' "$HKW/.githooks/pre-push" > "$WORK/crlf$HKN"
-cat "$WORK/crlf$HKN" > "$HKW/.githooks/pre-push"; hk_pf "$HKW"
+mk_hk
+git -C "$HKW" config core.autocrlf true
+awk '{ printf "%s\r\n", $0 }' "$HKW/.githooks/pre-push" >"$WORK/crlf$HKN"
+cat "$WORK/crlf$HKN" >"$HKW/.githooks/pre-push"
+hk_pf "$HKW"
 hk_case "the committed hook with CRLF line ends on disk fails (core.autocrlf=true, --no-filters)" 1 $? err 'differs from the committed'
-mk_hk; ( cd "$HKW" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink ); hk_pf "$HKW"
+mk_hk
+(cd "$HKW" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink)
+hk_pf "$HKW"
 hk_case "a committed symlink at .githooks/pre-push, checked out as a link, fails" 1 $? err 'reached through a symlink'
 # The same commit with a regular file on disk in place of the link: HEAD still holds mode 120000.
-( cd "$HKW" && rm .githooks/pre-push && cp -p .githooks/real-hook .githooks/pre-push ); hk_pf "$HKW"
+(cd "$HKW" && rm .githooks/pre-push && cp -p .githooks/real-hook .githooks/pre-push)
+hk_pf "$HKW"
 hk_case "a regular file on disk over a symlink committed in HEAD fails (mode 120000)" 1 $? err 'not a 100755 file \(mode 120000\)'
 # core.hooksPath unset: key 2 becomes a dummy key (GIT_CONFIG_COUNT stays 7), and no real global or
 # system config can supply a value.
 mkdir -p "$WORK/hk-home"
 HK_UNSET="GIT_CONFIG_KEY_2=sf.dummy GIT_CONFIG_VALUE_2=x HOME=$WORK/hk-home XDG_CONFIG_HOME=$WORK/hk-home GIT_CONFIG_NOSYSTEM=1"
-mk_hk; ( unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM; hk_pf "$HKW" $HK_UNSET ); hk_case "core.hooksPath unset fails and names the fix" 1 $? err 'git config core.hooksPath \.githooks'
-mk_hk; ln -s "$HKM/.githooks/pre-push" "$HKM/.git/hooks/pre-push"; ( unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM; hk_pf "$HKW" $HK_UNSET )
+mk_hk
+(
+  unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
+  hk_pf "$HKW" $HK_UNSET
+)
+hk_case "core.hooksPath unset fails and names the fix" 1 $? err 'git config core.hooksPath \.githooks'
+mk_hk
+ln -s "$HKM/.githooks/pre-push" "$HKM/.git/hooks/pre-push"
+(
+  unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
+  hk_pf "$HKW" $HK_UNSET
+)
 hk_case "core.hooksPath unset, .git/hooks/pre-push a symlink to the main tree's copy, fails" 1 $? err 'not this worktree'
-mk_hk; mkdir -p "$WORK/hk-link$HKN"; ln -s "$HKW/.githooks/pre-push" "$WORK/hk-link$HKN/pre-push"; hk_pf "$HKW" GIT_CONFIG_VALUE_2="$WORK/hk-link$HKN"
+mk_hk
+mkdir -p "$WORK/hk-link$HKN"
+ln -s "$HKW/.githooks/pre-push" "$WORK/hk-link$HKN/pre-push"
+hk_pf "$HKW" GIT_CONFIG_VALUE_2="$WORK/hk-link$HKN"
 hk_case "core.hooksPath at a symlink to this worktree's own hook passes (-ef, not a string compare)" 0 $? out 'pre-push hook'
-mk_hk; hk_pf "$HKW" GIT_CONFIG_VALUE_2="$HKM/.githooks"; hk_case "an absolute core.hooksPath into the main tree fails and names the fix" 1 $? err 'not this worktree.*core\.hooksPath \.githooks'
-mk_hk; HK_OTHER="$HKM"; mk_hk; hk_pf "$HKW" GIT_CONFIG_VALUE_2="$HK_OTHER/.githooks"; hk_case "core.hooksPath into another repository's hooks fails" 1 $? err 'not this worktree'
-mk_hk; hk_pf "$HKW" GIT_CONFIG_VALUE_2=; hk_case "an empty core.hooksPath fails" 1 $? err 'not this worktree'
+mk_hk
+hk_pf "$HKW" GIT_CONFIG_VALUE_2="$HKM/.githooks"
+hk_case "an absolute core.hooksPath into the main tree fails and names the fix" 1 $? err 'not this worktree.*core\.hooksPath \.githooks'
+mk_hk
+HK_OTHER="$HKM"
+mk_hk
+hk_pf "$HKW" GIT_CONFIG_VALUE_2="$HK_OTHER/.githooks"
+hk_case "core.hooksPath into another repository's hooks fails" 1 $? err 'not this worktree'
+mk_hk
+hk_pf "$HKW" GIT_CONFIG_VALUE_2=
+hk_case "an empty core.hooksPath fails" 1 $? err 'not this worktree'
 
 # --- relay passthrough: exit code + stdout preserved -------------------------
-BIN="$WORK/bin"; mkdir -p "$BIN"
-make_relay() { printf '#!/usr/bin/env bash\necho "RELAY-STDOUT-MARKER"\nexit %s\n' "$1" > "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"; }
+BIN="$WORK/bin"
+mkdir -p "$BIN"
+make_relay() {
+  printf '#!/usr/bin/env bash\necho "RELAY-STDOUT-MARKER"\nexit %s\n' "$1" >"$BIN/pr-review-relay"
+  chmod +x "$BIN/pr-review-relay"
+}
 for code in 0 3 4; do
   make_relay "$code"
-  out=$(PATH="$BIN:$PATH" bash "$CLI" relay --author claude 2>/dev/null); rc=$?
+  out=$(PATH="$BIN:$PATH" bash "$CLI" relay --author claude 2>/dev/null)
+  rc=$?
   check "relay passthrough preserves exit $code" "$rc" "$code"
-  printf '%s' "$out" | grep -q "RELAY-STDOUT-MARKER" && { echo "  ok   [-] relay preserves stdout (exit $code)"; PASS=$((PASS+1)); } || { echo "  FAIL relay dropped stdout (exit $code)"; FAIL=$((FAIL+1)); }
+  printf '%s' "$out" | grep -q "RELAY-STDOUT-MARKER" && {
+    echo "  ok   [-] relay preserves stdout (exit $code)"
+    PASS=$((PASS + 1))
+  } || {
+    echo "  FAIL relay dropped stdout (exit $code)"
+    FAIL=$((FAIL + 1))
+  }
 done
 # relay: dependency missing → clear failure
-( PATH="/usr/bin:/bin" bash "$CLI" relay >/dev/null 2>&1 ); check "relay fails clearly when pr-review-relay is absent" $? 1
+(PATH="/usr/bin:/bin" bash "$CLI" relay >/dev/null 2>&1)
+check "relay fails clearly when pr-review-relay is absent" $? 1
 
 # --- privacy scan: planted term caught; clean tree passes --------------------
-SREPO="$WORK/scanrepo"; git init -q "$SREPO"
-( cd "$SREPO" && echo "hello world" > a.txt && git add a.txt && git commit -q -m "clean commit" )
-printf 'SECRET-SLUG-XYZ\n' > "$WORK/deny.txt"
-( cd "$SREPO" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1 ); check "scan passes on a clean repo" $? 0
-( cd "$SREPO" && echo "leak: SECRET-SLUG-XYZ" > b.txt && git add b.txt && git commit -q -m "oops" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1 ); check "scan catches a planted term in history" $? 1
+SREPO="$WORK/scanrepo"
+git init -q "$SREPO"
+(cd "$SREPO" && echo "hello world" >a.txt && git add a.txt && git commit -q -m "clean commit")
+printf 'SECRET-SLUG-XYZ\n' >"$WORK/deny.txt"
+(cd "$SREPO" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1)
+check "scan passes on a clean repo" $? 0
+(cd "$SREPO" && echo "leak: SECRET-SLUG-XYZ" >b.txt && git add b.txt && git commit -q -m "oops" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1)
+check "scan catches a planted term in history" $? 1
 # planted term in a COMMIT MESSAGE (not file contents) is also caught
-SREPO2="$WORK/scanrepo2"; git init -q "$SREPO2"
-( cd "$SREPO2" && git commit -q --allow-empty -m "mentions SECRET-SLUG-XYZ" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1 ); check "scan catches a planted term in a commit message" $? 1
+SREPO2="$WORK/scanrepo2"
+git init -q "$SREPO2"
+(cd "$SREPO2" && git commit -q --allow-empty -m "mentions SECRET-SLUG-XYZ" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1)
+check "scan catches a planted term in a commit message" $? 1
 # planted term in a FILENAME is also caught
-SREPO3="$WORK/scanrepo3"; git init -q "$SREPO3"
-( cd "$SREPO3" && : > "SECRET-SLUG-XYZ-name.txt" && git add . && git commit -q -m "add file" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1 ); check "scan catches a deny-listed term in a filename" $? 1
+SREPO3="$WORK/scanrepo3"
+git init -q "$SREPO3"
+(cd "$SREPO3" && : >"SECRET-SLUG-XYZ-name.txt" && git add . && git commit -q -m "add file" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1)
+check "scan catches a deny-listed term in a filename" $? 1
 
 # --- install.sh under a throwaway HOME (exercises symlinks + AGENTS.md awk) ---
-FAKEHOME="$WORK/home"; mkdir -p "$FAKEHOME"
-( cd "$HERE/.." && HOME="$FAKEHOME" bash install.sh >/dev/null 2>&1 ); check "install.sh succeeds under a clean HOME" $? 0
-if [ -f "$FAKEHOME/.config/ship-feature/WORKFLOW.md" ] && [ -f "$FAKEHOME/.local/bin/ship-feature" ] \
-   && [ -f "$FAKEHOME/.claude/skills/ship-feature/SKILL.md" ] \
-   && grep -qF '# >>> ship-feature >>>' "$FAKEHOME/.codex/AGENTS.md" 2>/dev/null; then
-  echo "  ok   [-] install wired WORKFLOW + CLI + skill + Codex block"; PASS=$((PASS+1))
-else echo "  FAIL install did not wire everything"; FAIL=$((FAIL+1)); fi
+FAKEHOME="$WORK/home"
+mkdir -p "$FAKEHOME"
+(cd "$HERE/.." && HOME="$FAKEHOME" bash install.sh >/dev/null 2>&1)
+check "install.sh succeeds under a clean HOME" $? 0
+if [ -f "$FAKEHOME/.config/ship-feature/WORKFLOW.md" ] && [ -f "$FAKEHOME/.local/bin/ship-feature" ] &&
+  [ -f "$FAKEHOME/.claude/skills/ship-feature/SKILL.md" ] &&
+  grep -qF '# >>> ship-feature >>>' "$FAKEHOME/.codex/AGENTS.md" 2>/dev/null; then
+  echo "  ok   [-] install wired WORKFLOW + CLI + skill + Codex block"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL install did not wire everything"
+  FAIL=$((FAIL + 1))
+fi
 # The plans directory is step 1 of the pipeline, so it must exist before the
 # first plan is written — not be created by some later command that happens to
 # run first.
@@ -308,26 +438,29 @@ check "install.sh makes the plans directory owner-only" "$(dir_mode "$FAKEHOME/.
 # Set on EVERY run, not only at creation — a directory made before this rule
 # existed is precisely the one that is still world readable.
 chmod 755 "$FAKEHOME/.config/ship-feature/plans"
-( cd "$HERE/.." && HOME="$FAKEHOME" bash install.sh >/dev/null 2>&1 )
+(cd "$HERE/.." && HOME="$FAKEHOME" bash install.sh >/dev/null 2>&1)
 check "install.sh re-secures an existing loose plans directory" "$(dir_mode "$FAKEHOME/.config/ship-feature/plans")" "drwx------"
 # Fail-closed: a FILE where the plans directory belongs must make the install
 # fail loudly. Reporting success without it is the dangerous outcome — the next
 # plan goes somewhere volatile and nobody is told.
-FAKEHOME3="$WORK/home3"; mkdir -p "$FAKEHOME3/.config/ship-feature"
-: > "$FAKEHOME3/.config/ship-feature/plans"
-( cd "$HERE/.." && HOME="$FAKEHOME3" bash install.sh >/dev/null 2>&1 )
+FAKEHOME3="$WORK/home3"
+mkdir -p "$FAKEHOME3/.config/ship-feature"
+: >"$FAKEHOME3/.config/ship-feature/plans"
+(cd "$HERE/.." && HOME="$FAKEHOME3" bash install.sh >/dev/null 2>&1)
 check "install.sh fails when the plans path is a file" $? 1
 # A `plans` SYMLINK must not have its target tightened: chmod follows the link,
 # and an installer silently changing permissions outside its own tree is not
 # acceptable however well meant.
-FAKEHOME4="$WORK/home4"; mkdir -p "$FAKEHOME4/.config/ship-feature" "$WORK/shared-plans"
+FAKEHOME4="$WORK/home4"
+mkdir -p "$FAKEHOME4/.config/ship-feature" "$WORK/shared-plans"
 chmod 775 "$WORK/shared-plans"
 ln -s "$WORK/shared-plans" "$FAKEHOME4/.config/ship-feature/plans"
-( cd "$HERE/.." && HOME="$FAKEHOME4" bash install.sh >/dev/null 2>&1 )
+(cd "$HERE/.." && HOME="$FAKEHOME4" bash install.sh >/dev/null 2>&1)
 check "install.sh leaves a symlinked plans target alone" "$(dir_mode "$WORK/shared-plans")" "drwxrwxr-x"
-( cd "$HERE/.." && HOME="$FAKEHOME" bash install.sh >/dev/null 2>&1 )
+(cd "$HERE/.." && HOME="$FAKEHOME" bash install.sh >/dev/null 2>&1)
 # grep -c prints "0" and exits 1 on no match; capture stdout, don't append via `|| echo 0`.
-n=$(grep -cF '# >>> ship-feature >>>' "$FAKEHOME/.codex/AGENTS.md" 2>/dev/null); [ -n "$n" ] || n=0
+n=$(grep -cF '# >>> ship-feature >>>' "$FAKEHOME/.codex/AGENTS.md" 2>/dev/null)
+[ -n "$n" ] || n=0
 check "install.sh is idempotent (exactly one Codex block)" "$n" 1
 
 # The two messages that steer a user away from the volatile path — run for real
@@ -335,38 +468,52 @@ check "install.sh is idempotent (exactly one Codex block)" "$n" 1
 # pass while the line is unreachable, or while the path it prints is wrong; this
 # asserts the message a user actually sees AND that the directory in it follows
 # SHIP_FEATURE_CONFIG rather than being hard-coded to $HOME.
-printf '#!/usr/bin/env bash\ncat >/dev/null 2>&1\necho "stub review"\n' > "$BIN/codex"
+printf '#!/usr/bin/env bash\ncat >/dev/null 2>&1\necho "stub review"\n' >"$BIN/codex"
 chmod +x "$BIN/codex"
 # Its own config dir: the shared $CFGDIR is created further down this file, and
 # depending on it would tie these assertions to the order of unrelated blocks.
-PLANCFG="$WORK/plancfg"; mkdir -p "$PLANCFG"
-printf 'SHIP_FEATURE_REVIEWERS=codex\n' > "$PLANCFG/config"
+PLANCFG="$WORK/plancfg"
+mkdir -p "$PLANCFG"
+printf 'SHIP_FEATURE_REVIEWERS=codex\n' >"$PLANCFG/config"
 # The plans directory is overridden EXPLICITLY. Deriving it from
 # SHIP_FEATURE_CONFIG looked tidier and was wrong: that variable is routinely
 # `/dev/null` to mean "no config", which would put plans in `/dev`.
 PLANDIR="$WORK/plancfg/plans"
-PLANWORK="$WORK/planmsg"; mkdir -p "$PLANWORK"; printf 'a plan\n' > "$PLANWORK/plan.md"
-err=$( cd "$PLANWORK" && PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$PLANCFG/config" SHIP_FEATURE_PLANS_DIR="$PLANDIR" \
-       bash "$CLI" plan-review --reviewers codex 2>&1 >/dev/null )
+PLANWORK="$WORK/planmsg"
+mkdir -p "$PLANWORK"
+printf 'a plan\n' >"$PLANWORK/plan.md"
+err=$(cd "$PLANWORK" && PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$PLANCFG/config" SHIP_FEATURE_PLANS_DIR="$PLANDIR" \
+  bash "$CLI" plan-review --reviewers codex 2>&1 >/dev/null)
 case "$err" in
   *"keep plans in $PLANDIR"*)
-    echo "  ok   [-] reading ./plan.md warns, naming the configured plans directory"; PASS=$((PASS+1));;
-  *) echo "  FAIL ./plan.md warning missing or names the wrong directory: $err"; FAIL=$((FAIL+1));;
+    echo "  ok   [-] reading ./plan.md warns, naming the configured plans directory"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "  FAIL ./plan.md warning missing or names the wrong directory: $err"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
-PLANEMPTY="$WORK/planempty"; mkdir -p "$PLANEMPTY"
-err=$( cd "$PLANEMPTY" && PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$PLANCFG/config" SHIP_FEATURE_PLANS_DIR="$PLANDIR" \
-       bash "$CLI" plan-review --reviewers codex </dev/null 2>&1 >/dev/null )
+PLANEMPTY="$WORK/planempty"
+mkdir -p "$PLANEMPTY"
+err=$(cd "$PLANEMPTY" && PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$PLANCFG/config" SHIP_FEATURE_PLANS_DIR="$PLANDIR" \
+  bash "$CLI" plan-review --reviewers codex </dev/null 2>&1 >/dev/null)
 case "$err" in
   *"no plan given"*"$PLANDIR"*)
-    echo "  ok   [-] the no-plan error names the configured plans directory"; PASS=$((PASS+1));;
-  *) echo "  FAIL no-plan error missing or names the wrong directory: $err"; FAIL=$((FAIL+1));;
+    echo "  ok   [-] the no-plan error names the configured plans directory"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "  FAIL no-plan error missing or names the wrong directory: $err"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
 # Upgrade-safe: an existing install that pulls the new workflow has no plans
 # directory until install.sh runs again, and the first plan write would fail.
 # The CLI creates it on demand.
 rmdir "$PLANDIR" 2>/dev/null
-( cd "$PLANEMPTY" && PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$PLANCFG/config" SHIP_FEATURE_PLANS_DIR="$PLANDIR" \
-  bash "$CLI" plan-review --reviewers codex </dev/null >/dev/null 2>&1 )
+(cd "$PLANEMPTY" && PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$PLANCFG/config" SHIP_FEATURE_PLANS_DIR="$PLANDIR" \
+  bash "$CLI" plan-review --reviewers codex </dev/null >/dev/null 2>&1)
 check "the CLI creates the plans directory on demand" "$([ -d "$PLANDIR" ] && echo yes || echo no)" yes
 check "and creates it owner-only" "$(dir_mode "$PLANDIR")" "drwx------"
 rm -f "$BIN/codex"
@@ -374,71 +521,119 @@ rm -f "$BIN/codex"
 # surviving one look identical to a grep for the new text, and very different to
 # somebody reading the error.
 if grep -q 'create a non-empty ./plan.md' "$CLI"; then
-  echo "  FAIL bin/ship-feature still tells users to create ./plan.md"; FAIL=$((FAIL+1))
+  echo "  FAIL bin/ship-feature still tells users to create ./plan.md"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] bin/ship-feature no longer tells users to create ./plan.md"; PASS=$((PASS+1))
+  echo "  ok   [-] bin/ship-feature no longer tells users to create ./plan.md"
+  PASS=$((PASS + 1))
 fi
 
 # --- generic scanner: proves it catches each claimed category ----------------
-bash "$HERE/../scripts/scan-generic.sh" "$HERE/fixtures/leaky.sample" >/dev/null 2>&1; check "generic scan flags the leaky fixture (email + home path)" $? 1
-echo "just some ordinary text" > "$WORK/clean.txt"
-bash "$HERE/../scripts/scan-generic.sh" "$WORK/clean.txt" >/dev/null 2>&1; check "generic scan passes a clean file" $? 0
-printf 'contact us at hello@example.com\n' > "$WORK/dummy.txt"
-bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy.txt" >/dev/null 2>&1; check "generic scan ignores reserved example.com email" $? 0
+bash "$HERE/../scripts/scan-generic.sh" "$HERE/fixtures/leaky.sample" >/dev/null 2>&1
+check "generic scan flags the leaky fixture (email + home path)" $? 1
+echo "just some ordinary text" >"$WORK/clean.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/clean.txt" >/dev/null 2>&1
+check "generic scan passes a clean file" $? 0
+printf 'contact us at hello@example.com\n' >"$WORK/dummy.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy.txt" >/dev/null 2>&1
+check "generic scan ignores reserved example.com email" $? 0
 
 # --- cmd_relay injects SHIP_FEATURE_REVIEWERS from config (and honors explicit override) ------
-printf '#!/usr/bin/env bash\necho "ARGS: $*"\nexit 0\n' > "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
-CFGDIR="$WORK/cfg"; mkdir -p "$CFGDIR"; printf 'SHIP_FEATURE_REVIEWERS=codex,cursor\n' > "$CFGDIR/config"
+printf '#!/usr/bin/env bash\necho "ARGS: $*"\nexit 0\n' >"$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
+CFGDIR="$WORK/cfg"
+mkdir -p "$CFGDIR"
+printf 'SHIP_FEATURE_REVIEWERS=codex,cursor\n' >"$CFGDIR/config"
 out=$(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" bash "$CLI" relay --author claude 2>/dev/null)
-printf '%s' "$out" | grep -q -- "--reviewers codex,cursor" && { echo "  ok   [-] relay injects configured reviewers when omitted"; PASS=$((PASS+1)); } || { echo "  FAIL relay did not inject configured reviewers"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q -- "--reviewers codex,cursor" && {
+  echo "  ok   [-] relay injects configured reviewers when omitted"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL relay did not inject configured reviewers"
+  FAIL=$((FAIL + 1))
+}
 out=$(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" bash "$CLI" relay --author claude --reviewers x,y 2>/dev/null)
-if printf '%s' "$out" | grep -q -- "--reviewers x,y" && ! printf '%s' "$out" | grep -q "codex,cursor"; then echo "  ok   [-] explicit --reviewers overrides config"; PASS=$((PASS+1)); else echo "  FAIL explicit --reviewers did not override config"; FAIL=$((FAIL+1)); fi
+if printf '%s' "$out" | grep -q -- "--reviewers x,y" && ! printf '%s' "$out" | grep -q "codex,cursor"; then
+  echo "  ok   [-] explicit --reviewers overrides config"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL explicit --reviewers did not override config"
+  FAIL=$((FAIL + 1))
+fi
 # the --reviewers= form is rejected with a clear error (relay doesn't accept it)
-( PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" bash "$CLI" relay --author claude --reviewers=x >/dev/null 2>&1 ); check "relay rejects the --reviewers= form" $? 1
+(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" bash "$CLI" relay --author claude --reviewers=x >/dev/null 2>&1)
+check "relay rejects the --reviewers= form" $? 1
 # an explicitly empty env value disables config injection (env-defined wins)
 out=$(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" SHIP_FEATURE_REVIEWERS='' bash "$CLI" relay --author claude 2>/dev/null)
-if ! printf '%s' "$out" | grep -q -- "--reviewers"; then echo "  ok   [-] empty SHIP_FEATURE_REVIEWERS env disables injection"; PASS=$((PASS+1)); else echo "  FAIL empty env did not disable injection"; FAIL=$((FAIL+1)); fi
+if ! printf '%s' "$out" | grep -q -- "--reviewers"; then
+  echo "  ok   [-] empty SHIP_FEATURE_REVIEWERS env disables injection"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL empty env did not disable injection"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- install.sh --copy produces a real WORKFLOW.md (not a symlink) ------------
-FAKEHOME2="$WORK/home2"; mkdir -p "$FAKEHOME2"
-( cd "$HERE/.." && HOME="$FAKEHOME2" bash install.sh --copy >/dev/null 2>&1 ); check "install.sh --copy succeeds" $? 0
-if [ -f "$FAKEHOME2/.config/ship-feature/WORKFLOW.md" ] && [ ! -L "$FAKEHOME2/.config/ship-feature/WORKFLOW.md" ]; then echo "  ok   [-] --copy installs a real WORKFLOW.md (not a symlink)"; PASS=$((PASS+1)); else echo "  FAIL --copy did not produce a real file"; FAIL=$((FAIL+1)); fi
+FAKEHOME2="$WORK/home2"
+mkdir -p "$FAKEHOME2"
+(cd "$HERE/.." && HOME="$FAKEHOME2" bash install.sh --copy >/dev/null 2>&1)
+check "install.sh --copy succeeds" $? 0
+if [ -f "$FAKEHOME2/.config/ship-feature/WORKFLOW.md" ] && [ ! -L "$FAKEHOME2/.config/ship-feature/WORKFLOW.md" ]; then
+  echo "  ok   [-] --copy installs a real WORKFLOW.md (not a symlink)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL --copy did not produce a real file"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- scan catches a deny-listed term in a ref (branch) name ------------------
-SREPO5="$WORK/scanrepo5"; git init -q "$SREPO5"
-( cd "$SREPO5" && git commit -q --allow-empty -m init && git branch "SECRET-SLUG-XYZ-branch" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1 ); check "scan catches a deny-listed term in a ref name" $? 1
+SREPO5="$WORK/scanrepo5"
+git init -q "$SREPO5"
+(cd "$SREPO5" && git commit -q --allow-empty -m init && git branch "SECRET-SLUG-XYZ-branch" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1)
+check "scan catches a deny-listed term in a ref name" $? 1
 
 # --- scan-generic scans a SYMLINK's target string (committed data), not the pointee ----------
 # Build the target from a var so this test file doesn't itself contain a literal home path (which the
 # repo-wide scan would flag).
-lu="privuser"; ln -s "/home/$lu/secret" "$WORK/leaky-link" 2>/dev/null
-bash "$HERE/../scripts/scan-generic.sh" "$WORK/leaky-link" >/dev/null 2>&1; check "generic scan flags a home path in a symlink target" $? 1
+lu="privuser"
+ln -s "/home/$lu/secret" "$WORK/leaky-link" 2>/dev/null
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/leaky-link" >/dev/null 2>&1
+check "generic scan flags a home path in a symlink target" $? 1
 
 # --- scan-personal-data catches a term inside a BINARY blob (no -I) ---------------------------
-SREPO6="$WORK/scanrepo6"; git init -q "$SREPO6"
-( cd "$SREPO6" && printf 'SECRET-SLUG-XYZ\000\001\002binary' > bin.dat && git add bin.dat && git commit -q -m "add binary" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1 ); check "scan catches a deny-listed term inside a binary blob" $? 1
+SREPO6="$WORK/scanrepo6"
+git init -q "$SREPO6"
+(cd "$SREPO6" && printf 'SECRET-SLUG-XYZ\000\001\002binary' >bin.dat && git add bin.dat && git commit -q -m "add binary" && bash "$SCAN" "$WORK/deny.txt" >/dev/null 2>&1)
+check "scan catches a deny-listed term inside a binary blob" $? 1
 
 # --- load_config strips an inline comment from a value ---------------------------------------
-printf 'SHIP_FEATURE_REVIEWERS=codex,cursor  # my quorum\n' > "$CFGDIR/config2"
+printf 'SHIP_FEATURE_REVIEWERS=codex,cursor  # my quorum\n' >"$CFGDIR/config2"
 out=$(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config2" bash "$CLI" relay --author claude 2>/dev/null)
-if printf '%s' "$out" | grep -q -- "--reviewers codex,cursor" && ! printf '%s' "$out" | grep -q "quorum"; then echo "  ok   [-] config value inline comment is stripped"; PASS=$((PASS+1)); else echo "  FAIL inline comment not stripped"; FAIL=$((FAIL+1)); fi
-
+if printf '%s' "$out" | grep -q -- "--reviewers codex,cursor" && ! printf '%s' "$out" | grep -q "quorum"; then
+  echo "  ok   [-] config value inline comment is stripped"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL inline comment not stripped"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- preflight fails on a DIVERGED branch (own commit + default advanced) ---------------------
-( cd "$MAIN/.claude/worktrees/feat" && git commit -q --allow-empty -m "feature work" && bash "$CLI" preflight >/dev/null 2>&1 ); check "preflight fails on a diverged branch" $? 1
+(cd "$MAIN/.claude/worktrees/feat" && git commit -q --allow-empty -m "feature work" && bash "$CLI" preflight >/dev/null 2>&1)
+check "preflight fails on a diverged branch" $? 1
 
 # --- plan-review: fan a plan out to a panel of stubbed reviewers -------------
 # Stub the reviewer CLIs so no network/real agent is touched. Each echoes a marker
 # plus its argv (so the argv/read-only contract can be asserted). cursor's binary is
 # `cursor-agent`; the rest match their reviewer name.
-PBIN="$WORK/pbin"; mkdir -p "$PBIN"
+PBIN="$WORK/pbin"
+mkdir -p "$PBIN"
 # The stub also surfaces the OPENCODE_CONFIG_CONTENT env (how glm pins read-only — the
 # highest-precedence config layer), the OPENCODE_CONFIG env (must be empty — glm unsets it),
 # and CWD (the checkout normally; an isolated dir only when the checkout carries its own opencode
 # config). Harmless for reviewers that don't set them.
 make_reviewer() {
   # $1 = review tag, $2 = exit code, $3 = binary name on PATH
-  cat > "$PBIN/$3" <<STUB
+  cat >"$PBIN/$3" <<STUB
 #!/usr/bin/env bash
 echo "REVIEW-$1 argv=[\$*] OPENCODE_CONFIG_CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}] OPENCODE_CONFIG=[\${OPENCODE_CONFIG:-}] OPENCODE_CONFIG_DIR=[\${OPENCODE_CONFIG_DIR:-}] CWD=[\${PWD}]"
 _args=("\$@")
@@ -458,17 +653,17 @@ STUB
   chmod +x "$PBIN/$3"
 }
 make_reviewer claude 0 claude
-make_reviewer codex  0 codex
+make_reviewer codex 0 codex
 # glm is invoked through the `opencode` binary (opencode run --agent plan), so the stub
 # is named `opencode` but tags its output REVIEW-glm.
-make_reviewer glm  0 opencode
+make_reviewer glm 0 opencode
 make_reviewer cursor 0 cursor-agent
 # grok is invoked through the `grok` binary
 make_reviewer grok 0 grok
 # antigravity/gemini reviewer (the `gemini` CLI). A richer stub than make_reviewer: it also reports
 # its CWD and whether the isolated, locked-down `.gemini/settings.json` (write tools excluded + hooks
 # off) is present in that CWD — so the read-only isolation contract can be asserted, not just argv.
-cat > "$PBIN/gemini" <<'GEMINISTUB'
+cat >"$PBIN/gemini" <<'GEMINISTUB'
 #!/usr/bin/env bash
 # The seat runs `gemini --version` first and refuses to review against a tool registry it
 # has not been audited against. STUB_GEMINI_VERSION lets a test drive that gate.
@@ -552,11 +747,18 @@ GEMINISTUB
 chmod +x "$PBIN/gemini"
 
 # clean run with an explicit panel → exit 0, both reviews on stdout
-out=$(printf 'Step 1: X\nStep 2: Y\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex,glm 2>/dev/null); rc=$?
+out=$(printf 'Step 1: X\nStep 2: Y\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex,glm 2>/dev/null)
+rc=$?
 check "plan-review clean run exits 0" "$rc" 0
-printf '%s' "$out" | grep -q "REVIEW-codex" && printf '%s' "$out" | grep -q "REVIEW-glm" \
-  && { echo "  ok   [-] plan-review prints each reviewer's output"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL plan-review dropped a reviewer's output"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q "REVIEW-codex" && printf '%s' "$out" | grep -q "REVIEW-glm" &&
+  {
+    echo "  ok   [-] plan-review prints each reviewer's output"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL plan-review dropped a reviewer's output"
+    FAIL=$((FAIL + 1))
+  }
 
 # read-only argv contract: EVERY supported reviewer must carry its read-only flag, so the
 # "nothing is written" guarantee is real. A dropped flag here is a security regression.
@@ -565,18 +767,42 @@ out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers c
 # stops checkout hooks/plugins/MCP from loading). Grep claude's line specifically so
 # another reviewer's flags can't satisfy this by accident.
 cl=$(printf '%s' "$out" | grep 'REVIEW-claude')
-printf '%s' "$cl" | grep -q -- "--permission-mode plan" && printf '%s' "$cl" | grep -q -- "--safe-mode" && { echo "  ok   [-] claude runs read-only (--permission-mode plan --safe-mode)"; PASS=$((PASS+1)); } || { echo "  FAIL claude not fully read-only (plan + safe-mode) in plan-review"; FAIL=$((FAIL+1)); }
-printf '%s' "$out" | grep 'REVIEW-codex' | grep -q -- "--sandbox read-only" && { echo "  ok   [-] codex runs read-only (--sandbox read-only)"; PASS=$((PASS+1)); } || { echo "  FAIL codex not read-only in plan-review"; FAIL=$((FAIL+1)); }
+printf '%s' "$cl" | grep -q -- "--permission-mode plan" && printf '%s' "$cl" | grep -q -- "--safe-mode" && {
+  echo "  ok   [-] claude runs read-only (--permission-mode plan --safe-mode)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL claude not fully read-only (plan + safe-mode) in plan-review"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$out" | grep 'REVIEW-codex' | grep -q -- "--sandbox read-only" && {
+  echo "  ok   [-] codex runs read-only (--sandbox read-only)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL codex not read-only in plan-review"
+  FAIL=$((FAIL + 1))
+}
 # Grep cursor's own line, like claude's check above. Whole-stdout matching is satisfied by ANY
 # reviewer's line carrying the flag, so it would keep passing if cursor silently lost it while a
 # future reviewer happened to use the same one. Today's stubs echo argv, not stdin, so the plan
 # text itself cannot trigger it — the point is not to depend on that staying true.
 cu=$(printf '%s' "$out" | grep 'REVIEW-cursor')
-printf '%s' "$cu" | grep -q -- "--mode=ask"                    && { echo "  ok   [-] cursor runs in ask (Q&A) mode"; PASS=$((PASS+1)); } || { echo "  FAIL cursor not in ask mode"; FAIL=$((FAIL+1)); }
+printf '%s' "$cu" | grep -q -- "--mode=ask" && {
+  echo "  ok   [-] cursor runs in ask (Q&A) mode"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL cursor not in ask mode"
+  FAIL=$((FAIL + 1))
+}
 # cursor-agent's own default model is "Auto", which routes to the frontier models and may pick a
 # CLAUDE one — so the agent that usually wrote the plan would be grading it while the panel reports
 # an independent "Cursor" reviewer. The pin is what keeps the panel honest, so it is asserted.
-printf '%s' "$cu" | grep -q -- "--model composer-2.5"  && { echo "  ok   [-] cursor model is pinned (not Auto)"; PASS=$((PASS+1)); } || { echo "  FAIL cursor model not pinned: $cu"; FAIL=$((FAIL+1)); }
+printf '%s' "$cu" | grep -q -- "--model composer-2.5" && {
+  echo "  ok   [-] cursor model is pinned (not Auto)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL cursor model not pinned: $cu"
+  FAIL=$((FAIL + 1))
+}
 # glm's read-only guarantee: OPENCODE_CONFIG_CONTENT (highest-precedence config layer)
 # DENIES `edit` AND `bash` (removing both tools — no write, no shell), OPENCODE_CONFIG is
 # unset (empty), it runs --pure, and never the all-allow build agent. The `plan` agent alone
@@ -589,9 +815,27 @@ printf '%s' "$cu" | grep -q -- "--model composer-2.5"  && { echo "  ok   [-] cur
 # falls back to an isolated dir only when the checkout carries its own opencode config, which is
 # the one thing the permission denial above cannot pin down.
 km=$(printf '%s' "$out" | grep 'REVIEW-glm')
-printf '%s' "$km" | grep -q -- "--agent plan" && printf '%s' "$km" | grep -q -- "glm-5.3" && { echo "  ok   [-] glm runs opencode plan agent (glm-5.3)"; PASS=$((PASS+1)); } || { echo "  FAIL glm not on opencode plan agent"; FAIL=$((FAIL+1)); }
-printf '%s' "$km" | grep -q -- "--pure" && { echo "  ok   [-] glm runs --pure (no checkout plugins)"; PASS=$((PASS+1)); } || { echo "  FAIL glm missing --pure"; FAIL=$((FAIL+1)); }
-printf '%s' "$km" | grep -q 'OPENCODE_CONFIG_CONTENT=\[.*"edit":"deny".*"bash":"deny".*\]' && { echo "  ok   [-] glm read-only via OPENCODE_CONFIG_CONTENT (edit+bash denied)"; PASS=$((PASS+1)); } || { echo "  FAIL glm not hard read-only (OPENCODE_CONFIG_CONTENT must deny edit AND bash)"; FAIL=$((FAIL+1)); }
+printf '%s' "$km" | grep -q -- "--agent plan" && printf '%s' "$km" | grep -q -- "glm-5.3" && {
+  echo "  ok   [-] glm runs opencode plan agent (glm-5.3)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm not on opencode plan agent"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$km" | grep -q -- "--pure" && {
+  echo "  ok   [-] glm runs --pure (no checkout plugins)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm missing --pure"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$km" | grep -q 'OPENCODE_CONFIG_CONTENT=\[.*"edit":"deny".*"bash":"deny".*\]' && {
+  echo "  ok   [-] glm read-only via OPENCODE_CONFIG_CONTENT (edit+bash denied)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm not hard read-only (OPENCODE_CONFIG_CONTENT must deny edit AND bash)"
+  FAIL=$((FAIL + 1))
+}
 # The other denials are load-bearing now that the seat reads a tree, and each is one JSON edit
 # away from being dropped in silence:
 #   external_directory   a rejected external read KILLS the run — this is what produced the
@@ -604,34 +848,87 @@ printf '%s' "$km" | grep -q 'OPENCODE_CONFIG_CONTENT=\[.*"edit":"deny".*"bash":"
 #   lsp                  a language server is a process the PROJECT starts and configures —
 #                        denying bash while leaving this on still lets the reviewed tree run code
 for k in external_directory task webfetch websearch lsp; do
-  printf '%s' "$km" | grep -q "\"$k\":\"deny\"" \
-    && { echo "  ok   [-] glm denies $k"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL glm does not deny $k"; FAIL=$((FAIL+1)); }
+  printf '%s' "$km" | grep -q "\"$k\":\"deny\"" &&
+    {
+      echo "  ok   [-] glm denies $k"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL glm does not deny $k"
+      FAIL=$((FAIL + 1))
+    }
 done
-printf '%s' "$km" | grep -q 'OPENCODE_CONFIG=\[\]' && { echo "  ok   [-] glm unsets inherited OPENCODE_CONFIG"; PASS=$((PASS+1)); } || { echo "  FAIL glm left OPENCODE_CONFIG set (could weaken perms)"; FAIL=$((FAIL+1)); }
+printf '%s' "$km" | grep -q 'OPENCODE_CONFIG=\[\]' && {
+  echo "  ok   [-] glm unsets inherited OPENCODE_CONFIG"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm left OPENCODE_CONFIG set (could weaken perms)"
+  FAIL=$((FAIL + 1))
+}
 # OPENCODE_CONFIG_DIR is the other half of "unsets any inherited OPENCODE_CONFIG*", and it was
 # only the comment that said so: the code unset one variable. A config DIR carries agents, MCP
 # servers and model settings just as a config file does.
-printf '%s' "$km" | grep -q 'OPENCODE_CONFIG_DIR=\[\]' && { echo "  ok   [-] glm unsets inherited OPENCODE_CONFIG_DIR"; PASS=$((PASS+1)); } || { echo "  FAIL glm left OPENCODE_CONFIG_DIR set (agents/MCP could load)"; FAIL=$((FAIL+1)); }
-kcwd=$(printf '%s' "$km" | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p'); case "$kcwd" in "") echo "  FAIL glm cwd not captured"; FAIL=$((FAIL+1));; "$PWD") echo "  ok   [-] glm reads the checkout"; PASS=$((PASS+1));; *) echo "  FAIL glm ran outside the checkout ($kcwd) — it can only review prose from there"; FAIL=$((FAIL+1));; esac
-printf '%s' "$km" | grep -q -- "--agent build"         && { echo "  FAIL glm uses the all-allow build agent"; FAIL=$((FAIL+1)); } || { echo "  ok   [-] glm never uses the all-allow build agent"; PASS=$((PASS+1)); }
+printf '%s' "$km" | grep -q 'OPENCODE_CONFIG_DIR=\[\]' && {
+  echo "  ok   [-] glm unsets inherited OPENCODE_CONFIG_DIR"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm left OPENCODE_CONFIG_DIR set (agents/MCP could load)"
+  FAIL=$((FAIL + 1))
+}
+kcwd=$(printf '%s' "$km" | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
+case "$kcwd" in "")
+  echo "  FAIL glm cwd not captured"
+  FAIL=$((FAIL + 1))
+  ;;
+"$PWD")
+  echo "  ok   [-] glm reads the checkout"
+  PASS=$((PASS + 1))
+  ;;
+*)
+  echo "  FAIL glm ran outside the checkout ($kcwd) — it can only review prose from there"
+  FAIL=$((FAIL + 1))
+  ;;
+esac
+printf '%s' "$km" | grep -q -- "--agent build" && {
+  echo "  FAIL glm uses the all-allow build agent"
+  FAIL=$((FAIL + 1))
+} || {
+  echo "  ok   [-] glm never uses the all-allow build agent"
+  PASS=$((PASS + 1))
+}
 # The other half of the cwd contract: a checkout that ships its OWN opencode config must push
 # the seat back into an isolated dir, and must SAY so. Permissions are pinned by the deny above
 # and cannot be overridden, but a repo config also carries MCP servers, agents and model
 # routing, and no permission key covers those — so the tree being reviewed would otherwise get
 # to reconfigure the reviewer reading it.
-ocfg_repo="$WORK/ocfg"; mkdir -p "$ocfg_repo"
-( cd "$ocfg_repo" && git init -q . && printf '{}\n' > opencode.json )
+ocfg_repo="$WORK/ocfg"
+mkdir -p "$ocfg_repo"
+(cd "$ocfg_repo" && git init -q . && printf '{}\n' >opencode.json)
 ocfg_out=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
 ocfg_cwd=$(printf '%s' "$ocfg_out" | grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
 case "$ocfg_cwd" in
-  "$ocfg_repo"|"$ocfg_repo"/*) echo "  FAIL glm read a checkout carrying its own opencode.json ($ocfg_cwd)"; FAIL=$((FAIL+1));;
-  "") echo "  FAIL glm cwd not captured in the repo-config case"; FAIL=$((FAIL+1));;
-  *) echo "  ok   [-] glm falls back to an isolated cwd when the checkout has an opencode config"; PASS=$((PASS+1));;
+  "$ocfg_repo" | "$ocfg_repo"/*)
+    echo "  FAIL glm read a checkout carrying its own opencode.json ($ocfg_cwd)"
+    FAIL=$((FAIL + 1))
+    ;;
+  "")
+    echo "  FAIL glm cwd not captured in the repo-config case"
+    FAIL=$((FAIL + 1))
+    ;;
+  *)
+    echo "  ok   [-] glm falls back to an isolated cwd when the checkout has an opencode config"
+    PASS=$((PASS + 1))
+    ;;
 esac
-printf '%s' "$ocfg_out" | grep -q 'opencode.json would configure the reviewer' \
-  && { echo "  ok   [-] glm announces the degraded review"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL glm degraded silently — a prose-only review must say so"; FAIL=$((FAIL+1)); }
+printf '%s' "$ocfg_out" | grep -q 'opencode.json would configure the reviewer' &&
+  {
+    echo "  ok   [-] glm announces the degraded review"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL glm degraded silently — a prose-only review must say so"
+    FAIL=$((FAIL + 1))
+  }
 # From a SUBDIRECTORY the config is still found: opencode discovers config by walking up, so a
 # check that only looked at $PWD would miss it and hand the reviewer a config we refused. This
 # is the case the walk-up exists for, and it is also this workflow's normal shape — plan-review
@@ -640,65 +937,105 @@ mkdir -p "$ocfg_repo/sub/deeper"
 sub_out=$(cd "$ocfg_repo/sub/deeper" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
 sub_cwd=$(printf '%s' "$sub_out" | grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
 case "$sub_cwd" in
-  "$ocfg_repo"|"$ocfg_repo"/*) echo "  FAIL glm missed an opencode config in a parent directory ($sub_cwd)"; FAIL=$((FAIL+1));;
-  "") echo "  FAIL glm cwd not captured in the subdirectory case"; FAIL=$((FAIL+1));;
-  *) echo "  ok   [-] glm finds an opencode config above the cwd"; PASS=$((PASS+1));;
+  "$ocfg_repo" | "$ocfg_repo"/*)
+    echo "  FAIL glm missed an opencode config in a parent directory ($sub_cwd)"
+    FAIL=$((FAIL + 1))
+    ;;
+  "")
+    echo "  FAIL glm cwd not captured in the subdirectory case"
+    FAIL=$((FAIL + 1))
+    ;;
+  *)
+    echo "  ok   [-] glm finds an opencode config above the cwd"
+    PASS=$((PASS + 1))
+    ;;
 esac
-printf '%s' "$sub_out" | grep -q 'would configure the reviewer' \
-  && { echo "  ok   [-] glm announces the degraded review from a subdirectory too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL glm degraded silently from a subdirectory"; FAIL=$((FAIL+1)); }
+printf '%s' "$sub_out" | grep -q 'would configure the reviewer' &&
+  {
+    echo "  ok   [-] glm announces the degraded review from a subdirectory too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL glm degraded silently from a subdirectory"
+    FAIL=$((FAIL + 1))
+  }
 
 # All THREE config names trigger the fallback. The function checks opencode.json, opencode.jsonc
 # and .opencode; only the first was exercised, so a typo in either of the others was free.
 for cfgname in opencode.jsonc .opencode; do
   rm -rf "${ocfg_repo:?}/opencode.json" "${ocfg_repo:?}/opencode.jsonc" "${ocfg_repo:?}/.opencode"
-  if [ "$cfgname" = .opencode ]; then mkdir -p "$ocfg_repo/.opencode"; else printf '{}\n' > "$ocfg_repo/$cfgname"; fi
-  n_cwd=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>/dev/null \
-          | grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
+  if [ "$cfgname" = .opencode ]; then mkdir -p "$ocfg_repo/.opencode"; else printf '{}\n' >"$ocfg_repo/$cfgname"; fi
+  n_cwd=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>/dev/null |
+    grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
   case "$n_cwd" in
-    "$ocfg_repo"|"$ocfg_repo"/*|"") echo "  FAIL $cfgname did not trigger the isolated fallback ($n_cwd)"; FAIL=$((FAIL+1));;
-    *) echo "  ok   [-] $cfgname triggers the isolated fallback"; PASS=$((PASS+1));;
+    "$ocfg_repo" | "$ocfg_repo"/* | "")
+      echo "  FAIL $cfgname did not trigger the isolated fallback ($n_cwd)"
+      FAIL=$((FAIL + 1))
+      ;;
+    *)
+      echo "  ok   [-] $cfgname triggers the isolated fallback"
+      PASS=$((PASS + 1))
+      ;;
   esac
 done
-rm -rf "${ocfg_repo:?}/.opencode"; printf '{}\n' > "$ocfg_repo/opencode.json"
+rm -rf "${ocfg_repo:?}/.opencode"
+printf '{}\n' >"$ocfg_repo/opencode.json"
 
 # A LINKED WORKTREE at <repo>/.claude/worktrees/<name> is its own git toplevel, so a walk that
 # stops at the toplevel never sees the main checkout's config — while opencode, running in the
 # worktree, is inside that repo. This is the exact layout ship-feature creates, so it is checked
 # explicitly rather than by walking past the root (which would degrade reviews over configs
 # opencode never loads).
-wt_main="$WORK/wtmain"; mkdir -p "$wt_main"
-( cd "$wt_main" && git init -q . && git commit -q --allow-empty -m init && printf '{}\n' > opencode.json \
-  && git worktree add -q ".claude/worktrees/w" -b wtprobe >/dev/null 2>&1 )
-wt_cwd=$(cd "$wt_main/.claude/worktrees/w" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>/dev/null \
-         | grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
+wt_main="$WORK/wtmain"
+mkdir -p "$wt_main"
+(cd "$wt_main" && git init -q . && git commit -q --allow-empty -m init && printf '{}\n' >opencode.json &&
+  git worktree add -q ".claude/worktrees/w" -b wtprobe >/dev/null 2>&1)
+wt_cwd=$(cd "$wt_main/.claude/worktrees/w" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>/dev/null |
+  grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
 case "$wt_cwd" in
-  "$wt_main"/*|"") echo "  FAIL glm missed the MAIN repo's opencode.json from a linked worktree ($wt_cwd)"; FAIL=$((FAIL+1));;
-  *) echo "  ok   [-] glm finds the main checkout's opencode config from a linked worktree"; PASS=$((PASS+1));;
+  "$wt_main"/* | "")
+    echo "  FAIL glm missed the MAIN repo's opencode.json from a linked worktree ($wt_cwd)"
+    FAIL=$((FAIL + 1))
+    ;;
+  *)
+    echo "  ok   [-] glm finds the main checkout's opencode config from a linked worktree"
+    PASS=$((PASS + 1))
+    ;;
 esac
 
 # The $HOME bound, which the code comment calls load-bearing: `~/.opencode` exists on any
 # machine that has run opencode, so a walk that does not stop at $HOME matches it for EVERY
 # checkout under $HOME and degrades every review to prose. Point HOME at a temp dir that has
 # one, put the checkout beneath it, and the seat must still read the checkout.
-home_probe="$WORK/homeprobe"; mkdir -p "$home_probe/.opencode" "$home_probe/repo"
-( cd "$home_probe/repo" && git init -q . )
-hp_cwd=$(cd "$home_probe/repo" && printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$home_probe" bash "$CLI" plan-review --reviewers glm 2>/dev/null \
-         | grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
+home_probe="$WORK/homeprobe"
+mkdir -p "$home_probe/.opencode" "$home_probe/repo"
+(cd "$home_probe/repo" && git init -q .)
+hp_cwd=$(cd "$home_probe/repo" && printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$home_probe" bash "$CLI" plan-review --reviewers glm 2>/dev/null |
+  grep 'REVIEW-glm' | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
 case "$hp_cwd" in
-  "$home_probe/repo") echo "  ok   [-] glm ignores ~/.opencode and still reads the checkout"; PASS=$((PASS+1));;
-  "") echo "  FAIL glm cwd not captured in the HOME-bound case"; FAIL=$((FAIL+1));;
-  *) echo "  FAIL a config at \$HOME degraded the review ($hp_cwd) — every checkout under \$HOME would go prose-only"; FAIL=$((FAIL+1));;
+  "$home_probe/repo")
+    echo "  ok   [-] glm ignores ~/.opencode and still reads the checkout"
+    PASS=$((PASS + 1))
+    ;;
+  "")
+    echo "  FAIL glm cwd not captured in the HOME-bound case"
+    FAIL=$((FAIL + 1))
+    ;;
+  *)
+    echo "  FAIL a config at \$HOME degraded the review ($hp_cwd) — every checkout under \$HOME would go prose-only"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
 
 # FAIL CLOSED: config present and no isolated dir available → the seat is SKIPPED, never run in
 # the checkout whose config we just refused. The old code left ro_cwd empty and fell through to
 # $PWD while still announcing an isolated review — a reviewer that lies about what it read.
-mkfail="$WORK/mkfail"; mkdir -p "$mkfail"
+mkfail="$WORK/mkfail"
+mkdir -p "$mkfail"
 # The stub lets the FIRST mktemp through: that one creates STATUS_DIR, and failing it aborts
 # plan-review before the seat is ever reached — the test would then pass without exercising the
 # branch at all. Everything after it fails, which is the seat's own isolated dir.
-cat > "$mkfail/mktemp" <<STUB
+cat >"$mkfail/mktemp" <<STUB
 #!/usr/bin/env bash
 if [ ! -e "$mkfail/used" ]; then : > "$mkfail/used"; exec /usr/bin/mktemp "\$@"; fi
 exit 1
@@ -706,289 +1043,539 @@ STUB
 chmod +x "$mkfail/mktemp"
 fc_out=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$mkfail:$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>&1)
 if printf '%s' "$fc_out" | grep -q 'REVIEW-glm'; then
-  echo "  FAIL the seat ran with no isolated cwd — in the checkout it was supposed to avoid"; FAIL=$((FAIL+1))
+  echo "  FAIL the seat ran with no isolated cwd — in the checkout it was supposed to avoid"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] glm is skipped rather than run in a checkout it must not read"; PASS=$((PASS+1))
+  echo "  ok   [-] glm is skipped rather than run in a checkout it must not read"
+  PASS=$((PASS + 1))
 fi
-printf '%s' "$fc_out" | grep -q 'no isolated cwd could be created' \
-  && { echo "  ok   [-] the skipped seat says why"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the seat was skipped silently"; FAIL=$((FAIL+1)); }
+printf '%s' "$fc_out" | grep -q 'no isolated cwd could be created' &&
+  {
+    echo "  ok   [-] the skipped seat says why"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the seat was skipped silently"
+    FAIL=$((FAIL + 1))
+  }
 
 # --- the config file carries the MODEL PINS too -----------------------------------------------
 # The panel used to be described in two places: who sits on it in this file, what they actually
 # run in the shell profile. A seat and its model could then drift apart, and a run with no shell
 # profile (cron, a fresh machine) silently got the bundled default instead of the pinned model.
-printf 'GLM_REVIEW_MODEL=openrouter/z-ai/glm-5.2\n' > "$CFGDIR/config3"
+printf 'GLM_REVIEW_MODEL=openrouter/z-ai/glm-5.2\n' >"$CFGDIR/config3"
 mout=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config3" bash "$CLI" plan-review --reviewers glm 2>/dev/null | grep 'REVIEW-glm')
-printf '%s' "$mout" | grep -q -- "-m openrouter/z-ai/glm-5.2" \
-  && { echo "  ok   [-] the config file pins the glm model"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the config file's model pin was ignored (seat fell back to the bundled default)"; FAIL=$((FAIL+1)); }
+printf '%s' "$mout" | grep -q -- "-m openrouter/z-ai/glm-5.2" &&
+  {
+    echo "  ok   [-] the config file pins the glm model"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the config file's model pin was ignored (seat fell back to the bundled default)"
+    FAIL=$((FAIL + 1))
+  }
 # Environment still wins over the file, exactly like the SHIP_FEATURE_* keys.
 eout=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config3" GLM_REVIEW_MODEL=openrouter/z-ai/glm-9.9 bash "$CLI" plan-review --reviewers glm 2>/dev/null | grep 'REVIEW-glm')
-printf '%s' "$eout" | grep -q -- "-m openrouter/z-ai/glm-9.9" \
-  && { echo "  ok   [-] the environment still overrides the config file's model pin"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the config file overrode an explicit environment model"; FAIL=$((FAIL+1)); }
+printf '%s' "$eout" | grep -q -- "-m openrouter/z-ai/glm-9.9" &&
+  {
+    echo "  ok   [-] the environment still overrides the config file's model pin"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the config file overrode an explicit environment model"
+    FAIL=$((FAIL + 1))
+  }
 # pr-review-relay is a CHILD PROCESS, so its variable has to be EXPORTED, not merely assigned —
 # a plain shell variable does not cross that boundary and the relay would keep its own default.
 # The stub is swapped for one that echoes its ENVIRONMENT, then RESTORED. Leaving it in place
 # would hand every later relay test a stub that prints no argv, and they would pass for the wrong
 # reason — a test fixture that quietly breaks its neighbours is worse than the gap it filled.
 cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup"
-printf '#!/usr/bin/env bash\necho "RELAYENV PR_RELAY_OPENCODE_MODEL=${PR_RELAY_OPENCODE_MODEL:-} CURSOR_REVIEW_MODEL=${CURSOR_REVIEW_MODEL:-}"\nexit 0\n' > "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
-printf 'PR_RELAY_OPENCODE_MODEL=openrouter/z-ai/glm-5.2\nCURSOR_REVIEW_MODEL=composer-2.5-fast\n' > "$CFGDIR/config4"
+printf '#!/usr/bin/env bash\necho "RELAYENV PR_RELAY_OPENCODE_MODEL=${PR_RELAY_OPENCODE_MODEL:-} CURSOR_REVIEW_MODEL=${CURSOR_REVIEW_MODEL:-}"\nexit 0\n' >"$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
+printf 'PR_RELAY_OPENCODE_MODEL=openrouter/z-ai/glm-5.2\nCURSOR_REVIEW_MODEL=composer-2.5-fast\n' >"$CFGDIR/config4"
 rout=$(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config4" bash "$CLI" relay --author claude 2>/dev/null)
-printf '%s' "$rout" | grep -q 'PR_RELAY_OPENCODE_MODEL=openrouter/z-ai/glm-5.2' \
-  && { echo "  ok   [-] the relay's model pin reaches the child process"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL PR_RELAY_OPENCODE_MODEL did not reach pr-review-relay (not exported?)"; FAIL=$((FAIL+1)); }
+printf '%s' "$rout" | grep -q 'PR_RELAY_OPENCODE_MODEL=openrouter/z-ai/glm-5.2' &&
+  {
+    echo "  ok   [-] the relay's model pin reaches the child process"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL PR_RELAY_OPENCODE_MODEL did not reach pr-review-relay (not exported?)"
+    FAIL=$((FAIL + 1))
+  }
 # CURSOR_REVIEW_MODEL is the one variable BOTH tools read, which is the whole reason it keeps its
 # vendor-shaped name — so it must cross the process boundary too, not just reach plan-review.
-printf '%s' "$rout" | grep -q 'CURSOR_REVIEW_MODEL=composer-2.5-fast' \
-  && { echo "  ok   [-] the shared cursor pin reaches the child process"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL CURSOR_REVIEW_MODEL did not reach pr-review-relay (not exported?)"; FAIL=$((FAIL+1)); }
-cp "$WORK/relay-stub-backup" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
+printf '%s' "$rout" | grep -q 'CURSOR_REVIEW_MODEL=composer-2.5-fast' &&
+  {
+    echo "  ok   [-] the shared cursor pin reaches the child process"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL CURSOR_REVIEW_MODEL did not reach pr-review-relay (not exported?)"
+    FAIL=$((FAIL + 1))
+  }
+cp "$WORK/relay-stub-backup" "$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
 # The cursor seat, from the file and with the environment still winning. The grok seat's old key
 # in this same file is RECORDED AND IGNORED: the seat is `grok` now and is pinned by MODEL_grok in
 # the shared file. Stderr is captured, not discarded — the warning is the behaviour under test.
-printf 'CURSOR_REVIEW_MODEL=composer-2.5-fast\nGROK45HIGH_REVIEW_MODEL=grok-9.9\n' > "$CFGDIR/config5"
+printf 'CURSOR_REVIEW_MODEL=composer-2.5-fast\nGROK45HIGH_REVIEW_MODEL=grok-9.9\n' >"$CFGDIR/config5"
 pout=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config5" bash "$CLI" plan-review --reviewers cursor,grok 2>&1)
-printf '%s' "$pout" | grep 'REVIEW-cursor' | grep -q -- "--model composer-2.5-fast" \
-  && { echo "  ok   [-] the config file pins the cursor model"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the config file's cursor pin was ignored"; FAIL=$((FAIL+1)); }
-printf '%s' "$pout" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.6 " \
-  && printf '%s' "$pout" | grep -q "GROK45HIGH_REVIEW_MODEL is set in ship-feature's config.*IGNORED" \
-  && { echo "  ok   [-] the config file's old grok45high pin warns and is ignored"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the config file's GROK45HIGH_REVIEW_MODEL was honoured or not reported"; FAIL=$((FAIL+1)); }
+printf '%s' "$pout" | grep 'REVIEW-cursor' | grep -q -- "--model composer-2.5-fast" &&
+  {
+    echo "  ok   [-] the config file pins the cursor model"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the config file's cursor pin was ignored"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$pout" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.6 " &&
+  printf '%s' "$pout" | grep -q "GROK45HIGH_REVIEW_MODEL is set in ship-feature's config.*IGNORED" &&
+  {
+    echo "  ok   [-] the config file's old grok45high pin warns and is ignored"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the config file's GROK45HIGH_REVIEW_MODEL was honoured or not reported"
+    FAIL=$((FAIL + 1))
+  }
 pout2=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config5" CURSOR_REVIEW_MODEL=composer-2.5 GROK_REVIEW_MODEL=grok-4.7 bash "$CLI" plan-review --reviewers cursor,grok 2>/dev/null)
 # Anchored on the argv closing bracket: bare "composer-2.5" is a PREFIX of the "composer-2.5-fast"
 # the config file sets, so an unanchored grep would pass whether the override worked or not —
 # precisely the bug this case exists to catch.
-printf '%s' "$pout2" | grep 'REVIEW-cursor' | grep -q -- "--model composer-2.5]" \
-  && printf '%s' "$pout2" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.7 " \
-  && { echo "  ok   [-] the environment overrides the cursor and grok pins"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the config file overrode an explicit environment model"; FAIL=$((FAIL+1)); }
+printf '%s' "$pout2" | grep 'REVIEW-cursor' | grep -q -- "--model composer-2.5]" &&
+  printf '%s' "$pout2" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.7 " &&
+  {
+    echo "  ok   [-] the environment overrides the cursor and grok pins"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the config file overrode an explicit environment model"
+    FAIL=$((FAIL + 1))
+  }
 
 # --- the SHARED panel config (pr-review-relay's file) is the last fallback ---------------------
 # Both tools drive the same seats on the same accounts, so the model a seat runs belongs to the
 # machine, not to whichever tool is invoking it. The relay's file has carried MODEL_glm since
 # 2026-08-14; reading it here is what makes one file the answer instead of two that drift.
-printf 'MODEL_glm=openrouter/z-ai/glm-9.9\nMODEL_grok=grok-9.9\nMODEL_cursor=composer-9.9\n' > "$CFGDIR/shared1"
+printf 'MODEL_glm=openrouter/z-ai/glm-9.9\nMODEL_grok=grok-9.9\nMODEL_cursor=composer-9.9\n' >"$CFGDIR/shared1"
 sh1=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared1" bash "$CLI" plan-review --reviewers glm,grok,cursor 2>/dev/null)
-printf '%s' "$sh1" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" \
-  && printf '%s' "$sh1" | grep 'REVIEW-grok' | grep -q -- "-m grok-9.9" \
-  && { echo "  ok   [-] the shared relay config pins the models"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the shared relay config was not read"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh1" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" &&
+  printf '%s' "$sh1" | grep 'REVIEW-grok' | grep -q -- "-m grok-9.9" &&
+  {
+    echo "  ok   [-] the shared relay config pins the models"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the shared relay config was not read"
+    FAIL=$((FAIL + 1))
+  }
 # All three mapped seats, not just two: each is its own case arm, so a missing one fails
 # silently on exactly one reviewer.
-printf '%s' "$sh1" | grep 'REVIEW-cursor' | grep -q -- "--model composer-9.9" \
-  && { echo "  ok   [-] the shared relay config pins the cursor model too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL MODEL_cursor was not mapped"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh1" | grep 'REVIEW-cursor' | grep -q -- "--model composer-9.9" &&
+  {
+    echo "  ok   [-] the shared relay config pins the cursor model too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL MODEL_cursor was not mapped"
+    FAIL=$((FAIL + 1))
+  }
 # An EMPTY environment value must not block the shared file. Empty means "no pin", not
 # "disable" — the SHIP_FEATURE_* keys use the other rule on purpose. With the wrong one,
 # CURSOR_REVIEW_MODEL= left ship-feature on its built-in default while pr-review-relay used the
 # shared value: same inputs, two different models.
 sh6=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared1" CURSOR_REVIEW_MODEL='' bash "$CLI" plan-review --reviewers cursor 2>/dev/null)
-printf '%s' "$sh6" | grep 'REVIEW-cursor' | grep -q -- "--model composer-9.9" \
-  && { echo "  ok   [-] an empty environment pin does not block the shared file"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL an empty env pin blocked the shared config"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh6" | grep 'REVIEW-cursor' | grep -q -- "--model composer-9.9" &&
+  {
+    echo "  ok   [-] an empty environment pin does not block the shared file"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL an empty env pin blocked the shared config"
+    FAIL=$((FAIL + 1))
+  }
 # A file with NO FINAL NEWLINE keeps its last line. pr-review-relay's parser reads it, so
 # dropping it here would make the same file select different models in the two tools.
-printf 'MODEL_glm=openrouter/z-ai/glm-9.9' > "$CFGDIR/shared5"
+printf 'MODEL_glm=openrouter/z-ai/glm-9.9' >"$CFGDIR/shared5"
 sh7=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared5" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
-printf '%s' "$sh7" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" \
-  && { echo "  ok   [-] a config file with no final newline keeps its last line"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the last line was dropped when the file had no final newline"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh7" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" &&
+  {
+    echo "  ok   [-] a config file with no final newline keeps its last line"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the last line was dropped when the file had no final newline"
+    FAIL=$((FAIL + 1))
+  }
 # Parser parity with pr-review-relay on a BOM'd file: it strips the BOM, so without this the
 # first key reads as "\ufeffMODEL_glm" here and "MODEL_glm" there — one file, two models.
-printf '\xef\xbb\xbfMODEL_glm=openrouter/z-ai/glm-9.9\n' > "$CFGDIR/shared6"
+printf '\xef\xbb\xbfMODEL_glm=openrouter/z-ai/glm-9.9\n' >"$CFGDIR/shared6"
 sh8=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared6" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
-printf '%s' "$sh8" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" \
-  && { echo "  ok   [-] a UTF-8 BOM does not hide the first key"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a BOM'd shared config was not parsed like the relay parses it"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh8" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" &&
+  {
+    echo "  ok   [-] a UTF-8 BOM does not hide the first key"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a BOM'd shared config was not parsed like the relay parses it"
+    FAIL=$((FAIL + 1))
+  }
 # HOME unset must not abort the command under `set -u`. A caller that passes both paths
 # explicitly has every right not to have one.
 env -u HOME PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/shared1" SHIP_FEATURE_PLANS_DIR="$WORK/plans" \
   bash "$CLI" plan-review --reviewers glm </dev/null >/dev/null 2>&1
-[ $? -ne 2 ] && { echo "  ok   [-] an unset HOME does not abort the run"; PASS=$((PASS+1)); } || { echo "  FAIL unset HOME aborted (unbound variable)"; FAIL=$((FAIL+1)); }
+[ $? -ne 2 ] && {
+  echo "  ok   [-] an unset HOME does not abort the run"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL unset HOME aborted (unbound variable)"
+  FAIL=$((FAIL + 1))
+}
 # WHO sits on the panel comes from the shared file too. It was duplicated in both configs —
 # identical today, free to drift tomorrow, and a panel that differs between the plan gate and the
 # PR gate is something you discover from a verdict.
-printf 'REVIEWERS=codex,grok\nPLAN_REVIEWERS=codex,glm\n' > "$CFGDIR/shared7"
+printf 'REVIEWERS=codex,grok\nPLAN_REVIEWERS=codex,glm\n' >"$CFGDIR/shared7"
 sh9=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" bash "$CLI" relay --author claude 2>/dev/null)
-printf '%s' "$sh9" | grep -q -- "--reviewers codex,grok" \
-  && { echo "  ok   [-] the shared file names the relay panel"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL REVIEWERS was not read from the shared file"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh9" | grep -q -- "--reviewers codex,grok" &&
+  {
+    echo "  ok   [-] the shared file names the relay panel"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL REVIEWERS was not read from the shared file"
+    FAIL=$((FAIL + 1))
+  }
 sh10=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" bash "$CLI" plan-review 2>/dev/null)
-printf '%s' "$sh10" | grep -q 'REVIEW-glm' && printf '%s' "$sh10" | grep -q 'REVIEW-codex' \
-  && ! printf '%s' "$sh10" | grep -q 'REVIEW-grok' \
-  && { echo "  ok   [-] the shared file names the plan-review panel"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL PLAN_REVIEWERS was not read from the shared file"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh10" | grep -q 'REVIEW-glm' && printf '%s' "$sh10" | grep -q 'REVIEW-codex' &&
+  ! printf '%s' "$sh10" | grep -q 'REVIEW-grok' &&
+  {
+    echo "  ok   [-] the shared file names the plan-review panel"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL PLAN_REVIEWERS was not read from the shared file"
+    FAIL=$((FAIL + 1))
+  }
 # ship-feature's own config still wins, so one tool can differ on purpose.
-printf 'SHIP_FEATURE_PLAN_REVIEWERS=codex\n' > "$CFGDIR/shared8"
+printf 'SHIP_FEATURE_PLAN_REVIEWERS=codex\n' >"$CFGDIR/shared8"
 sh11=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/shared8" PR_RELAY_CONFIG="$CFGDIR/shared7" bash "$CLI" plan-review 2>/dev/null)
-printf '%s' "$sh11" | grep -q 'REVIEW-codex' && ! printf '%s' "$sh11" | grep -q 'REVIEW-glm' \
-  && { echo "  ok   [-] ship-feature's own panel beats the shared one"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the shared panel overrode ship-feature's own"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh11" | grep -q 'REVIEW-codex' && ! printf '%s' "$sh11" | grep -q 'REVIEW-glm' &&
+  {
+    echo "  ok   [-] ship-feature's own panel beats the shared one"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the shared panel overrode ship-feature's own"
+    FAIL=$((FAIL + 1))
+  }
 # An explicitly EMPTY environment value still disables the injected quorum — that is what the
 # ${VAR+x} rule is for, and it must survive a value sitting in the shared file.
 sh12=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" SHIP_FEATURE_REVIEWERS='' bash "$CLI" relay --author claude 2>/dev/null)
-printf '%s' "$sh12" | grep -q -- "--reviewers" \
-  && { echo "  FAIL an empty SHIP_FEATURE_REVIEWERS no longer disables the injected quorum"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] an empty environment quorum still disables injection"; PASS=$((PASS+1)); }
+printf '%s' "$sh12" | grep -q -- "--reviewers" &&
+  {
+    echo "  FAIL an empty SHIP_FEATURE_REVIEWERS no longer disables the injected quorum"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] an empty environment quorum still disables injection"
+    PASS=$((PASS + 1))
+  }
 # LAST value wins within the shared file, as in pr-review-relay's own parser. Guarding only on
 # "is it set" kept the FIRST line here while the relay kept the last — a valid file handing the
 # two tools different panels, which is the thing reading one file is supposed to prevent.
-printf 'REVIEWERS=codex\nMODEL_glm=openrouter/z-ai/glm-5.2\nREVIEWERS=codex,grok\nMODEL_glm=openrouter/z-ai/glm-9.9\n' > "$CFGDIR/shared9"
+printf 'REVIEWERS=codex\nMODEL_glm=openrouter/z-ai/glm-5.2\nREVIEWERS=codex,grok\nMODEL_glm=openrouter/z-ai/glm-9.9\n' >"$CFGDIR/shared9"
 sh13=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared9" bash "$CLI" relay --author claude 2>/dev/null)
-printf '%s' "$sh13" | grep -q -- "--reviewers codex,grok" \
-  && { echo "  ok   [-] a repeated key takes the LAST value, like the relay"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a repeated key kept the first value (the relay would keep the last)"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh13" | grep -q -- "--reviewers codex,grok" &&
+  {
+    echo "  ok   [-] a repeated key takes the LAST value, like the relay"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a repeated key kept the first value (the relay would keep the last)"
+    FAIL=$((FAIL + 1))
+  }
 sh14=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared9" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
-printf '%s' "$sh14" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" \
-  && { echo "  ok   [-] a repeated model pin takes the LAST value too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a repeated model pin kept the first value"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh14" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9" &&
+  {
+    echo "  ok   [-] a repeated model pin takes the LAST value too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a repeated model pin kept the first value"
+    FAIL=$((FAIL + 1))
+  }
 # The empty-environment contract, on the OTHER key. PLAN_REVIEWERS is its own line of code, so a
 # typo there would pass every test above.
 sh15=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" SHIP_FEATURE_PLAN_REVIEWERS='' SHIP_FEATURE_REVIEWERS=codex bash "$CLI" plan-review 2>/dev/null)
-printf '%s' "$sh15" | grep -q 'REVIEW-codex' && ! printf '%s' "$sh15" | grep -q 'REVIEW-glm' \
-  && { echo "  ok   [-] an empty plan panel falls back to the quorum, not to the shared file"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL an empty SHIP_FEATURE_PLAN_REVIEWERS did not survive the shared file"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh15" | grep -q 'REVIEW-codex' && ! printf '%s' "$sh15" | grep -q 'REVIEW-glm' &&
+  {
+    echo "  ok   [-] an empty plan panel falls back to the quorum, not to the shared file"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL an empty SHIP_FEATURE_PLAN_REVIEWERS did not survive the shared file"
+    FAIL=$((FAIL + 1))
+  }
 # Closing the 2x2: a SET environment quorum must beat the shared file on the relay side too.
 sh16=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" SHIP_FEATURE_REVIEWERS=claude,codex bash "$CLI" relay --author claude 2>/dev/null)
-printf '%s' "$sh16" | grep -q -- "--reviewers claude,codex" \
-  && { echo "  ok   [-] an environment quorum beats the shared file"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the shared file overrode an explicit environment quorum"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh16" | grep -q -- "--reviewers claude,codex" &&
+  {
+    echo "  ok   [-] an environment quorum beats the shared file"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the shared file overrode an explicit environment quorum"
+    FAIL=$((FAIL + 1))
+  }
 # INVERTED in 2026-09. `grok` is ONE seat in both tools now: MODEL_grok / EFFORT_grok pin the plan
 # review exactly as they pin the relay's grok seat. (Until then plan-review ran a separate
 # `grok45high` seat at a hardcoded high effort, and this case asserted MODEL_grok did NOT reach it.)
-printf 'MODEL_grok=grok-0.0\nEFFORT_grok=low\n' > "$CFGDIR/shared4"
+printf 'MODEL_grok=grok-0.0\nEFFORT_grok=low\n' >"$CFGDIR/shared4"
 sh5=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared4" bash "$CLI" plan-review --reviewers grok 2>/dev/null)
-printf '%s' "$sh5" | grep 'REVIEW-grok' | grep -q -- "-m grok-0.0 --reasoning-effort low " \
-  && { echo "  ok   [-] MODEL_grok / EFFORT_grok pin the plan-review grok seat"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL MODEL_grok / EFFORT_grok did not reach the grok seat: $sh5"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh5" | grep 'REVIEW-grok' | grep -q -- "-m grok-0.0 --reasoning-effort low " &&
+  {
+    echo "  ok   [-] MODEL_grok / EFFORT_grok pin the plan-review grok seat"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL MODEL_grok / EFFORT_grok did not reach the grok seat: $sh5"
+    FAIL=$((FAIL + 1))
+  }
 
 # --- claude and codex take their model/effort pins too (Fizzy #1123) -------------------------
 # Until 2026-09 plan-review ran a bare `claude -p` and a bare `codex exec`: MODEL_claude and
 # MODEL_codex / EFFORT_codex in the shared file pinned the PR review and not the plan review, and
 # codex ran whatever ~/.codex/config.toml happened to say.
-printf 'MODEL_claude=claude-pin-1\nEFFORT_claude=high\nMODEL_codex=codex-pin-1\nEFFORT_codex=medium\n' > "$CFGDIR/shared-pins"
+printf 'MODEL_claude=claude-pin-1\nEFFORT_claude=high\nMODEL_codex=codex-pin-1\nEFFORT_codex=medium\n' >"$CFGDIR/shared-pins"
 pn=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins" bash "$CLI" plan-review --reviewers claude,codex 2>&1)
 # Anchored on the flags that stay in place AND on "You are reviewing" (the start of the prompt):
 # the pins must sit between the read-only flags and the prompt, not after it.
-printf '%s' "$pn" | grep 'REVIEW-claude' | grep -q -- "--permission-mode plan --safe-mode --model claude-pin-1 --effort high You are reviewing" \
-  && { echo "  ok   [-] MODEL_claude / EFFORT_claude reach the claude seat, before the prompt"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the claude pins did not reach its argv in place: $(printf '%s' "$pn" | grep 'REVIEW-claude')"; FAIL=$((FAIL+1)); }
-printf '%s' "$pn" | grep 'REVIEW-codex' | grep -qF -- 'exec --sandbox read-only -m codex-pin-1 -c model_reasoning_effort="medium" You are reviewing' \
-  && { echo "  ok   [-] MODEL_codex / EFFORT_codex reach the codex seat, before the prompt"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the codex pins did not reach its argv in place: $(printf '%s' "$pn" | grep 'REVIEW-codex')"; FAIL=$((FAIL+1)); }
+printf '%s' "$pn" | grep 'REVIEW-claude' | grep -q -- "--permission-mode plan --safe-mode --model claude-pin-1 --effort high You are reviewing" &&
+  {
+    echo "  ok   [-] MODEL_claude / EFFORT_claude reach the claude seat, before the prompt"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the claude pins did not reach its argv in place: $(printf '%s' "$pn" | grep 'REVIEW-claude')"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$pn" | grep 'REVIEW-codex' | grep -qF -- 'exec --sandbox read-only -m codex-pin-1 -c model_reasoning_effort="medium" You are reviewing' &&
+  {
+    echo "  ok   [-] MODEL_codex / EFFORT_codex reach the codex seat, before the prompt"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the codex pins did not reach its argv in place: $(printf '%s' "$pn" | grep 'REVIEW-codex')"
+    FAIL=$((FAIL + 1))
+  }
 # The resolved pins are printed on each seat's dispatch line.
-printf '%s' "$pn" | grep -q '→ claude reviewing… (model=claude-pin-1, effort=high)' \
-  && printf '%s' "$pn" | grep -q '→ codex reviewing… (model=codex-pin-1, effort=medium)' \
-  && { echo "  ok   [-] the dispatch line shows each seat's resolved model and effort"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the dispatch line does not show the resolved pins"; FAIL=$((FAIL+1)); }
+printf '%s' "$pn" | grep -q '→ claude reviewing… (model=claude-pin-1, effort=high)' &&
+  printf '%s' "$pn" | grep -q '→ codex reviewing… (model=codex-pin-1, effort=medium)' &&
+  {
+    echo "  ok   [-] the dispatch line shows each seat's resolved model and effort"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the dispatch line does not show the resolved pins"
+    FAIL=$((FAIL + 1))
+  }
 # No pins → exactly today's argv: no new argument, not even an empty one.
 pn0=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex 2>&1)
-printf '%s' "$pn0" | grep 'REVIEW-claude' | grep -q -- "argv=\[-p --permission-mode plan --safe-mode You are reviewing" \
-  && printf '%s' "$pn0" | grep 'REVIEW-codex' | grep -q -- "argv=\[exec --sandbox read-only You are reviewing" \
-  && printf '%s' "$pn0" | grep -q '→ claude reviewing… (model=cli default, effort=cli default)' \
-  && { echo "  ok   [-] unpinned claude and codex get no extra argument"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL an unpinned seat gained an argument: $pn0"; FAIL=$((FAIL+1)); }
+printf '%s' "$pn0" | grep 'REVIEW-claude' | grep -q -- "argv=\[-p --permission-mode plan --safe-mode You are reviewing" &&
+  printf '%s' "$pn0" | grep 'REVIEW-codex' | grep -q -- "argv=\[exec --sandbox read-only You are reviewing" &&
+  printf '%s' "$pn0" | grep -q '→ claude reviewing… (model=cli default, effort=cli default)' &&
+  {
+    echo "  ok   [-] unpinned claude and codex get no extra argument"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL an unpinned seat gained an argument: $pn0"
+    FAIL=$((FAIL + 1))
+  }
 # Every other seat's dispatch line too — each is its own arm in plan_seat_pins, so a misspelt
 # variable there would print "(model=)" on exactly one seat. grok is the one whose default effort
 # changed. The line is printed by the parent before the seat starts, so the seat's own outcome
 # (the gemini stub's auth path) does not matter here.
 pnd=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok,cursor,glm,antigravity 2>&1)
-printf '%s' "$pnd" | grep -q '→ grok reviewing… (model=grok-4.6, effort=medium)' \
-  && printf '%s' "$pnd" | grep -q '→ cursor reviewing… (model=composer-2.5)' \
-  && printf '%s' "$pnd" | grep -q '→ glm reviewing… (model=opencode-go/glm-5.3)' \
-  && printf '%s' "$pnd" | grep -q '→ antigravity reviewing… (model=gemini-3.1-pro-preview)' \
-  && { echo "  ok   [-] the dispatch line shows grok, cursor, glm and gemini's resolved pins"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a dispatch line is missing or wrong: $(printf '%s' "$pnd" | grep '→')"; FAIL=$((FAIL+1)); }
+printf '%s' "$pnd" | grep -q '→ grok reviewing… (model=grok-4.6, effort=medium)' &&
+  printf '%s' "$pnd" | grep -q '→ cursor reviewing… (model=composer-2.5)' &&
+  printf '%s' "$pnd" | grep -q '→ glm reviewing… (model=opencode-go/glm-5.3)' &&
+  printf '%s' "$pnd" | grep -q '→ antigravity reviewing… (model=gemini-3.1-pro-preview)' &&
+  {
+    echo "  ok   [-] the dispatch line shows grok, cursor, glm and gemini's resolved pins"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a dispatch line is missing or wrong: $(printf '%s' "$pnd" | grep '→')"
+    FAIL=$((FAIL + 1))
+  }
 # The environment beats the shared file, per key; an EMPTY environment value does not block it.
 pn1=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins" CODEX_REVIEW_MODEL=env-codex CLAUDE_REVIEW_EFFORT=low CODEX_REVIEW_EFFORT='' bash "$CLI" plan-review --reviewers claude,codex 2>&1)
-printf '%s' "$pn1" | grep 'REVIEW-codex' | grep -qF -- '-m env-codex -c model_reasoning_effort="medium" ' \
-  && printf '%s' "$pn1" | grep 'REVIEW-claude' | grep -q -- "--model claude-pin-1 --effort low " \
-  && { echo "  ok   [-] an environment pin beats the shared file, and an empty one does not block it"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL environment/shared-file precedence is wrong: $pn1"; FAIL=$((FAIL+1)); }
+printf '%s' "$pn1" | grep 'REVIEW-codex' | grep -qF -- '-m env-codex -c model_reasoning_effort="medium" ' &&
+  printf '%s' "$pn1" | grep 'REVIEW-claude' | grep -q -- "--model claude-pin-1 --effort low " &&
+  {
+    echo "  ok   [-] an environment pin beats the shared file, and an empty one does not block it"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL environment/shared-file precedence is wrong: $pn1"
+    FAIL=$((FAIL + 1))
+  }
 # ship-feature's OWN config is not a home for these six: the value is reported and ignored.
-printf 'CODEX_REVIEW_MODEL=own-codex\n' > "$CFGDIR/own-pins"
+printf 'CODEX_REVIEW_MODEL=own-codex\n' >"$CFGDIR/own-pins"
 pn2=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/own-pins" bash "$CLI" plan-review --reviewers codex 2>&1)
-! printf '%s' "$pn2" | grep 'REVIEW-codex' | grep -q -- "own-codex" \
-  && printf '%s' "$pn2" | grep -q "CODEX_REVIEW_MODEL is set in ship-feature's config and is IGNORED" \
-  && { echo "  ok   [-] a pin in ship-feature's own config warns and is ignored"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a pin in ship-feature's own config was honoured or dropped in silence: $pn2"; FAIL=$((FAIL+1)); }
+! printf '%s' "$pn2" | grep 'REVIEW-codex' | grep -q -- "own-codex" &&
+  printf '%s' "$pn2" | grep -q "CODEX_REVIEW_MODEL is set in ship-feature's config and is IGNORED" &&
+  {
+    echo "  ok   [-] a pin in ship-feature's own config warns and is ignored"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a pin in ship-feature's own config was honoured or dropped in silence: $pn2"
+    FAIL=$((FAIL + 1))
+  }
 # Config typos must not become flags: a leading '-' in a model, or a non-word effort, stops the
 # run before any reviewer starts.
-printf 'MODEL_codex=--yolo\n' > "$CFGDIR/shared-bad1"
-pb1=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-bad1" bash "$CLI" plan-review --reviewers codex 2>&1); rc=$?
-[ "$rc" != 0 ] && ! printf '%s' "$pb1" | grep -q 'REVIEW-' \
-  && { echo "  ok   [-] a model pin starting with '-' is refused before dispatch"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL MODEL_codex=--yolo reached a reviewer (rc=$rc)"; FAIL=$((FAIL+1)); }
-printf 'EFFORT_codex=x" y\n' > "$CFGDIR/shared-bad2"
-pb2=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-bad2" bash "$CLI" plan-review --reviewers codex 2>&1); rc=$?
-[ "$rc" != 0 ] && ! printf '%s' "$pb2" | grep -q 'REVIEW-' \
-  && { echo "  ok   [-] an effort that is not a bare word is refused before dispatch"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a quoting effort reached a reviewer (rc=$rc)"; FAIL=$((FAIL+1)); }
+printf 'MODEL_codex=--yolo\n' >"$CFGDIR/shared-bad1"
+pb1=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-bad1" bash "$CLI" plan-review --reviewers codex 2>&1)
+rc=$?
+[ "$rc" != 0 ] && ! printf '%s' "$pb1" | grep -q 'REVIEW-' &&
+  {
+    echo "  ok   [-] a model pin starting with '-' is refused before dispatch"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL MODEL_codex=--yolo reached a reviewer (rc=$rc)"
+    FAIL=$((FAIL + 1))
+  }
+printf 'EFFORT_codex=x" y\n' >"$CFGDIR/shared-bad2"
+pb2=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-bad2" bash "$CLI" plan-review --reviewers codex 2>&1)
+rc=$?
+[ "$rc" != 0 ] && ! printf '%s' "$pb2" | grep -q 'REVIEW-' &&
+  {
+    echo "  ok   [-] an effort that is not a bare word is refused before dispatch"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a quoting effort reached a reviewer (rc=$rc)"
+    FAIL=$((FAIL + 1))
+  }
 # `ship-feature relay` is unchanged: the six pins are read for plan-review and NOT pushed into the
 # relay child, which reads the same file itself. Includes the empty-export case: a plain
 # assignment keeps an inherited export attribute, so without `export -n` an exported EMPTY
 # CODEX_REVIEW_MODEL= would carry the file's value across.
 cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-pins"
-cat > "$BIN/pr-review-relay" <<'STUB'
+cat >"$BIN/pr-review-relay" <<'STUB'
 #!/usr/bin/env bash
 for v in CLAUDE_REVIEW_MODEL CLAUDE_REVIEW_EFFORT CODEX_REVIEW_MODEL CODEX_REVIEW_EFFORT GROK_REVIEW_MODEL GROK_REVIEW_EFFORT; do
   if [ -n "${!v+x}" ]; then echo "$v=[${!v}]"; else echo "$v=unset"; fi
 done
 STUB
 chmod +x "$BIN/pr-review-relay"
-printf 'MODEL_claude=c1\nEFFORT_claude=high\nMODEL_codex=file-m\nEFFORT_codex=medium\nMODEL_grok=g1\nEFFORT_grok=low\n' > "$CFGDIR/shared-pins-relay"
+printf 'MODEL_claude=c1\nEFFORT_claude=high\nMODEL_codex=file-m\nEFFORT_codex=medium\nMODEL_grok=g1\nEFFORT_grok=low\n' >"$CFGDIR/shared-pins-relay"
 rp=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" bash "$CLI" relay --author claude 2>/dev/null)
 rp2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" CODEX_REVIEW_MODEL='' bash "$CLI" relay --author claude 2>/dev/null)
-cp "$WORK/relay-stub-backup-pins" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
-[ "$(printf '%s\n' "$rp" | grep -c '=unset$')" = 6 ] \
-  && { echo "  ok   [-] the shared pins are not pushed into the relay child"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a shared pin reached the relay child's environment: $rp"; FAIL=$((FAIL+1)); }
-! printf '%s' "$rp2" | grep -q 'file-m' \
-  && { echo "  ok   [-] an exported empty pin does not carry the file value into the relay child"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the shared file's value leaked through an exported empty name: $rp2"; FAIL=$((FAIL+1)); }
+cp "$WORK/relay-stub-backup-pins" "$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
+[ "$(printf '%s\n' "$rp" | grep -c '=unset$')" = 6 ] &&
+  {
+    echo "  ok   [-] the shared pins are not pushed into the relay child"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a shared pin reached the relay child's environment: $rp"
+    FAIL=$((FAIL + 1))
+  }
+! printf '%s' "$rp2" | grep -q 'file-m' &&
+  {
+    echo "  ok   [-] an exported empty pin does not carry the file value into the relay child"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the shared file's value leaked through an exported empty name: $rp2"
+    FAIL=$((FAIL + 1))
+  }
 # ship-feature's OWN config wins over the shared one — a per-tool override has to be possible,
 # or consolidating would mean losing the ability to differ on purpose.
-printf 'GLM_REVIEW_MODEL=openrouter/z-ai/glm-5.2\n' > "$CFGDIR/shared2"
+printf 'GLM_REVIEW_MODEL=openrouter/z-ai/glm-5.2\n' >"$CFGDIR/shared2"
 sh2=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/shared2" PR_RELAY_CONFIG="$CFGDIR/shared1" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
-printf '%s' "$sh2" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-5.2" \
-  && { echo "  ok   [-] ship-feature's own config beats the shared one"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the shared config overrode ship-feature's own"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh2" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-5.2" &&
+  {
+    echo "  ok   [-] ship-feature's own config beats the shared one"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the shared config overrode ship-feature's own"
+    FAIL=$((FAIL + 1))
+  }
 # And the environment still beats both.
 sh3=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/shared2" PR_RELAY_CONFIG="$CFGDIR/shared1" GLM_REVIEW_MODEL=opencode-go/glm-5.3-flash bash "$CLI" plan-review --reviewers glm 2>/dev/null)
-printf '%s' "$sh3" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3-flash" \
-  && { echo "  ok   [-] the environment beats both config files"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a config file overrode an explicit environment model"; FAIL=$((FAIL+1)); }
+printf '%s' "$sh3" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3-flash" &&
+  {
+    echo "  ok   [-] the environment beats both config files"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a config file overrode an explicit environment model"
+    FAIL=$((FAIL + 1))
+  }
 # MODEL_opencode is NOT mapped: that seat is pr-review-relay's own, and it reads this same file.
 # Exporting PR_RELAY_OPENCODE_MODEL from here would beat the relay's own config, which is the
 # opposite of consolidating.
-printf 'MODEL_opencode=openrouter/should-not-be-used\n' > "$CFGDIR/shared3"
-printf '#!/usr/bin/env bash\necho "RELAYENV PR_RELAY_OPENCODE_MODEL=${PR_RELAY_OPENCODE_MODEL:-unset}"\nexit 0\n' > "$BIN/pr-review-relay.shared"; chmod +x "$BIN/pr-review-relay.shared"
-cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup2"; cp "$BIN/pr-review-relay.shared" "$BIN/pr-review-relay"
+printf 'MODEL_opencode=openrouter/should-not-be-used\n' >"$CFGDIR/shared3"
+printf '#!/usr/bin/env bash\necho "RELAYENV PR_RELAY_OPENCODE_MODEL=${PR_RELAY_OPENCODE_MODEL:-unset}"\nexit 0\n' >"$BIN/pr-review-relay.shared"
+chmod +x "$BIN/pr-review-relay.shared"
+cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup2"
+cp "$BIN/pr-review-relay.shared" "$BIN/pr-review-relay"
 sh4=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared3" bash "$CLI" relay --author claude 2>/dev/null)
-cp "$WORK/relay-stub-backup2" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
-printf '%s' "$sh4" | grep -q 'PR_RELAY_OPENCODE_MODEL=unset' \
-  && { echo "  ok   [-] MODEL_opencode is left to pr-review-relay itself"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL ship-feature exported the relay's own seat model over its config"; FAIL=$((FAIL+1)); }
+cp "$WORK/relay-stub-backup2" "$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
+printf '%s' "$sh4" | grep -q 'PR_RELAY_OPENCODE_MODEL=unset' &&
+  {
+    echo "  ok   [-] MODEL_opencode is left to pr-review-relay itself"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL ship-feature exported the relay's own seat model over its config"
+    FAIL=$((FAIL + 1))
+  }
 
 # REGRESSION (Codex round 3): a HOSTILE inherited OPENCODE_CONFIG_CONTENT that re-enables
 # edit/bash must be overridden by our deny (we own the highest-precedence layer).
 hostile=$(printf 'plan\n' | PATH="$PBIN:$PATH" OPENCODE_CONFIG_CONTENT='{"permission":{"edit":"allow","bash":"allow"}}' bash "$CLI" plan-review --reviewers glm 2>/dev/null | grep 'REVIEW-glm')
-printf '%s' "$hostile" | grep -q 'OPENCODE_CONFIG_CONTENT=\[.*"edit":"deny".*"bash":"deny".*\]' && ! printf '%s' "$hostile" | grep -q '"edit":"allow"' && { echo "  ok   [-] glm overrides a hostile inherited OPENCODE_CONFIG_CONTENT"; PASS=$((PASS+1)); } || { echo "  FAIL a hostile OPENCODE_CONFIG_CONTENT survived (read-only bypass)"; FAIL=$((FAIL+1)); }
+printf '%s' "$hostile" | grep -q 'OPENCODE_CONFIG_CONTENT=\[.*"edit":"deny".*"bash":"deny".*\]' && ! printf '%s' "$hostile" | grep -q '"edit":"allow"' && {
+  echo "  ok   [-] glm overrides a hostile inherited OPENCODE_CONFIG_CONTENT"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL a hostile OPENCODE_CONFIG_CONTENT survived (read-only bypass)"
+  FAIL=$((FAIL + 1))
+}
 
 # CURSOR_REVIEW_MODEL is the documented way out if Cursor retires the pinned id, so it is part of
 # the contract rather than a convenience: a pin that could not be overridden would be a dead end.
 cuo=$(printf 'plan\n' | PATH="$PBIN:$PATH" CURSOR_REVIEW_MODEL=cursor-grok-4.5-high bash "$CLI" plan-review --reviewers cursor 2>/dev/null | grep 'REVIEW-cursor')
-printf '%s' "$cuo" | grep -q -- "--model cursor-grok-4.5-high" && { echo "  ok   [-] CURSOR_REVIEW_MODEL overrides the pinned default"; PASS=$((PASS+1)); } || { echo "  FAIL CURSOR_REVIEW_MODEL ignored: $cuo"; FAIL=$((FAIL+1)); }
+printf '%s' "$cuo" | grep -q -- "--model cursor-grok-4.5-high" && {
+  echo "  ok   [-] CURSOR_REVIEW_MODEL overrides the pinned default"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL CURSOR_REVIEW_MODEL ignored: $cuo"
+  FAIL=$((FAIL + 1))
+}
 
 # GLM_REVIEW_MODEL is the documented way to route glm at a pay-as-you-go model (e.g. an
 # OpenRouter id) instead of the bundled OpenCode Go tier — same contract as CURSOR_REVIEW_MODEL
 # above: a pin that could not be overridden would be a dead end.
 kmo=$(printf 'plan\n' | PATH="$PBIN:$PATH" GLM_REVIEW_MODEL=openrouter/z-ai/glm-5.2 bash "$CLI" plan-review --reviewers glm 2>/dev/null | grep 'REVIEW-glm')
-printf '%s' "$kmo" | grep -q -- "-m openrouter/z-ai/glm-5.2" && { echo "  ok   [-] GLM_REVIEW_MODEL overrides the pinned default"; PASS=$((PASS+1)); } || { echo "  FAIL GLM_REVIEW_MODEL ignored: $kmo"; FAIL=$((FAIL+1)); }
+printf '%s' "$kmo" | grep -q -- "-m openrouter/z-ai/glm-5.2" && {
+  echo "  ok   [-] GLM_REVIEW_MODEL overrides the pinned default"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL GLM_REVIEW_MODEL ignored: $kmo"
+  FAIL=$((FAIL + 1))
+}
 
 # --- the seat's OLD name is dead, and dies LOUDLY ----------------------------------------------
 # This seat was `kimi3` until 2026-09. Renaming it in a config file alone is what motivated the
@@ -998,57 +1585,118 @@ printf '%s' "$kmo" | grep -q -- "-m openrouter/z-ai/glm-5.2" && { echo "  ok   [
 # 2>/dev/null, and copying that here would make every one of them pass vacuously.
 
 # 1. The old SEAT name is an unknown reviewer: the round fails rather than passing on a thinned panel.
-dep1=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers kimi3 2>&1); dep1_rc=$?
-printf '%s' "$dep1" | grep -q "unknown reviewer 'kimi3'" \
-  && { echo "  ok   [-] the old seat name 'kimi3' is rejected as unknown"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL 'kimi3' did not fail as an unknown reviewer: $dep1"; FAIL=$((FAIL+1)); }
-[ "$dep1_rc" -ne 0 ] \
-  && { echo "  ok   [-] a panel naming the old seat exits non-zero"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a panel naming 'kimi3' exited 0"; FAIL=$((FAIL+1)); }
+dep1=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers kimi3 2>&1)
+dep1_rc=$?
+printf '%s' "$dep1" | grep -q "unknown reviewer 'kimi3'" &&
+  {
+    echo "  ok   [-] the old seat name 'kimi3' is rejected as unknown"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL 'kimi3' did not fail as an unknown reviewer: $dep1"
+    FAIL=$((FAIL + 1))
+  }
+[ "$dep1_rc" -ne 0 ] &&
+  {
+    echo "  ok   [-] a panel naming the old seat exits non-zero"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a panel naming 'kimi3' exited 0"
+    FAIL=$((FAIL + 1))
+  }
 
 # 2. The old key in the ENVIRONMENT: warned about, and NOT honoured. The value below is a real id
 # and is deliberately NOT the new default, so honouring it would be visible in the -m argument.
 dep2=$(printf 'plan\n' | PATH="$PBIN:$PATH" KIMI3_REVIEW_MODEL=openrouter/z-ai/glm-5.2 bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$dep2" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' \
-  && { echo "  ok   [-] a stale KIMI3_REVIEW_MODEL in the environment is reported"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a stale KIMI3_REVIEW_MODEL in the environment was silent"; FAIL=$((FAIL+1)); }
-printf '%s' "$dep2" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" \
-  && { echo "  ok   [-] the old environment key does not pin the model — the seat ran on its default"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the old environment key was honoured, or the seat never dispatched: $(printf '%s' "$dep2" | grep 'REVIEW-glm')"; FAIL=$((FAIL+1)); }
+printf '%s' "$dep2" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' &&
+  {
+    echo "  ok   [-] a stale KIMI3_REVIEW_MODEL in the environment is reported"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a stale KIMI3_REVIEW_MODEL in the environment was silent"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$dep2" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" &&
+  {
+    echo "  ok   [-] the old environment key does not pin the model — the seat ran on its default"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the old environment key was honoured, or the seat never dispatched: $(printf '%s' "$dep2" | grep 'REVIEW-glm')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 3. The old key in ship-feature's OWN config file. A file-only pin never enters the environment,
 # so the check above cannot cover it, and load_config has no `*)` arm to catch it either.
-printf 'KIMI3_REVIEW_MODEL=openrouter/z-ai/glm-5.2\n' > "$CFGDIR/deprecated1"
+printf 'KIMI3_REVIEW_MODEL=openrouter/z-ai/glm-5.2\n' >"$CFGDIR/deprecated1"
 dep3=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/deprecated1" bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$dep3" | grep -q "KIMI3_REVIEW_MODEL is set in ship-feature's config" \
-  && { echo "  ok   [-] a stale KIMI3_REVIEW_MODEL in the config file is reported"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a stale KIMI3_REVIEW_MODEL in the config file was silent"; FAIL=$((FAIL+1)); }
-printf '%s' "$dep3" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" \
-  && { echo "  ok   [-] the old config key does not pin the model — the seat ran on its default"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the old config key was honoured, or the seat never dispatched: $(printf '%s' "$dep3" | grep 'REVIEW-glm')"; FAIL=$((FAIL+1)); }
+printf '%s' "$dep3" | grep -q "KIMI3_REVIEW_MODEL is set in ship-feature's config" &&
+  {
+    echo "  ok   [-] a stale KIMI3_REVIEW_MODEL in the config file is reported"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a stale KIMI3_REVIEW_MODEL in the config file was silent"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$dep3" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" &&
+  {
+    echo "  ok   [-] the old config key does not pin the model — the seat ran on its default"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the old config key was honoured, or the seat never dispatched: $(printf '%s' "$dep3" | grep 'REVIEW-glm')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 4. The old key in the SHARED panel file — the exact failure that motivated this rename.
-printf 'MODEL_kimi3=openrouter/z-ai/glm-5.2\n' > "$CFGDIR/deprecated2"
+printf 'MODEL_kimi3=openrouter/z-ai/glm-5.2\n' >"$CFGDIR/deprecated2"
 dep4=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/deprecated2" bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$dep4" | grep -q 'MODEL_kimi3 is set in the shared panel config' \
-  && { echo "  ok   [-] a stale MODEL_kimi3 in the shared config is reported"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a stale MODEL_kimi3 in the shared config was silent"; FAIL=$((FAIL+1)); }
-printf '%s' "$dep4" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" \
-  && { echo "  ok   [-] the old shared key does not pin the model — the seat ran on its default"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the old shared key was honoured, or the seat never dispatched: $(printf '%s' "$dep4" | grep 'REVIEW-glm')"; FAIL=$((FAIL+1)); }
+printf '%s' "$dep4" | grep -q 'MODEL_kimi3 is set in the shared panel config' &&
+  {
+    echo "  ok   [-] a stale MODEL_kimi3 in the shared config is reported"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a stale MODEL_kimi3 in the shared config was silent"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$dep4" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" &&
+  {
+    echo "  ok   [-] the old shared key does not pin the model — the seat ran on its default"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the old shared key was honoured, or the seat never dispatched: $(printf '%s' "$dep4" | grep 'REVIEW-glm')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 5. MIXED: a stale KIMI3_REVIEW_MODEL in the environment must NOT suppress a valid MODEL_glm in
 # the shared file. from_env_glm keys off GLM_REVIEW_MODEL alone; if it were armed by the old name,
 # the shared pin would be skipped as "already provided by a higher source" — the very silent drop
 # this rename removes, rebuilt inside the fix for it.
-printf 'MODEL_glm=openrouter/z-ai/glm-5.2\n' > "$CFGDIR/deprecated3"
+printf 'MODEL_glm=openrouter/z-ai/glm-5.2\n' >"$CFGDIR/deprecated3"
 dep5=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/deprecated3" KIMI3_REVIEW_MODEL=openrouter/z-ai/glm-9.9 bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$dep5" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-5.2" \
-  && { echo "  ok   [-] a stale env key does not suppress MODEL_glm from the shared file"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a stale KIMI3_REVIEW_MODEL suppressed the shared MODEL_glm pin: $(printf '%s' "$dep5" | grep 'REVIEW-glm')"; FAIL=$((FAIL+1)); }
-printf '%s' "$dep5" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' \
-  && { echo "  ok   [-] and it is still reported"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the stale env key went unreported in the mixed case"; FAIL=$((FAIL+1)); }
+printf '%s' "$dep5" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-5.2" &&
+  {
+    echo "  ok   [-] a stale env key does not suppress MODEL_glm from the shared file"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a stale KIMI3_REVIEW_MODEL suppressed the shared MODEL_glm pin: $(printf '%s' "$dep5" | grep 'REVIEW-glm')"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$dep5" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' &&
+  {
+    echo "  ok   [-] and it is still reported"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the stale env key went unreported in the mixed case"
+    FAIL=$((FAIL + 1))
+  }
 
 # 6. The warnings belong to plan-review ALONE. `relay` and `preflight` also call load_config, and a
 # deprecation notice about a plan-review seat has no business printing on a cross-review run —
@@ -1058,7 +1706,8 @@ printf '%s' "$dep5" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' \
 # died, the output was empty, and "no warning present" passed while the warning was being printed
 # on every command. Caught by mutating load_config to warn unconditionally and watching this block
 # stay green. An absence test without a liveness check is not a test.
-printf '#!/usr/bin/env bash\necho "RELAY-STDOUT-MARKER"\nexit 0\n' > "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
+printf '#!/usr/bin/env bash\necho "RELAY-STDOUT-MARKER"\nexit 0\n' >"$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
 # BOTH warning texts have to be exercised, and they share no substring: the shared-key warning
 # says MODEL_kimi3 and never says KIMI3_REVIEW_MODEL. Grepping only the latter would leave the
 # shared arm untested here — move it into load_shared_panel_config and `relay` would print it on
@@ -1069,74 +1718,147 @@ dep6=$(cd "$MAIN/.claude/worktrees/feat" && PATH="$PBIN:$PATH" SHIP_FEATURE_CONF
 # Liveness marker is preflight's FIRST check, not its verdict: whether preflight passes here
 # depends on what earlier tests did to this worktree, and that is not what this assertion is
 # about. All it has to prove is that the command ran far enough to have loaded config.
-printf '%s' "$dep6" | grep -q 'default branch:' \
-  && { echo "  ok   [-] the preflight deprecation check actually ran preflight"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL preflight did not run — the absence check below would be vacuous: $dep6"; FAIL=$((FAIL+1)); }
-printf '%s' "$dep6" | grep -qE 'KIMI3_REVIEW_MODEL|MODEL_kimi3' \
-  && { echo "  FAIL preflight printed a plan-review deprecation warning"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] preflight prints no plan-review deprecation warning"; PASS=$((PASS+1)); }
+printf '%s' "$dep6" | grep -q 'default branch:' &&
+  {
+    echo "  ok   [-] the preflight deprecation check actually ran preflight"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL preflight did not run — the absence check below would be vacuous: $dep6"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$dep6" | grep -qE 'KIMI3_REVIEW_MODEL|MODEL_kimi3' &&
+  {
+    echo "  FAIL preflight printed a plan-review deprecation warning"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] preflight prints no plan-review deprecation warning"
+    PASS=$((PASS + 1))
+  }
 dep7=$(PATH="$BIN:$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/deprecated1" PR_RELAY_CONFIG="$CFGDIR/deprecated2" KIMI3_REVIEW_MODEL=openrouter/z-ai/glm-5.2 bash "$CLI" relay --author claude 2>&1)
-printf '%s' "$dep7" | grep -q 'RELAY-STDOUT-MARKER' \
-  && { echo "  ok   [-] the relay deprecation check actually ran relay"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL relay did not run — the absence check below would be vacuous: $dep7"; FAIL=$((FAIL+1)); }
-printf '%s' "$dep7" | grep -qE 'KIMI3_REVIEW_MODEL|MODEL_kimi3' \
-  && { echo "  FAIL relay printed a plan-review deprecation warning"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] relay prints no plan-review deprecation warning"; PASS=$((PASS+1)); }
+printf '%s' "$dep7" | grep -q 'RELAY-STDOUT-MARKER' &&
+  {
+    echo "  ok   [-] the relay deprecation check actually ran relay"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL relay did not run — the absence check below would be vacuous: $dep7"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$dep7" | grep -qE 'KIMI3_REVIEW_MODEL|MODEL_kimi3' &&
+  {
+    echo "  FAIL relay printed a plan-review deprecation warning"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] relay prints no plan-review deprecation warning"
+    PASS=$((PASS + 1))
+  }
 # 7. An EXPORTED BUT EMPTY old key is still a dead name in a profile, and is still reported. This
 # inverts the convention every model pin uses (empty means "not configured"), so it gets its own
 # assertion — the check is ${VAR+x}, and a regression to ${VAR:-} would go unnoticed otherwise.
 depe=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null KIMI3_REVIEW_MODEL='' bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$depe" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' \
-  && { echo "  ok   [-] an exported-but-empty old key is still reported"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL an exported-but-empty KIMI3_REVIEW_MODEL was silent"; FAIL=$((FAIL+1)); }
-printf '%s' "$depe" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" \
-  && { echo "  ok   [-] and the seat still runs its default"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the empty old key changed the model, or the seat never dispatched"; FAIL=$((FAIL+1)); }
+printf '%s' "$depe" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' &&
+  {
+    echo "  ok   [-] an exported-but-empty old key is still reported"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL an exported-but-empty KIMI3_REVIEW_MODEL was silent"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$depe" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" &&
+  {
+    echo "  ok   [-] and the seat still runs its default"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the empty old key changed the model, or the seat never dispatched"
+    FAIL=$((FAIL + 1))
+  }
 
 # 8. The realistic MIGRATION STATE: one shared file carrying BOTH keys, old and new, as it looks
 # mid-rename. The new one must win and the old one must still be reported — the arms are
 # independent, but this is the combination a user actually has on disk.
-printf 'MODEL_kimi3=openrouter/z-ai/glm-9.9\nMODEL_glm=openrouter/z-ai/glm-5.2\n' > "$CFGDIR/deprecated4"
+printf 'MODEL_kimi3=openrouter/z-ai/glm-9.9\nMODEL_glm=openrouter/z-ai/glm-5.2\n' >"$CFGDIR/deprecated4"
 depm=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/deprecated4" bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$depm" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-5.2" \
-  && { echo "  ok   [-] with both keys in one file, MODEL_glm wins"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL MODEL_kimi3 beat MODEL_glm, or neither applied: $(printf '%s' "$depm" | grep 'REVIEW-glm')"; FAIL=$((FAIL+1)); }
-printf '%s' "$depm" | grep -q 'MODEL_kimi3 is set in the shared panel config' \
-  && { echo "  ok   [-] and the old key is still reported alongside it"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the old key went unreported when the new one was present"; FAIL=$((FAIL+1)); }
+printf '%s' "$depm" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-5.2" &&
+  {
+    echo "  ok   [-] with both keys in one file, MODEL_glm wins"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL MODEL_kimi3 beat MODEL_glm, or neither applied: $(printf '%s' "$depm" | grep 'REVIEW-glm')"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$depm" | grep -q 'MODEL_kimi3 is set in the shared panel config' &&
+  {
+    echo "  ok   [-] and the old key is still reported alongside it"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the old key went unreported when the new one was present"
+    FAIL=$((FAIL + 1))
+  }
 
 # And prove BOTH texts are reachable at all, or the two absence checks above could be passing
 # because no warning exists to print. Same run, same three stale keys, through plan-review.
 depb=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/deprecated1" PR_RELAY_CONFIG="$CFGDIR/deprecated2" KIMI3_REVIEW_MODEL=openrouter/z-ai/glm-5.2 bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$depb" | grep -q 'KIMI3_REVIEW_MODEL' && printf '%s' "$depb" | grep -q 'MODEL_kimi3' \
-  && { echo "  ok   [-] plan-review does print both deprecation texts for the same input"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a deprecation text is unreachable — the relay/preflight silence checks are vacuous"; FAIL=$((FAIL+1)); }
+printf '%s' "$depb" | grep -q 'KIMI3_REVIEW_MODEL' && printf '%s' "$depb" | grep -q 'MODEL_kimi3' &&
+  {
+    echo "  ok   [-] plan-review does print both deprecation texts for the same input"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a deprecation text is unreachable — the relay/preflight silence checks are vacuous"
+    FAIL=$((FAIL + 1))
+  }
 # Restore the stub the relay tests further up installed, so this block cannot decide the outcome
 # of any relay assertion appended below it.
-printf '#!/usr/bin/env bash\necho "ARGS: $*"\nexit 0\n' > "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
+printf '#!/usr/bin/env bash\necho "ARGS: $*"\nexit 0\n' >"$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
 
 # GROK_REVIEW_MODEL / GROK_REVIEW_EFFORT (the relay's own environment names) pin grok at a
 # different version and effort — same contract as CURSOR_REVIEW_MODEL/GLM_REVIEW_MODEL above: a
 # pin that could not be overridden would be a dead end when xAI ships the next model.
 gmo=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok GROK_REVIEW_MODEL=grok-4.7 GROK_REVIEW_EFFORT=high bash "$CLI" plan-review --reviewers grok 2>/dev/null | grep 'REVIEW-grok')
-printf '%s' "$gmo" | grep -q -- "-m grok-4.7 --reasoning-effort high " && { echo "  ok   [-] GROK_REVIEW_MODEL / GROK_REVIEW_EFFORT override the defaults"; PASS=$((PASS+1)); } || { echo "  FAIL GROK_REVIEW_MODEL / GROK_REVIEW_EFFORT ignored: $gmo"; FAIL=$((FAIL+1)); }
+printf '%s' "$gmo" | grep -q -- "-m grok-4.7 --reasoning-effort high " && {
+  echo "  ok   [-] GROK_REVIEW_MODEL / GROK_REVIEW_EFFORT override the defaults"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL GROK_REVIEW_MODEL / GROK_REVIEW_EFFORT ignored: $gmo"
+  FAIL=$((FAIL + 1))
+}
 # The OLD environment name is reported and ignored — and it must NOT block the shared file. This is
 # the case the plan review caught: were the "env already set" flag armed from the old name, a
 # stale export would skip MODEL_grok in silence and the seat would run the built-in default.
-printf 'MODEL_grok=grok-4.7\n' > "$CFGDIR/shared-grok-old"
+printf 'MODEL_grok=grok-4.7\n' >"$CFGDIR/shared-grok-old"
 gold=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok PR_RELAY_CONFIG="$CFGDIR/shared-grok-old" GROK45HIGH_REVIEW_MODEL=grok-old bash "$CLI" plan-review --reviewers grok 2>&1)
-printf '%s' "$gold" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.7 " \
-  && printf '%s' "$gold" | grep -q 'GROK45HIGH_REVIEW_MODEL is set in the ENVIRONMENT.*IGNORED' \
-  && { echo "  ok   [-] a stale GROK45HIGH_REVIEW_MODEL export warns and does not block MODEL_grok"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a stale GROK45HIGH_REVIEW_MODEL export blocked MODEL_grok or was not reported: $gold"; FAIL=$((FAIL+1)); }
+printf '%s' "$gold" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.7 " &&
+  printf '%s' "$gold" | grep -q 'GROK45HIGH_REVIEW_MODEL is set in the ENVIRONMENT.*IGNORED' &&
+  {
+    echo "  ok   [-] a stale GROK45HIGH_REVIEW_MODEL export warns and does not block MODEL_grok"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a stale GROK45HIGH_REVIEW_MODEL export blocked MODEL_grok or was not reported: $gold"
+    FAIL=$((FAIL + 1))
+  }
 # MODEL_grok45high in the shared file: reported, ignored.
-printf 'MODEL_grok45high=grok-old\n' > "$CFGDIR/shared-grok-old2"
+printf 'MODEL_grok45high=grok-old\n' >"$CFGDIR/shared-grok-old2"
 gold2=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok PR_RELAY_CONFIG="$CFGDIR/shared-grok-old2" bash "$CLI" plan-review --reviewers grok 2>&1)
-printf '%s' "$gold2" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.6 " \
-  && printf '%s' "$gold2" | grep -q 'MODEL_grok45high is set in the shared panel config.*IGNORED' \
-  && ! printf '%s' "$gold2" | grep -q 'internal: no message' \
-  && { echo "  ok   [-] MODEL_grok45high in the shared file warns and is ignored"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL MODEL_grok45high was honoured or not reported: $gold2"; FAIL=$((FAIL+1)); }
+printf '%s' "$gold2" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.6 " &&
+  printf '%s' "$gold2" | grep -q 'MODEL_grok45high is set in the shared panel config.*IGNORED' &&
+  ! printf '%s' "$gold2" | grep -q 'internal: no message' &&
+  {
+    echo "  ok   [-] MODEL_grok45high in the shared file warns and is ignored"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL MODEL_grok45high was honoured or not reported: $gold2"
+    FAIL=$((FAIL + 1))
+  }
 
 # --- the per-reviewer TIMEOUT, and the ladder it resolves through -----------------------------
 # AGENT_TIMEOUT in pr-review-relay's config was the one panel key ship-feature did NOT read: the
@@ -1149,8 +1871,9 @@ printf '%s' "$gold2" | grep 'REVIEW-grok' | grep -q -- "-m grok-4.6 " \
 # a stub FIRST on PATH that records $1 and then execs the rest. TBIN is its own directory, kept out
 # of PBIN on purpose — the hermetic-environment case further down links the REAL timeout into a bin
 # dir, and a leftover stub there would break it.
-TBIN="$WORK/tbin"; mkdir -p "$TBIN"
-cat > "$TBIN/timeout" <<'TSTUB'
+TBIN="$WORK/tbin"
+mkdir -p "$TBIN"
+cat >"$TBIN/timeout" <<'TSTUB'
 #!/usr/bin/env bash
 printf '%s\n' "$1" > "$TIMEOUT_SEEN"
 shift
@@ -1160,20 +1883,27 @@ chmod +x "$TBIN/timeout"
 
 # $1 = expected seconds, $2 = description, rest = env assignments
 timeout_case() {
-  local want="$1" desc="$2"; shift 2
+  local want="$1" desc="$2"
+  shift 2
   local seen="$WORK/timeout_seen.$want.$$"
-  : > "$seen"
-  ( printf 'plan\n' | env "$@" TIMEOUT_SEEN="$seen" PATH="$TBIN:$PBIN:$PATH" \
-      bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 )
-  local got; got="$(cat "$seen" 2>/dev/null || true)"
-  if [ "$got" = "$want" ]; then echo "  ok   [-] $desc"; PASS=$((PASS+1))
-  else echo "  FAIL $desc — timeout ran with '$got', want '$want'"; FAIL=$((FAIL+1)); fi
+  : >"$seen"
+  (printf 'plan\n' | env "$@" TIMEOUT_SEEN="$seen" PATH="$TBIN:$PBIN:$PATH" \
+    bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1)
+  local got
+  got="$(cat "$seen" 2>/dev/null || true)"
+  if [ "$got" = "$want" ]; then
+    echo "  ok   [-] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $desc — timeout ran with '$got', want '$want'"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
 # EVERY fixture below uses a value that appears nowhere else, so each assertion identifies WHICH
 # source won. Asserting 500 against a shared file that also says 500 would pass without proving
 # anything — the built-in default is 500 too.
-printf 'AGENT_TIMEOUT=470\n' > "$CFGDIR/shared-t1"
+printf 'AGENT_TIMEOUT=470\n' >"$CFGDIR/shared-t1"
 
 # 1. The shared file reaches plan-review at all. This is the bug.
 timeout_case 470 "AGENT_TIMEOUT in the shared relay config reaches plan-review" \
@@ -1184,7 +1914,7 @@ timeout_case 410 "SHIP_FEATURE_PLAN_TIMEOUT in the environment beats the shared 
   PR_RELAY_CONFIG="$CFGDIR/shared-t1" SHIP_FEATURE_CONFIG=/dev/null SHIP_FEATURE_PLAN_TIMEOUT=410
 
 # 3. Rung 2: ship-feature's own file beats the shared one, and loses to the environment.
-printf 'SHIP_FEATURE_PLAN_TIMEOUT=420\n' > "$CFGDIR/own-t1"
+printf 'SHIP_FEATURE_PLAN_TIMEOUT=420\n' >"$CFGDIR/own-t1"
 timeout_case 420 "SHIP_FEATURE_PLAN_TIMEOUT in ship-feature's config beats the shared file" \
   PR_RELAY_CONFIG="$CFGDIR/shared-t1" SHIP_FEATURE_CONFIG="$CFGDIR/own-t1"
 timeout_case 410 "the environment still beats ship-feature's own config" \
@@ -1215,98 +1945,166 @@ timeout_case 470 "an empty PR_RELAY_AGENT_TIMEOUT does not block the shared file
 # 7. LAST value wins inside the shared file, as in pr-review-relay's own parser. This is what the
 # from_env_* flag being set BEFORE the loop protects: an inline "is it already set" test in the case
 # arm would keep the FIRST line here while the relay kept the last — one valid file, two timeouts.
-printf 'AGENT_TIMEOUT=430\nAGENT_TIMEOUT=440\n' > "$CFGDIR/shared-t2"
+printf 'AGENT_TIMEOUT=430\nAGENT_TIMEOUT=440\n' >"$CFGDIR/shared-t2"
 timeout_case 440 "the last AGENT_TIMEOUT in the shared file wins" \
   PR_RELAY_CONFIG="$CFGDIR/shared-t2" SHIP_FEATURE_CONFIG=/dev/null
 
 # 8. A bad value from the SHARED FILE is rejected exactly like a bad environment value — validation
 # happens after resolution, so there is no path that skips it. `timeout 0` DISABLES the limit rather
 # than tightening it, which is why zero is refused rather than clamped.
-printf 'AGENT_TIMEOUT=nonsense\n' > "$CFGDIR/shared-t3"
-( printf 'p\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t3" SHIP_FEATURE_CONFIG=/dev/null \
-    bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 )
+printf 'AGENT_TIMEOUT=nonsense\n' >"$CFGDIR/shared-t3"
+(printf 'p\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t3" SHIP_FEATURE_CONFIG=/dev/null \
+  bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1)
 check "a non-numeric AGENT_TIMEOUT in the shared file is rejected" $? 1
-printf 'AGENT_TIMEOUT=0\n' > "$CFGDIR/shared-t4"
-( printf 'p\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t4" SHIP_FEATURE_CONFIG=/dev/null \
-    bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 )
+printf 'AGENT_TIMEOUT=0\n' >"$CFGDIR/shared-t4"
+(printf 'p\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t4" SHIP_FEATURE_CONFIG=/dev/null \
+  bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1)
 check "a zero AGENT_TIMEOUT in the shared file is rejected" $? 1
 
 # 9. The mapping must NOT cross into the pr-review-relay child. The relay reads this same file
 # itself, so an exported value from here would beat its own config — the failure MODEL_opencode's
 # test guards against, in a second form. Includes the case a plain assignment does NOT fix: a
 # caller that already EXPORTED the name, where the export attribute survives the assignment.
-printf 'AGENT_TIMEOUT=470\n' > "$CFGDIR/shared-t5"
-printf '#!/usr/bin/env bash\necho "RELAYENV SF=${SHIP_FEATURE_PLAN_TIMEOUT:-unset} PR=${PR_RELAY_AGENT_TIMEOUT:-unset}"\nexit 0\n' > "$BIN/pr-review-relay.tmo"; chmod +x "$BIN/pr-review-relay.tmo"
-cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-tmo"; cp "$BIN/pr-review-relay.tmo" "$BIN/pr-review-relay"
+printf 'AGENT_TIMEOUT=470\n' >"$CFGDIR/shared-t5"
+printf '#!/usr/bin/env bash\necho "RELAYENV SF=${SHIP_FEATURE_PLAN_TIMEOUT:-unset} PR=${PR_RELAY_AGENT_TIMEOUT:-unset}"\nexit 0\n' >"$BIN/pr-review-relay.tmo"
+chmod +x "$BIN/pr-review-relay.tmo"
+cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-tmo"
+cp "$BIN/pr-review-relay.tmo" "$BIN/pr-review-relay"
 tmo1=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t5" SHIP_FEATURE_CONFIG=/dev/null bash "$CLI" relay --author claude 2>/dev/null)
 tmo2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t5" SHIP_FEATURE_CONFIG=/dev/null SHIP_FEATURE_PLAN_TIMEOUT='' bash "$CLI" relay --author claude 2>/dev/null)
-cp "$WORK/relay-stub-backup-tmo" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
-printf '%s' "$tmo1" | grep -q 'SF=unset PR=unset' \
-  && { echo "  ok   [-] the mapped timeout is not exported into pr-review-relay"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL ship-feature pushed a timeout at the relay: $tmo1"; FAIL=$((FAIL+1)); }
-printf '%s' "$tmo2" | grep -q 'SF=unset' \
-  && { echo "  ok   [-] an already-exported name does not carry the mapped value into the child"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the export attribute survived and leaked 470 into the relay: $tmo2"; FAIL=$((FAIL+1)); }
+cp "$WORK/relay-stub-backup-tmo" "$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
+printf '%s' "$tmo1" | grep -q 'SF=unset PR=unset' &&
+  {
+    echo "  ok   [-] the mapped timeout is not exported into pr-review-relay"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL ship-feature pushed a timeout at the relay: $tmo1"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$tmo2" | grep -q 'SF=unset' &&
+  {
+    echo "  ok   [-] an already-exported name does not carry the mapped value into the child"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the export attribute survived and leaked 470 into the relay: $tmo2"
+    FAIL=$((FAIL + 1))
+  }
 # BOTH assigning sites, not just the shared-file one. The first draft of this change put `export -n`
 # on load_shared_panel_config and missed the identical trap in load_config, and the test above could
 # not see it: it only ever exercised the shared-config path. Cross-review caught it as a Blocker and
 # it reproduced exactly — `export SHIP_FEATURE_PLAN_TIMEOUT=` plus a value in ship-feature's own
 # config put SF=420 in the child's environment. Two assignments, two chances to leak, two tests.
-printf 'SHIP_FEATURE_PLAN_TIMEOUT=420\n' > "$CFGDIR/own-t2"
-cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-tmo3"; cp "$BIN/pr-review-relay.tmo" "$BIN/pr-review-relay"
+printf 'SHIP_FEATURE_PLAN_TIMEOUT=420\n' >"$CFGDIR/own-t2"
+cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-tmo3"
+cp "$BIN/pr-review-relay.tmo" "$BIN/pr-review-relay"
 tmo3=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG=/dev/null SHIP_FEATURE_CONFIG="$CFGDIR/own-t2" SHIP_FEATURE_PLAN_TIMEOUT='' bash "$CLI" relay --author claude 2>/dev/null)
-cp "$WORK/relay-stub-backup-tmo3" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
-printf '%s' "$tmo3" | grep -q 'SF=unset' \
-  && { echo "  ok   [-] ship-feature's OWN config does not leak the timeout into the child either"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL load_config's assignment kept the export attribute and leaked into the relay: $tmo3"; FAIL=$((FAIL+1)); }
-
+cp "$WORK/relay-stub-backup-tmo3" "$BIN/pr-review-relay"
+chmod +x "$BIN/pr-review-relay"
+printf '%s' "$tmo3" | grep -q 'SF=unset' &&
+  {
+    echo "  ok   [-] ship-feature's OWN config does not leak the timeout into the child either"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL load_config's assignment kept the export attribute and leaked into the relay: $tmo3"
+    FAIL=$((FAIL + 1))
+  }
 
 # grok: Grok 4.6 at medium effort by default (the relay's default for the same seat), prompt-file (not stdin), read-only ALLOWLIST, runs in the
 # checkout so it can verify the plan against the code (parity with claude/codex/cursor).
-out=$(printf 'UNIQUE_PLAN_TOKEN_42\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok 2>/dev/null); rc=$?
+out=$(printf 'UNIQUE_PLAN_TOKEN_42\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok 2>/dev/null)
+rc=$?
 check "plan-review grok clean exit" "$rc" 0
-printf '%s' "$out" | grep -q -- '-m grok-4.6' && printf '%s' "$out" | grep -q -- '--reasoning-effort medium' \
-  && printf '%s' "$out" | grep -q -- '--permission-mode plan' && printf '%s' "$out" | grep -q -- '--sandbox read-only' \
-  && printf '%s' "$out" | grep -qF -- '--tools read_file,list_dir,grep' && printf '%s' "$out" | grep -q -- '--verbatim' \
-  && printf '%s' "$out" | grep -qF -- '--disallowed-tools search_tool,use_tool' \
-  && printf '%s' "$out" | grep -q -- '--prompt-file' \
-  && { echo "  ok   [-] grok argv pins model/medium/plan/sandbox/tools-allowlist/mcp-off/verbatim/prompt-file"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL grok argv incomplete"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q -- '-m grok-4.6' && printf '%s' "$out" | grep -q -- '--reasoning-effort medium' &&
+  printf '%s' "$out" | grep -q -- '--permission-mode plan' && printf '%s' "$out" | grep -q -- '--sandbox read-only' &&
+  printf '%s' "$out" | grep -qF -- '--tools read_file,list_dir,grep' && printf '%s' "$out" | grep -q -- '--verbatim' &&
+  printf '%s' "$out" | grep -qF -- '--disallowed-tools search_tool,use_tool' &&
+  printf '%s' "$out" | grep -q -- '--prompt-file' &&
+  {
+    echo "  ok   [-] grok argv pins model/medium/plan/sandbox/tools-allowlist/mcp-off/verbatim/prompt-file"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL grok argv incomplete"
+    FAIL=$((FAIL + 1))
+  }
 # Read-only means: no shell, no editor, no subagents in the built-in allowlist. Asserted on the
 # ARGV LINE ONLY — grepping the whole output would false-fail on a plan that merely mentions one
 # of these names, since the stub echoes the plan back.
 gargv=$(printf '%s' "$out" | grep 'REVIEW-grok' | head -1 | sed -n 's/.*argv=\[\([^]]*\)\].*/\1/p')
-printf '%s' "$gargv" | grep -qE -- '(run_terminal_command|search_replace|spawn_subagent|scheduler_)' \
-  && { echo "  FAIL grok allowlist leaks a write/exec tool"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] grok allowlist excludes shell/editor/subagent tools"; PASS=$((PASS+1)); }
+printf '%s' "$gargv" | grep -qE -- '(run_terminal_command|search_replace|spawn_subagent|scheduler_)' &&
+  {
+    echo "  FAIL grok allowlist leaks a write/exec tool"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] grok allowlist excludes shell/editor/subagent tools"
+    PASS=$((PASS + 1))
+  }
 # The MCP bridge survives --tools, so it must be removed explicitly. Verified against the real
 # CLI: with `--tools read_file` alone the session still exposes search_tool and use_tool.
-printf '%s' "$gargv" | grep -qF -- '--disallowed-tools search_tool,use_tool' \
-  && { echo "  ok   [-] grok removes the MCP bridge explicitly"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL grok leaves the MCP bridge reachable"; FAIL=$((FAIL+1)); }
-printf '%s' "$out" | grep -q 'UNIQUE_PLAN_TOKEN_42' && printf '%s' "$out" | grep -qF -- '--- PLAN ---' \
-  && { echo "  ok   [-] grok prompt-file contains the plan text"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL grok prompt-file missing plan content"; FAIL=$((FAIL+1)); }
+printf '%s' "$gargv" | grep -qF -- '--disallowed-tools search_tool,use_tool' &&
+  {
+    echo "  ok   [-] grok removes the MCP bridge explicitly"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL grok leaves the MCP bridge reachable"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$out" | grep -q 'UNIQUE_PLAN_TOKEN_42' && printf '%s' "$out" | grep -qF -- '--- PLAN ---' &&
+  {
+    echo "  ok   [-] grok prompt-file contains the plan text"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL grok prompt-file missing plan content"
+    FAIL=$((FAIL + 1))
+  }
 # Runs in the caller's checkout (no --cwd override, no iso- temp dir): that is what lets it read
 # the tree the plan is about.
 gk=$(printf '%s' "$out" | grep 'REVIEW-grok' | head -1)
 gcwd=$(printf '%s' "$gk" | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
-printf '%s' "$out" | grep -q -- '--cwd ' \
-  && { echo "  FAIL grok still pins --cwd (should inherit the checkout)"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] grok does not override cwd"; PASS=$((PASS+1)); }
+printf '%s' "$out" | grep -q -- '--cwd ' &&
+  {
+    echo "  FAIL grok still pins --cwd (should inherit the checkout)"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] grok does not override cwd"
+    PASS=$((PASS + 1))
+  }
 case "$gcwd" in
-  *iso-grok*) echo "  FAIL grok still runs in an isolated cwd ($gcwd)"; FAIL=$((FAIL+1));;
-  "$PWD") echo "  ok   [-] grok inherits the caller's cwd (the checkout, in real use)"; PASS=$((PASS+1));;
-  *) echo "  FAIL grok cwd is neither the caller's nor recognised ($gcwd)"; FAIL=$((FAIL+1));;
+  *iso-grok*)
+    echo "  FAIL grok still runs in an isolated cwd ($gcwd)"
+    FAIL=$((FAIL + 1))
+    ;;
+  "$PWD")
+    echo "  ok   [-] grok inherits the caller's cwd (the checkout, in real use)"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "  FAIL grok cwd is neither the caller's nor recognised ($gcwd)"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
 # The prompt-file must never land inside the checkout, or it shows up in `git status`.
-printf '%s' "$out" | grep -qF -- "--prompt-file $PWD/" \
-  && { echo "  FAIL grok prompt-file written inside the checkout"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] grok prompt-file lives outside the checkout"; PASS=$((PASS+1)); }
+printf '%s' "$out" | grep -qF -- "--prompt-file $PWD/" &&
+  {
+    echo "  FAIL grok prompt-file written inside the checkout"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] grok prompt-file lives outside the checkout"
+    PASS=$((PASS + 1))
+  }
 # A sandbox that warns and continues must FAIL the round, not pass it. This is the fail-open
 # shape: grok exits 0 with a perfectly good review on stdout, while stderr says the OS write
 # barrier could not be set up. Before this guard the round was reported clean.
-cat > "$PBIN/grok" <<'STUB'
+cat >"$PBIN/grok" <<'STUB'
 #!/usr/bin/env bash
 echo "warning: failed to set up sandbox (bubblewrap not available), continuing unsandboxed" >&2
 echo "REVIEW-grok argv=[$*] CWD=[${PWD}]"
@@ -1315,78 +2113,143 @@ echo "None."
 exit 0
 STUB
 chmod +x "$PBIN/grok"
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok 2>&1)
+rc=$?
 check "plan-review fails when the sandbox warns and continues (fail-closed)" "$rc" 3
-printf '%s' "$out" | grep -qi 'sandbox was not enforced' \
-  && { echo "  ok   [-] grok sandbox fail-open is reported, not swallowed"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL sandbox fail-open not surfaced"; FAIL=$((FAIL+1)); }
-printf '%s' "$out" | grep -q '## Blocker' \
-  && { echo "  FAIL unsandboxed review was printed as a valid review"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] the unsandboxed review is discarded, not printed"; PASS=$((PASS+1)); }
+printf '%s' "$out" | grep -qi 'sandbox was not enforced' &&
+  {
+    echo "  ok   [-] grok sandbox fail-open is reported, not swallowed"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL sandbox fail-open not surfaced"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$out" | grep -q '## Blocker' &&
+  {
+    echo "  FAIL unsandboxed review was printed as a valid review"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] the unsandboxed review is discarded, not printed"
+    PASS=$((PASS + 1))
+  }
 # ...but a benign stderr mentioning "namespace" or "sandbox" must NOT discard a good review.
 # The match keys off failure phrasing; a bare token would train people to ignore this signal.
-cat > "$PBIN/grok" <<'STUB'
+cat >"$PBIN/grok" <<'STUB'
 #!/usr/bin/env bash
 echo "info: sandbox profile read-only applied; namespace ready" >&2
 echo "REVIEW-grok argv=[$*] CWD=[${PWD}]"
 exit 0
 STUB
 chmod +x "$PBIN/grok"
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok 2>&1)
+rc=$?
 check "plan-review keeps the review when stderr mentions the sandbox benignly" "$rc" 0
-printf '%s' "$out" | grep -q 'REVIEW-grok' \
-  && { echo "  ok   [-] benign sandbox log does not discard the review"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL benign sandbox log false-failed the round"; FAIL=$((FAIL+1)); }
-make_reviewer grok 0 grok   # restore
+printf '%s' "$out" | grep -q 'REVIEW-grok' &&
+  {
+    echo "  ok   [-] benign sandbox log does not discard the review"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL benign sandbox log false-failed the round"
+    FAIL=$((FAIL + 1))
+  }
+make_reviewer grok 0 grok # restore
 
 # When the OS sandbox cannot be enforced, grok DEGRADES to the old isolated posture —
 # text-only review, no checkout — instead of refusing, and says so above the review. Refusing would
 # make the reviewer unusable on any Linux without bubblewrap (CI runners included); running it in the
 # checkout unsandboxed is the one thing we must never do.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail bash "$CLI" plan-review --reviewers grok 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail bash "$CLI" plan-review --reviewers grok 2>&1)
+rc=$?
 check "plan-review still returns a review when the sandbox is unavailable" "$rc" 0
-printf '%s' "$out" | grep -qi 'saw the plan text ONLY' \
-  && { echo "  ok   [-] degraded grok review is labelled text-only"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL degraded review not labelled"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -qi 'saw the plan text ONLY' &&
+  {
+    echo "  ok   [-] degraded grok review is labelled text-only"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL degraded review not labelled"
+    FAIL=$((FAIL + 1))
+  }
 dg=$(printf '%s' "$out" | grep 'REVIEW-grok' | head -1)
-printf '%s' "$dg" | grep -qF -- "--deny *" && ! printf '%s' "$dg" | grep -qF -- '--tools read_file' \
-  && { echo "  ok   [-] degraded grok denies every tool"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL degraded grok did not fall back to deny-all"; FAIL=$((FAIL+1)); }
-printf '%s' "$dg" | grep -qF -- '-m grok-4.6 --reasoning-effort medium ' \
-  && { echo "  ok   [-] degraded grok pins the default model and effort too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL degraded grok did not pin -m grok-4.6 --reasoning-effort medium"; FAIL=$((FAIL+1)); }
+printf '%s' "$dg" | grep -qF -- "--deny *" && ! printf '%s' "$dg" | grep -qF -- '--tools read_file' &&
+  {
+    echo "  ok   [-] degraded grok denies every tool"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL degraded grok did not fall back to deny-all"
+    FAIL=$((FAIL + 1))
+  }
+printf '%s' "$dg" | grep -qF -- '-m grok-4.6 --reasoning-effort medium ' &&
+  {
+    echo "  ok   [-] degraded grok pins the default model and effort too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL degraded grok did not pin -m grok-4.6 --reasoning-effort medium"
+    FAIL=$((FAIL + 1))
+  }
 dcwd=$(printf '%s' "$dg" | sed -n 's/.*CWD=\[\([^]]*\)\].*/\1/p')
 case "$dcwd" in
-  *iso-grok*) echo "  ok   [-] degraded grok runs outside the checkout"; PASS=$((PASS+1));;
-  *) echo "  FAIL degraded grok ran in $dcwd"; FAIL=$((FAIL+1));;
+  *iso-grok*)
+    echo "  ok   [-] degraded grok runs outside the checkout"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "  FAIL degraded grok ran in $dcwd"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
 
 # The pins must reach the degraded path too — not just the normal one, since a pin that silently
 # reverts to the default the moment the sandbox is unavailable would be a surprise no one asked for.
 # From the SHARED file here, the way this machine actually sets them.
-printf 'MODEL_grok=grok-4.7\nEFFORT_grok=low\n' > "$CFGDIR/shared-grok-dg"
+printf 'MODEL_grok=grok-4.7\nEFFORT_grok=low\n' >"$CFGDIR/shared-grok-dg"
 dgo=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail PR_RELAY_CONFIG="$CFGDIR/shared-grok-dg" bash "$CLI" plan-review --reviewers grok 2>&1 | grep 'REVIEW-grok')
-printf '%s' "$dgo" | grep -qF -- '-m grok-4.7 --reasoning-effort low ' \
-  && { echo "  ok   [-] MODEL_grok / EFFORT_grok reach the degraded path too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the grok pins were ignored on the degraded path: $dgo"; FAIL=$((FAIL+1)); }
+printf '%s' "$dgo" | grep -qF -- '-m grok-4.7 --reasoning-effort low ' &&
+  {
+    echo "  ok   [-] MODEL_grok / EFFORT_grok reach the degraded path too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the grok pins were ignored on the degraded path: $dgo"
+    FAIL=$((FAIL + 1))
+  }
 
 # bare grok is a plan-review seat since 2026-09 (it was relay-only while plan-review ran a separate
 # `grok45high` seat). Exit 0 alone proves nothing here — codex would keep the round alive either
 # way — so assert grok actually RAN and was not skipped.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers grok,codex 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers grok,codex 2>&1)
+rc=$?
 check "plan-review runs bare grok alongside codex" "$rc" 0
-printf '%s' "$out" | grep -q 'REVIEW-grok' && ! printf '%s' "$out" | grep -qi "grok.*relay-only" \
-  && { echo "  ok   [-] plan-review runs bare grok instead of skipping it"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL bare grok was skipped as relay-only"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q 'REVIEW-grok' && ! printf '%s' "$out" | grep -qi "grok.*relay-only" &&
+  {
+    echo "  ok   [-] plan-review runs bare grok instead of skipping it"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL bare grok was skipped as relay-only"
+    FAIL=$((FAIL + 1))
+  }
 # `grok45high` is the old name: it runs grok, ONCE, with ONE warning — even named twice, and even
 # alongside `grok`. The warning has its own guard; collapsing before the de-dupe alone would warn
 # twice for `grok45high,grok45high`.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok45high,grok,grok45high 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok bash "$CLI" plan-review --reviewers grok45high,grok,grok45high 2>&1)
+rc=$?
 check "plan-review accepts the grok45high alias" "$rc" 0
-[ "$(printf '%s' "$out" | grep -c 'REVIEW-grok')" = 1 ] \
-  && [ "$(printf '%s' "$out" | grep -c "'grok45high' is the old name")" = 1 ] \
-  && { echo "  ok   [-] grok45high collapses to one grok run with one warning"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL grok45high alias ran grok more than once or warned more than once: $out"; FAIL=$((FAIL+1)); }
+[ "$(printf '%s' "$out" | grep -c 'REVIEW-grok')" = 1 ] &&
+  [ "$(printf '%s' "$out" | grep -c "'grok45high' is the old name")" = 1 ] &&
+  {
+    echo "  ok   [-] grok45high collapses to one grok run with one warning"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL grok45high alias ran grok more than once or warned more than once: $out"
+    FAIL=$((FAIL + 1))
+  }
 # missing grok binary fails closed when grok named — curated PATH so a system
 # `grok` cannot mask the miss (same pattern as the missing-gemini test).
 rm -f "$PBIN/grok"
@@ -1396,8 +2259,9 @@ for b in bash cat printf timeout gtimeout mktemp tr sed head tail wc rm mkdir ch
   [ -x "$src" ] || continue
   ln -sf "$src" "$PBIN/$b" 2>/dev/null || true
 done
-( printf 'plan\n' | PATH="$MPATH" bash "$CLI" plan-review --reviewers grok >/dev/null 2>&1 ); check "plan-review missing grok binary → fail (3)" $? 3
-make_reviewer grok 0 grok   # restore
+(printf 'plan\n' | PATH="$MPATH" bash "$CLI" plan-review --reviewers grok >/dev/null 2>&1)
+check "plan-review missing grok binary → fail (3)" $? 3
+make_reviewer grok 0 grok # restore
 
 # antigravity/gemini runs the `gemini` CLI in DEFAULT non-interactive mode (already excludes
 # shell/edit/write_file/web_fetch) with `-e none` to disable extensions. It must NOT pass
@@ -1405,23 +2269,77 @@ make_reviewer grok 0 grok   # restore
 # Set XDG_CONFIG_HOME so the assertion below can prove the run UNSETS it.
 out=$(printf 'plan\n' | XDG_CONFIG_HOME=/tmp/xdg-should-be-unset PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 ag=$(printf '%s' "$out" | grep 'REVIEW-gemini')
-printf '%s' "$ag" | grep -q -- "-e none" && { echo "  ok   [-] antigravity runs gemini with extensions off (-e none)"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini did not pass -e none"; FAIL=$((FAIL+1)); }
-printf '%s' "$ag" | grep -q -- "-m gemini-3.1-pro-preview" && { echo "  ok   [-] antigravity pins a working model by default"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini did not pin the default model"; FAIL=$((FAIL+1)); }
-printf '%s' "$ag" | grep -q -- "--approval-mode plan" && { echo "  FAIL gemini uses --approval-mode plan (throws without experimental.plan)"; FAIL=$((FAIL+1)); } || { echo "  ok   [-] antigravity avoids the experimental --approval-mode plan"; PASS=$((PASS+1)); }
-printf '%s' "$ag" | grep -q -- "yolo" && { echo "  FAIL gemini uses the auto-approving yolo mode"; FAIL=$((FAIL+1)); } || { echo "  ok   [-] antigravity never uses yolo"; PASS=$((PASS+1)); }
+printf '%s' "$ag" | grep -q -- "-e none" && {
+  echo "  ok   [-] antigravity runs gemini with extensions off (-e none)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini did not pass -e none"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$ag" | grep -q -- "-m gemini-3.1-pro-preview" && {
+  echo "  ok   [-] antigravity pins a working model by default"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini did not pin the default model"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$ag" | grep -q -- "--approval-mode plan" && {
+  echo "  FAIL gemini uses --approval-mode plan (throws without experimental.plan)"
+  FAIL=$((FAIL + 1))
+} || {
+  echo "  ok   [-] antigravity avoids the experimental --approval-mode plan"
+  PASS=$((PASS + 1))
+}
+printf '%s' "$ag" | grep -q -- "yolo" && {
+  echo "  FAIL gemini uses the auto-approving yolo mode"
+  FAIL=$((FAIL + 1))
+} || {
+  echo "  ok   [-] antigravity never uses yolo"
+  PASS=$((PASS + 1))
+}
 # FAIL-CLOSED isolation: gemini must run from an isolated dir whose locked .gemini/settings.json
 # hard-excludes the write tools and disables hooks, so a reviewed checkout's own config can't
 # re-enable writes. The stub reports locked=yes only when that settings file is present in its CWD.
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "locked=yes" && { echo "  ok   [-] antigravity runs fail-closed (read-only tools.core allowlist, all write tools excluded, hooks off, no MCP)"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini not isolated with locked read-only settings"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "locked=yes" && {
+  echo "  ok   [-] antigravity runs fail-closed (read-only tools.core allowlist, all write tools excluded, hooks off, no MCP)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini not isolated with locked read-only settings"
+  FAIL=$((FAIL + 1))
+}
 # GEMINI_CLI_HOME must be a SEPARATE dir from the workspace so the copied OAuth creds live outside it.
-printf '%s' "$iso" | grep -q -- "homeiso=yes" && { echo "  ok   [-] antigravity isolates GEMINI_CLI_HOME separate from the workspace"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini did not separate GEMINI_CLI_HOME from the workspace"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "homeiso=yes" && {
+  echo "  ok   [-] antigravity isolates GEMINI_CLI_HOME separate from the workspace"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini did not separate GEMINI_CLI_HOME from the workspace"
+  FAIL=$((FAIL + 1))
+}
 # No OAuth credential file may sit in the workspace tree (else the allowlisted read_file could disclose it).
-printf '%s' "$iso" | grep -q -- "credsafe=yes" && { echo "  ok   [-] antigravity keeps OAuth creds out of the workspace"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini left OAuth creds reachable in the workspace"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "credsafe=yes" && {
+  echo "  ok   [-] antigravity keeps OAuth creds out of the workspace"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini left OAuth creds reachable in the workspace"
+  FAIL=$((FAIL + 1))
+}
 # XDG_CONFIG_HOME must be UNSET for the run (defence-in-depth against an XDG-honoring gemini).
-printf '%s' "$iso" | grep -q -- "xdg=UNSET" && { echo "  ok   [-] antigravity unsets XDG_CONFIG_HOME for the run"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini did not unset XDG_CONFIG_HOME"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "xdg=UNSET" && {
+  echo "  ok   [-] antigravity unsets XDG_CONFIG_HOME for the run"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini did not unset XDG_CONFIG_HOME"
+  FAIL=$((FAIL + 1))
+}
 # A controlled workspace .gemini/.env must halt gemini's ancestor .env walk (no hostile /tmp/.env).
-printf '%s' "$iso" | grep -q -- "envstop=yes" && { echo "  ok   [-] antigravity plants a controlled .env (blocks ancestor .env injection)"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini did not block ancestor .env lookup"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "envstop=yes" && {
+  echo "  ok   [-] antigravity plants a controlled .env (blocks ancestor .env injection)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini did not block ancestor .env lookup"
+  FAIL=$((FAIL + 1))
+}
 # The SYSTEM scope (highest precedence) + system-defaults must also be redirected under GEMINI_CLI_HOME,
 # so /etc/gemini-cli or an inherited hostile GEMINI_CLI_SYSTEM_SETTINGS_PATH can't re-enable anything.
 # NOTE the assumption this rests on: gemini merges its four settings scopes with SYSTEM at the
@@ -1429,23 +2347,49 @@ printf '%s' "$iso" | grep -q -- "envstop=yes" && { echo "  ok   [-] antigravity 
 # empty {}. If a future release changed that merge order, every scope here would still be a file we
 # control — but which one wins would change, and this assertion would not notice. Re-read the merge
 # order when widening SHIP_FEATURE_GEMINI_TESTED_VERSIONS.
-printf '%s' "$iso" | grep -q -- "sysiso=yes" && { echo "  ok   [-] antigravity isolates the SYSTEM settings scope too"; PASS=$((PASS+1)); } || { echo "  FAIL antigravity/gemini did not isolate the system settings scope"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "sysiso=yes" && {
+  echo "  ok   [-] antigravity isolates the SYSTEM settings scope too"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL antigravity/gemini did not isolate the system settings scope"
+  FAIL=$((FAIL + 1))
+}
 # And it must NOT run in the caller's CWD (where a checkout's .gemini/ would live).
 # grep -F: $PWD may contain regex metacharacters (e.g. a dotted TMPDIR), so match it as a literal.
-printf '%s' "$iso" | grep -Fq -- "cwd=$PWD " && { echo "  FAIL antigravity/gemini ran in the caller CWD (checkout .gemini/ could load)"; FAIL=$((FAIL+1)); } || { echo "  ok   [-] antigravity/gemini ran outside the caller CWD"; PASS=$((PASS+1)); }
+printf '%s' "$iso" | grep -Fq -- "cwd=$PWD " && {
+  echo "  FAIL antigravity/gemini ran in the caller CWD (checkout .gemini/ could load)"
+  FAIL=$((FAIL + 1))
+} || {
+  echo "  ok   [-] antigravity/gemini ran outside the caller CWD"
+  PASS=$((PASS + 1))
+}
 
 # agy and gemini are ALIASES of antigravity: the panel collapses them to a SINGLE gemini invocation.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers antigravity,agy,gemini 2>/dev/null); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers antigravity,agy,gemini 2>/dev/null)
+rc=$?
 check "plan-review dedupes antigravity/agy/gemini aliases (exit 0)" "$rc" 0
 n=$(printf '%s\n' "$out" | grep -c 'REVIEW-gemini')
-[ "$n" = 1 ] && { echo "  ok   [-] antigravity/agy/gemini collapse to one Gemini run"; PASS=$((PASS+1)); } || { echo "  FAIL Gemini ran $n times for the three aliases (want 1)"; FAIL=$((FAIL+1)); }
+[ "$n" = 1 ] && {
+  echo "  ok   [-] antigravity/agy/gemini collapse to one Gemini run"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL Gemini ran $n times for the three aliases (want 1)"
+  FAIL=$((FAIL + 1))
+}
 
 # SHIP_FEATURE_GEMINI_MODEL overrides the pinned default and reaches the argv.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_GEMINI_MODEL=my-model bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s' "$out" | grep 'REVIEW-gemini' | grep -q -- "-m my-model" && { echo "  ok   [-] SHIP_FEATURE_GEMINI_MODEL overrides the model"; PASS=$((PASS+1)); } || { echo "  FAIL SHIP_FEATURE_GEMINI_MODEL did not reach gemini argv"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep 'REVIEW-gemini' | grep -q -- "-m my-model" && {
+  echo "  ok   [-] SHIP_FEATURE_GEMINI_MODEL overrides the model"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL SHIP_FEATURE_GEMINI_MODEL did not reach gemini argv"
+  FAIL=$((FAIL + 1))
+}
 
 # A model value starting with '-' must be rejected (can't be smuggled in as a gemini flag).
-( printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_GEMINI_MODEL=--dangerous bash "$CLI" plan-review --reviewers antigravity >/dev/null 2>&1 ); check "plan-review rejects a model name starting with '-' (1)" $? 1
+(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_GEMINI_MODEL=--dangerous bash "$CLI" plan-review --reviewers antigravity >/dev/null 2>&1)
+check "plan-review rejects a model name starting with '-' (1)" $? 1
 
 # --- the gemini seat's fail-closed VERSION GATE ------------------------------------------------
 # `tools.core` is an allowlist but NOT a universal one: gemini registers some tools outside that
@@ -1454,105 +2398,210 @@ printf '%s' "$out" | grep 'REVIEW-gemini' | grep -q -- "-m my-model" && { echo "
 # seat kept claiming it cannot write. There is no CLI call that dumps the active registry, so the
 # seat refuses to run against a version nobody has audited. These cases are the tripwire's own test:
 # without them the gate could be deleted and every other gemini assertion here would stay green.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.0 bash "$CLI" plan-review --reviewers antigravity 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.0 bash "$CLI" plan-review --reviewers antigravity 2>&1)
+rc=$?
 check "plan-review fails the seat on an unaudited gemini version (3)" "$rc" 3
 # The seat must fail BEFORE the review runs — a gate that reports a failure but still ran the tool
 # is not a gate.
-printf '%s' "$out" | grep -q 'REVIEW-gemini' && { echo "  FAIL gemini reviewed anyway on an unaudited version"; FAIL=$((FAIL+1)); } || { echo "  ok   [-] an unaudited gemini version never reaches the review"; PASS=$((PASS+1)); }
-printf '%s' "$out" | grep -qi 'audited' && { echo "  ok   [-] the unaudited-version failure says why"; PASS=$((PASS+1)); } || { echo "  FAIL the unaudited-version failure gave no reason"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q 'REVIEW-gemini' && {
+  echo "  FAIL gemini reviewed anyway on an unaudited version"
+  FAIL=$((FAIL + 1))
+} || {
+  echo "  ok   [-] an unaudited gemini version never reaches the review"
+  PASS=$((PASS + 1))
+}
+printf '%s' "$out" | grep -qi 'audited' && {
+  echo "  ok   [-] the unaudited-version failure says why"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the unaudited-version failure gave no reason"
+  FAIL=$((FAIL + 1))
+}
 # Auditing a release and listing it opens the gate — for THAT release.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.7 SHIP_FEATURE_GEMINI_TESTED_VERSIONS='0.26.0 9.99.7' bash "$CLI" plan-review --reviewers antigravity 2>/dev/null); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.7 SHIP_FEATURE_GEMINI_TESTED_VERSIONS='0.26.0 9.99.7' bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
+rc=$?
 check "plan-review accepts a gemini version listed as audited (0)" "$rc" 0
-printf '%s' "$out" | grep -q 'REVIEW-gemini' && { echo "  ok   [-] an audited gemini version runs the review"; PASS=$((PASS+1)); } || { echo "  FAIL an audited gemini version still did not review"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q 'REVIEW-gemini' && {
+  echo "  ok   [-] an audited gemini version runs the review"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL an audited gemini version still did not review"
+  FAIL=$((FAIL + 1))
+}
 # The match is EXACT, not major.minor. A patch release can add a tool outside `tools.core` as easily
 # as a minor one, and "9.99.8 is close enough to the 9.99.7 we read" is the assumption this gate
 # exists to refuse. This case is the difference between a version gate and a version suggestion.
-( printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.8 SHIP_FEATURE_GEMINI_TESTED_VERSIONS='0.26.0 9.99.7' bash "$CLI" plan-review --reviewers antigravity >/dev/null 2>&1 ); check "an unaudited PATCH release does not ride in on its neighbour (3)" $? 3
+(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.8 SHIP_FEATURE_GEMINI_TESTED_VERSIONS='0.26.0 9.99.7' bash "$CLI" plan-review --reviewers antigravity >/dev/null 2>&1)
+check "an unaudited PATCH release does not ride in on its neighbour (3)" $? 3
 # A major.minor prefix is not a wildcard either.
-( printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.0 SHIP_FEATURE_GEMINI_TESTED_VERSIONS='9.99' bash "$CLI" plan-review --reviewers antigravity >/dev/null 2>&1 ); check "a major.minor entry does not admit its patch releases (3)" $? 3
+(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.0 SHIP_FEATURE_GEMINI_TESTED_VERSIONS='9.99' bash "$CLI" plan-review --reviewers antigravity >/dev/null 2>&1)
+check "a major.minor entry does not admit its patch releases (3)" $? 3
 # The list is read from the config file too, not only the environment.
-printf 'SHIP_FEATURE_GEMINI_TESTED_VERSIONS=9.99.0\n' > "$CFGDIR/gemver"
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.0 SHIP_FEATURE_CONFIG="$CFGDIR/gemver" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null); rc=$?
+printf 'SHIP_FEATURE_GEMINI_TESTED_VERSIONS=9.99.0\n' >"$CFGDIR/gemver"
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION=9.99.0 SHIP_FEATURE_CONFIG="$CFGDIR/gemver" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
+rc=$?
 check "the config file can widen the audited gemini versions (0)" "$rc" 0
 
 # MODEL_gemini in the SHARED relay config pins this seat too — one file for the whole panel. The key
 # is MODEL_gemini and not MODEL_antigravity on purpose: the relay maps MODEL_antigravity onto its own
 # `agy` seat, a different binary that accepts different model ids.
-printf 'MODEL_gemini=gemini-9.9-test\n' > "$CFGDIR/sharedgem"
+printf 'MODEL_gemini=gemini-9.9-test\n' >"$CFGDIR/sharedgem"
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/sharedgem" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s' "$out" | grep 'REVIEW-gemini' | grep -q -- "-m gemini-9.9-test" && { echo "  ok   [-] MODEL_gemini in the shared config pins the gemini seat"; PASS=$((PASS+1)); } || { echo "  FAIL MODEL_gemini was not mapped"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep 'REVIEW-gemini' | grep -q -- "-m gemini-9.9-test" && {
+  echo "  ok   [-] MODEL_gemini in the shared config pins the gemini seat"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL MODEL_gemini was not mapped"
+  FAIL=$((FAIL + 1))
+}
 # The environment still wins over the shared file, like every other pin.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/sharedgem" SHIP_FEATURE_GEMINI_MODEL=env-wins bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s' "$out" | grep 'REVIEW-gemini' | grep -q -- "-m env-wins" && { echo "  ok   [-] the environment outranks MODEL_gemini"; PASS=$((PASS+1)); } || { echo "  FAIL MODEL_gemini overrode the environment"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep 'REVIEW-gemini' | grep -q -- "-m env-wins" && {
+  echo "  ok   [-] the environment outranks MODEL_gemini"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL MODEL_gemini overrode the environment"
+  FAIL=$((FAIL + 1))
+}
 
 # A CLI is free to print a banner around its version number. The gate fails CLOSED, so a fragile
 # parse does not leak — it bricks the seat on a version that WAS audited, and the failure blames the
 # gate rather than the parse. Assert the number is picked out of the noise.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION='gemini-cli version 0.26.0 (build deadbeef)' bash "$CLI" plan-review --reviewers antigravity 2>/dev/null); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION='gemini-cli version 0.26.0 (build deadbeef)' bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
+rc=$?
 check "the version gate reads a version printed with a banner (0)" "$rc" 0
 
 # --- the OAuth credential path ------------------------------------------------------------------
 # GEMINI_CLI_HOME also moves where gemini looks for its OAuth creds, so the seat copies the real ones
 # in. That copy is the only place this isolation handles a live secret, and until now the suite only
 # asserted the creds were ABSENT from the workspace — never that the copy itself behaves.
-GEMHOME="$WORK/gemhome"; mkdir -p "$GEMHOME/.gemini"
-GEMHOME_EMPTY="$WORK/gemhome-empty"; mkdir -p "$GEMHOME_EMPTY"
-printf '{"fake":"oauth"}' > "$GEMHOME/.gemini/oauth_creds.json"
-printf '{"fake":"accounts"}' > "$GEMHOME/.gemini/google_accounts.json"
-chmod 644 "$GEMHOME/.gemini/oauth_creds.json"        # deliberately loose: the copy must tighten it
+GEMHOME="$WORK/gemhome"
+mkdir -p "$GEMHOME/.gemini"
+GEMHOME_EMPTY="$WORK/gemhome-empty"
+mkdir -p "$GEMHOME_EMPTY"
+printf '{"fake":"oauth"}' >"$GEMHOME/.gemini/oauth_creds.json"
+printf '{"fake":"accounts"}' >"$GEMHOME/.gemini/google_accounts.json"
+chmod 644 "$GEMHOME/.gemini/oauth_creds.json" # deliberately loose: the copy must tighten it
 
 # No environment auth selected -> the OAuth fallback runs.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "homecreds=yes" && { echo "  ok   [-] the OAuth creds are copied into the isolated home"; PASS=$((PASS+1)); } || { echo "  FAIL the OAuth creds were not copied into GEMINI_CLI_HOME"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "homecreds=yes" && {
+  echo "  ok   [-] the OAuth creds are copied into the isolated home"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the OAuth creds were not copied into GEMINI_CLI_HOME"
+  FAIL=$((FAIL + 1))
+}
 # 0600, not the source's 0644: the copy lands in a temp dir and must not widen the secret.
-printf '%s' "$iso" | grep -q -- "credmode=-rw-------" && { echo "  ok   [-] the copied creds are 0600 regardless of the source mode"; PASS=$((PASS+1)); } || { echo "  FAIL the copied OAuth creds did not end up 0600"; FAIL=$((FAIL+1)); }
-printf '%s' "$iso" | grep -q -- "gca=true" && { echo "  ok   [-] the OAuth fallback opts into GOOGLE_GENAI_USE_GCA"; PASS=$((PASS+1)); } || { echo "  FAIL the OAuth fallback did not set GOOGLE_GENAI_USE_GCA"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "credmode=-rw-------" && {
+  echo "  ok   [-] the copied creds are 0600 regardless of the source mode"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the copied OAuth creds did not end up 0600"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$iso" | grep -q -- "gca=true" && {
+  echo "  ok   [-] the OAuth fallback opts into GOOGLE_GENAI_USE_GCA"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the OAuth fallback did not set GOOGLE_GENAI_USE_GCA"
+  FAIL=$((FAIL + 1))
+}
 # Copied, never reachable from the workspace: the allowlisted read_file is scoped to the workspace,
 # so this is what stops a hostile plan from asking the reviewer to read the token back out.
-printf '%s' "$iso" | grep -q -- "credsafe=yes" && { echo "  ok   [-] the copied creds stay outside the workspace"; PASS=$((PASS+1)); } || { echo "  FAIL the copied OAuth creds were reachable from the workspace"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "credsafe=yes" && {
+  echo "  ok   [-] the copied creds stay outside the workspace"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the copied OAuth creds were reachable from the workspace"
+  FAIL=$((FAIL + 1))
+}
 # The USER scope must read the SAME locked file as the workspace scope, or it could re-enable a tool.
-printf '%s' "$iso" | grep -q -- "lockedsame=yes" && { echo "  ok   [-] the user scope reads the same locked settings as the workspace"; PASS=$((PASS+1)); } || { echo "  FAIL the user-scope settings differ from the workspace ones"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "lockedsame=yes" && {
+  echo "  ok   [-] the user scope reads the same locked settings as the workspace"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the user-scope settings differ from the workspace ones"
+  FAIL=$((FAIL + 1))
+}
 # COPY, not symlink: gemini's own token refresh writes this file, and a symlink would send that write
 # through to the user's real ~/.gemini.
-[ -s "$GEMHOME/.gemini/oauth_creds.json" ] && { echo "  ok   [-] the user's real creds are left intact"; PASS=$((PASS+1)); } || { echo "  FAIL the user's real OAuth creds were disturbed"; FAIL=$((FAIL+1)); }
+[ -s "$GEMHOME/.gemini/oauth_creds.json" ] && {
+  echo "  ok   [-] the user's real creds are left intact"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the user's real OAuth creds were disturbed"
+  FAIL=$((FAIL + 1))
+}
 
 # GEMINI_API_KEY selected -> no OAuth fallback. GCA outranks an API key inside gemini, so copying
 # stale creds here would break an otherwise valid key run.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" GEMINI_API_KEY=k bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "homecreds=no" && printf '%s' "$iso" | grep -q -- "gca=UNSET" \
-  && { echo "  ok   [-] GEMINI_API_KEY suppresses the OAuth fallback"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL GEMINI_API_KEY did not suppress the OAuth fallback"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "homecreds=no" && printf '%s' "$iso" | grep -q -- "gca=UNSET" &&
+  {
+    echo "  ok   [-] GEMINI_API_KEY suppresses the OAuth fallback"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL GEMINI_API_KEY did not suppress the OAuth fallback"
+    FAIL=$((FAIL + 1))
+  }
 
 # Vertex WITH credentials is selected auth, so the OAuth fallback stays out of the way.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_APPLICATION_CREDENTIALS="$GEMHOME/sa.json" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "homecreds=no" && printf '%s' "$iso" | grep -q -- "gca=UNSET" \
-  && { echo "  ok   [-] Vertex with credentials suppresses the OAuth fallback"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL Vertex with credentials did not suppress the OAuth fallback"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "homecreds=no" && printf '%s' "$iso" | grep -q -- "gca=UNSET" &&
+  {
+    echo "  ok   [-] Vertex with credentials suppresses the OAuth fallback"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL Vertex with credentials did not suppress the OAuth fallback"
+    FAIL=$((FAIL + 1))
+  }
 # The FLAG ALONE is not auth. It is a common leftover in a shell profile, and counting it suppressed
 # the fallback and left the run with no credentials at all — the same failure as GOOGLE_API_KEY,
 # through a different door.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" GOOGLE_GENAI_USE_VERTEXAI=true CLOUDSDK_CONFIG="$GEMHOME_EMPTY" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "homecreds=yes" && printf '%s' "$iso" | grep -q -- "gca=true" \
-  && { echo "  ok   [-] a bare Vertex flag with no credentials still falls back to OAuth"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL a credential-less Vertex flag suppressed the OAuth fallback"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "homecreds=yes" && printf '%s' "$iso" | grep -q -- "gca=true" &&
+  {
+    echo "  ok   [-] a bare Vertex flag with no credentials still falls back to OAuth"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL a credential-less Vertex flag suppressed the OAuth fallback"
+    FAIL=$((FAIL + 1))
+  }
 
 # GOOGLE_API_KEY ALONE selects no auth method in gemini-cli v0.26.0. Treating it as one used to
 # suppress the fallback and leave the run with no credentials at all — an opaque auth failure for
 # anyone who had that variable exported for some other Google tool.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" GOOGLE_API_KEY=k bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "homecreds=yes" && printf '%s' "$iso" | grep -q -- "gca=true" \
-  && { echo "  ok   [-] GOOGLE_API_KEY alone does not count as selected auth"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL GOOGLE_API_KEY alone suppressed the OAuth fallback"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "homecreds=yes" && printf '%s' "$iso" | grep -q -- "gca=true" &&
+  {
+    echo "  ok   [-] GOOGLE_API_KEY alone does not count as selected auth"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL GOOGLE_API_KEY alone suppressed the OAuth fallback"
+    FAIL=$((FAIL + 1))
+  }
 
 # No creds to copy at all -> the seat still runs (auth simply rides whatever the environment has).
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME_EMPTY" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME_EMPTY" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
+rc=$?
 check "the seat runs when there are no OAuth creds to copy (0)" "$rc" 0
-printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && { echo "  ok   [-] no creds copied means no GCA opt-in"; PASS=$((PASS+1)); } || { echo "  FAIL GCA was opted into with no creds copied"; FAIL=$((FAIL+1)); }
+printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && {
+  echo "  ok   [-] no creds copied means no GCA opt-in"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL GCA was opted into with no creds copied"
+  FAIL=$((FAIL + 1))
+}
 
 # --- the plan actually reaches the reviewer -----------------------------------------------------
 # -p carries the PROMPT and the plan goes on stdin. Every other assertion here reads argv, so a CLI
@@ -1560,47 +2609,102 @@ printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && { echo "  o
 # reviewer's whole purpose is the one thing nothing checked.
 out=$(printf 'MAGICPLANTOKEN in the plan body\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "stdinmagic=yes" && { echo "  ok   [-] the plan body reaches gemini on stdin"; PASS=$((PASS+1)); } || { echo "  FAIL the plan body never reached gemini"; FAIL=$((FAIL+1)); }
-printf '%s' "$iso" | grep -q -- "stdinbytes=0" && { echo "  FAIL gemini was handed an empty plan"; FAIL=$((FAIL+1)); } || { echo "  ok   [-] gemini is not handed an empty plan"; PASS=$((PASS+1)); }
+printf '%s' "$iso" | grep -q -- "stdinmagic=yes" && {
+  echo "  ok   [-] the plan body reaches gemini on stdin"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the plan body never reached gemini"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$iso" | grep -q -- "stdinbytes=0" && {
+  echo "  FAIL gemini was handed an empty plan"
+  FAIL=$((FAIL + 1))
+} || {
+  echo "  ok   [-] gemini is not handed an empty plan"
+  PASS=$((PASS + 1))
+}
 
 # --- an INHERITED GOOGLE_GENAI_USE_GCA must not reach the child ---------------------------------
 # gemini gives GCA priority over both an API key and Vertex, and the seat deliberately does not copy
 # credentials when env auth is selected. So an exported GCA wins the auth race and then has nothing
 # to authenticate with: a valid API key, refused, for a reason nothing in the output names.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" GOOGLE_GENAI_USE_GCA=true GEMINI_API_KEY=k bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && { echo "  ok   [-] an inherited GCA is dropped when an API key is selected"; PASS=$((PASS+1)); } || { echo "  FAIL an inherited GOOGLE_GENAI_USE_GCA reached the child over an API key"; FAIL=$((FAIL+1)); }
+printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && {
+  echo "  ok   [-] an inherited GCA is dropped when an API key is selected"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL an inherited GOOGLE_GENAI_USE_GCA reached the child over an API key"
+  FAIL=$((FAIL + 1))
+}
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" GOOGLE_GENAI_USE_GCA=true GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_APPLICATION_CREDENTIALS="$GEMHOME/sa.json" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && { echo "  ok   [-] an inherited GCA is dropped when Vertex is selected"; PASS=$((PASS+1)); } || { echo "  FAIL an inherited GOOGLE_GENAI_USE_GCA reached the child over Vertex"; FAIL=$((FAIL+1)); }
+printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && {
+  echo "  ok   [-] an inherited GCA is dropped when Vertex is selected"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL an inherited GOOGLE_GENAI_USE_GCA reached the child over Vertex"
+  FAIL=$((FAIL + 1))
+}
 # Dropping the inherited one must not break the deliberate opt-in: env applies -u before NAME=value.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" GOOGLE_GENAI_USE_GCA=true bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=true" && { echo "  ok   [-] the seat's own GCA opt-in still survives the unset"; PASS=$((PASS+1)); } || { echo "  FAIL unsetting the inherited GCA also killed the opt-in"; FAIL=$((FAIL+1)); }
+printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=true" && {
+  echo "  ok   [-] the seat's own GCA opt-in still survives the unset"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL unsetting the inherited GCA also killed the opt-in"
+  FAIL=$((FAIL + 1))
+}
 # No creds to copy and an inherited GCA: the opt-in must NOT happen just because the variable existed.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME_EMPTY" GOOGLE_GENAI_USE_GCA=true bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && { echo "  ok   [-] an inherited GCA does not opt in by itself"; PASS=$((PASS+1)); } || { echo "  FAIL an inherited GCA survived with no creds copied"; FAIL=$((FAIL+1)); }
+printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "gca=UNSET" && {
+  echo "  ok   [-] an inherited GCA does not opt in by itself"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL an inherited GCA survived with no creds copied"
+  FAIL=$((FAIL + 1))
+}
 
 # --- a base-URL override on the ENVIRONMENT, not just in a .env file ----------------------------
 # The planted empty .gemini/.env stops the ancestor .env walk, which closes the file half of this.
 # An exported CODE_ASSIST_ENDPOINT redirects auth and bearer tokens just as well and was untouched.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" CODE_ASSIST_ENDPOINT=https://attacker.example bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "cae=UNSET" && { echo "  ok   [-] an inherited CODE_ASSIST_ENDPOINT is stripped for the run"; PASS=$((PASS+1)); } || { echo "  FAIL an inherited base-URL override reached gemini"; FAIL=$((FAIL+1)); }
+printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "cae=UNSET" && {
+  echo "  ok   [-] an inherited CODE_ASSIST_ENDPOINT is stripped for the run"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL an inherited base-URL override reached gemini"
+  FAIL=$((FAIL + 1))
+}
 # The sibling overrides are named in the same `-u` list and must be covered by the same reasoning:
 # one asserted variable and two unasserted ones is a list nobody notices going stale.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" GEMINI_BASE_URL=https://attacker.example GOOGLE_GEMINI_BASE_URL=https://attacker.example bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
 iso=$(printf '%s\n' "$out" | grep 'GEMINI-ISO')
-printf '%s' "$iso" | grep -q -- "gburl=UNSET" && printf '%s' "$iso" | grep -q -- "ggburl=UNSET" \
-  && { echo "  ok   [-] the other inherited base-URL overrides are stripped too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL an inherited GEMINI_BASE_URL/GOOGLE_GEMINI_BASE_URL reached gemini"; FAIL=$((FAIL+1)); }
+printf '%s' "$iso" | grep -q -- "gburl=UNSET" && printf '%s' "$iso" | grep -q -- "ggburl=UNSET" &&
+  {
+    echo "  ok   [-] the other inherited base-URL overrides are stripped too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL an inherited GEMINI_BASE_URL/GOOGLE_GEMINI_BASE_URL reached gemini"
+    FAIL=$((FAIL + 1))
+  }
 
 # --- the creds are not one `../` hop from the workspace -----------------------------------------
 # gemini confines read_file to the workspace, and that is the control this relies on. It is also
 # someone else's invariant: assert the layout does not hand the creds over the moment it slips.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$GEMHOME" bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
-printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "credwalk=clean" && { echo "  ok   [-] the copied creds are not adjacent to the reviewer's workspace"; PASS=$((PASS+1)); } || { echo "  FAIL the OAuth creds sit in the workspace tree, its parent, or a sibling"; FAIL=$((FAIL+1)); }
+printf '%s\n' "$out" | grep 'GEMINI-ISO' | grep -q -- "credwalk=clean" && {
+  echo "  ok   [-] the copied creds are not adjacent to the reviewer's workspace"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL the OAuth creds sit in the workspace tree, its parent, or a sibling"
+  FAIL=$((FAIL + 1))
+}
 
 # --- the version probe must read stderr too -----------------------------------------------------
 # The gate fails CLOSED, so a probe that misses the number does not leak — it refuses an audited
 # binary and blames the gate.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION_STDERR=1 bash "$CLI" plan-review --reviewers antigravity 2>/dev/null); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_GEMINI_VERSION_STDERR=1 bash "$CLI" plan-review --reviewers antigravity 2>/dev/null)
+rc=$?
 check "the version gate reads a version printed on stderr (0)" "$rc" 0
 
 # antigravity in the panel but the gemini CLI missing → hard quorum failure (3), never a silent pass.
@@ -1616,107 +2720,183 @@ for t in bash env mkdir cp mktemp rm cat sed tail tr pgrep timeout grep; do
 done
 # SHIP_FEATURE_CONFIG=/dev/null is passed explicitly: env -i clears the exported one, and without it
 # the subshell would load the user's real ~/.config/ship-feature/config and become non-deterministic.
-( printf 'plan\n' | env -i PATH="$WORK/pbin-nogemini" HOME="$HOME" SHIP_FEATURE_CONFIG=/dev/null bash "$CLI" plan-review --reviewers codex,antigravity >/dev/null 2>&1 ); check "plan-review fails the quorum when the gemini CLI is missing (3)" $? 3
+(printf 'plan\n' | env -i PATH="$WORK/pbin-nogemini" HOME="$HOME" SHIP_FEATURE_CONFIG=/dev/null bash "$CLI" plan-review --reviewers codex,antigravity >/dev/null 2>&1)
+check "plan-review fails the quorum when the gemini CLI is missing (3)" $? 3
 
 # default panel comes from SHIP_FEATURE_REVIEWERS when --reviewers is omitted
-out=$(printf 'a plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS=claude,cursor bash "$CLI" plan-review 2>/dev/null); rc=$?
+out=$(printf 'a plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS=claude,cursor bash "$CLI" plan-review 2>/dev/null)
+rc=$?
 check "plan-review uses SHIP_FEATURE_REVIEWERS by default" "$rc" 0
-printf '%s' "$out" | grep -q "REVIEW-claude" && printf '%s' "$out" | grep -q "REVIEW-cursor" \
-  && { echo "  ok   [-] plan-review ran the configured default panel"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL plan-review did not run the configured panel"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q "REVIEW-claude" && printf '%s' "$out" | grep -q "REVIEW-cursor" &&
+  {
+    echo "  ok   [-] plan-review ran the configured default panel"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL plan-review did not run the configured panel"
+    FAIL=$((FAIL + 1))
+  }
 
 # SHIP_FEATURE_PLAN_REVIEWERS overrides the shared quorum for plan-review (a smaller panel
 # than the PR cross-review). When both are set, the plan-specific one wins.
-out=$(printf 'a plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS=claude,codex,cursor,glm SHIP_FEATURE_PLAN_REVIEWERS=claude,codex bash "$CLI" plan-review 2>/dev/null); rc=$?
+out=$(printf 'a plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS=claude,codex,cursor,glm SHIP_FEATURE_PLAN_REVIEWERS=claude,codex bash "$CLI" plan-review 2>/dev/null)
+rc=$?
 check "plan-review prefers SHIP_FEATURE_PLAN_REVIEWERS" "$rc" 0
 if printf '%s' "$out" | grep -q "REVIEW-claude" && printf '%s' "$out" | grep -q "REVIEW-codex" && ! printf '%s' "$out" | grep -q "REVIEW-cursor"; then
-  echo "  ok   [-] the plan-specific panel wins over the quorum"; PASS=$((PASS+1))
-else echo "  FAIL plan-review did not prefer SHIP_FEATURE_PLAN_REVIEWERS"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] the plan-specific panel wins over the quorum"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL plan-review did not prefer SHIP_FEATURE_PLAN_REVIEWERS"
+  FAIL=$((FAIL + 1))
+fi
 
 # a reviewer that returns an EMPTY review → not clean (exit 3)
-printf '#!/usr/bin/env bash\nexit 0\n' > "$PBIN/codex"; chmod +x "$PBIN/codex"
-( printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex,glm >/dev/null 2>&1 ); check "plan-review empty review → not clean (3)" $? 3
-make_reviewer codex 0 codex   # restore
+printf '#!/usr/bin/env bash\nexit 0\n' >"$PBIN/codex"
+chmod +x "$PBIN/codex"
+(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex,glm >/dev/null 2>&1)
+check "plan-review empty review → not clean (3)" $? 3
+make_reviewer codex 0 codex # restore
 
 # a NON-ZERO reviewer exit → not clean (exit 3)
 make_reviewer codex 1 codex
-( printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 ); check "plan-review non-zero reviewer → not clean (3)" $? 3
-make_reviewer codex 0 codex   # restore
+(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1)
+check "plan-review non-zero reviewer → not clean (3)" $? 3
+make_reviewer codex 0 codex # restore
 
 # a supported reviewer from the panel whose CLI is missing → fail (3): the panel is the
 # quorum, so it never quietly passes on a thinned set.
-( printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex,doesnotexist >/dev/null 2>&1 ); check "plan-review missing panel reviewer → fail (3)" $? 3
+(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex,doesnotexist >/dev/null 2>&1)
+check "plan-review missing panel reviewer → fail (3)" $? 3
 
 # bare opencode is RELAY-ONLY: skipped with a warning, the rest of the panel still runs (0). Bare
 # grok is NOT (since 2026-09) — assert it RAN, because codex alone would keep the exit at 0.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers opencode,grok,codex 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers opencode,grok,codex 2>&1)
+rc=$?
 check "plan-review skips relay-only agents, runs the rest" "$rc" 0
-printf '%s' "$out" | grep -qi "opencode is relay-only" && { echo "  ok   [-] plan-review warns that opencode is relay-only"; PASS=$((PASS+1)); } || { echo "  FAIL plan-review did not warn about relay-only agents"; FAIL=$((FAIL+1)); }
-printf '%s' "$out" | grep -q 'REVIEW-grok' && { echo "  ok   [-] plan-review runs grok in the same panel"; PASS=$((PASS+1)); } || { echo "  FAIL grok was skipped alongside opencode"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -qi "opencode is relay-only" && {
+  echo "  ok   [-] plan-review warns that opencode is relay-only"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL plan-review did not warn about relay-only agents"
+  FAIL=$((FAIL + 1))
+}
+printf '%s' "$out" | grep -q 'REVIEW-grok' && {
+  echo "  ok   [-] plan-review runs grok in the same panel"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL grok was skipped alongside opencode"
+  FAIL=$((FAIL + 1))
+}
 
 # a panel of ONLY relay-only agents → nobody supported ran → clear error (1)
-( printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers opencode >/dev/null 2>&1 ); check "plan-review with only relay-only agents → error (1)" $? 1
+(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers opencode >/dev/null 2>&1)
+check "plan-review with only relay-only agents → error (1)" $? 1
 
 # no panel at all (unset + none passed) → usage error (1)
-( printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS='' bash "$CLI" plan-review >/dev/null 2>&1 ); check "plan-review with no panel → usage error (1)" $? 1
+(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS='' bash "$CLI" plan-review >/dev/null 2>&1)
+check "plan-review with no panel → usage error (1)" $? 1
 
 # an empty plan → error (1)
-( printf '' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 ); check "plan-review on an empty plan → error (1)" $? 1
+(printf '' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1)
+check "plan-review on an empty plan → error (1)" $? 1
 
 # a plan passed as a FILE argument is reviewed
-printf 'Plan from a file\n' > "$WORK/aplan.md"
-out=$(PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/aplan.md" --reviewers codex 2>/dev/null); rc=$?
+printf 'Plan from a file\n' >"$WORK/aplan.md"
+out=$(PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/aplan.md" --reviewers codex 2>/dev/null)
+rc=$?
 check "plan-review reads a plan from a file argument" "$rc" 0
-printf '%s' "$out" | grep -q "REVIEW-codex" && { echo "  ok   [-] plan-review reviewed the file's contents"; PASS=$((PASS+1)); } || { echo "  FAIL plan-review did not review the file"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q "REVIEW-codex" && {
+  echo "  ok   [-] plan-review reviewed the file's contents"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL plan-review did not review the file"
+  FAIL=$((FAIL + 1))
+}
 
 # a file given after `--` is still reviewed (not dropped)
-out=$(PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex -- "$WORK/aplan.md" 2>/dev/null); rc=$?
+out=$(PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex -- "$WORK/aplan.md" 2>/dev/null)
+rc=$?
 check "plan-review honors a file after --" "$rc" 0
-printf '%s' "$out" | grep -q "REVIEW-codex" && { echo "  ok   [-] plan-review reviewed the file passed after --"; PASS=$((PASS+1)); } || { echo "  FAIL plan-review dropped the file after --"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q "REVIEW-codex" && {
+  echo "  ok   [-] plan-review reviewed the file passed after --"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL plan-review dropped the file after --"
+  FAIL=$((FAIL + 1))
+}
 
 # an EMPTY stdin pipe must fall back to ./plan.md, not shadow it with "empty plan"
-PDIR="$WORK/plandir"; mkdir -p "$PDIR"; printf 'plan.md content\n' > "$PDIR/plan.md"
-out=$( cd "$PDIR" && printf '' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex 2>/dev/null ); rc=$?
+PDIR="$WORK/plandir"
+mkdir -p "$PDIR"
+printf 'plan.md content\n' >"$PDIR/plan.md"
+out=$(cd "$PDIR" && printf '' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex 2>/dev/null)
+rc=$?
 check "plan-review falls back to ./plan.md on empty stdin" "$rc" 0
-printf '%s' "$out" | grep -q "REVIEW-codex" && { echo "  ok   [-] plan-review reviewed ./plan.md"; PASS=$((PASS+1)); } || { echo "  FAIL plan-review did not fall back to ./plan.md"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q "REVIEW-codex" && {
+  echo "  ok   [-] plan-review reviewed ./plan.md"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL plan-review did not fall back to ./plan.md"
+  FAIL=$((FAIL + 1))
+}
 
 # a missing file argument fails clearly
-( PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/nope.md" --reviewers codex >/dev/null 2>&1 ); check "plan-review fails on a missing file" $? 1
+(PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/nope.md" --reviewers codex >/dev/null 2>&1)
+check "plan-review fails on a missing file" $? 1
 
 # explicit `-` reads stdin (even conceptually on a TTY) and does NOT fall back to plan.md
-out=$( cd "$PDIR" && printf 'STDIN PLAN VIA DASH\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review - --reviewers codex 2>/dev/null ); rc=$?
+out=$(cd "$PDIR" && printf 'STDIN PLAN VIA DASH\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review - --reviewers codex 2>/dev/null)
+rc=$?
 check "plan-review reads stdin on explicit -" "$rc" 0
-printf '%s' "$out" | grep -q "REVIEW-codex" && { echo "  ok   [-] plan-review reviewed the '-' stdin plan"; PASS=$((PASS+1)); } || { echo "  FAIL plan-review did not read '-' stdin"; FAIL=$((FAIL+1)); }
+printf '%s' "$out" | grep -q "REVIEW-codex" && {
+  echo "  ok   [-] plan-review reviewed the '-' stdin plan"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL plan-review did not read '-' stdin"
+  FAIL=$((FAIL + 1))
+}
 
 # an explicit but EMPTY plan file fails with a file-specific message (exit 1)
-: > "$WORK/blank.md"
-( PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/blank.md" --reviewers codex >/dev/null 2>&1 ); check "plan-review rejects an empty explicit file (1)" $? 1
+: >"$WORK/blank.md"
+(PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/blank.md" --reviewers codex >/dev/null 2>&1)
+check "plan-review rejects an empty explicit file (1)" $? 1
 
 # the --reviewers= form is rejected (two-token only), matching relay
-( printf 'p\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers=codex >/dev/null 2>&1 ); check "plan-review rejects the --reviewers= form" $? 1
+(printf 'p\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers=codex >/dev/null 2>&1)
+check "plan-review rejects the --reviewers= form" $? 1
 
 # a trailing --reviewers with no value → clean usage error, NOT a set -u crash
-( printf 'p\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers >/dev/null 2>&1 ); check "plan-review: bare --reviewers → usage error (1)" $? 1
+(printf 'p\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers >/dev/null 2>&1)
+check "plan-review: bare --reviewers → usage error (1)" $? 1
 # an explicitly EMPTY --reviewers "" is a usage error, not a silent fall-through to the env panel
-( printf 'p\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS=codex bash "$CLI" plan-review --reviewers '' >/dev/null 2>&1 ); check "plan-review: --reviewers '' → usage error, no env fallback (1)" $? 1
+(printf 'p\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS=codex bash "$CLI" plan-review --reviewers '' >/dev/null 2>&1)
+check "plan-review: --reviewers '' → usage error, no env fallback (1)" $? 1
 # --reviewers immediately followed by a flag is also a usage error (not a reviewer named --parallel)
-( printf 'p\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers --parallel >/dev/null 2>&1 ); check "plan-review: --reviewers <flag> → usage error (1)" $? 1
+(printf 'p\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers --parallel >/dev/null 2>&1)
+check "plan-review: --reviewers <flag> → usage error (1)" $? 1
 
 # a numerically-zero timeout is rejected (GNU `timeout 0` would DISABLE the timeout)
-( printf 'p\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_PLAN_TIMEOUT=00 bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 ); check "plan-review rejects a zero timeout (00)" $? 1
+(printf 'p\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_PLAN_TIMEOUT=00 bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1)
+check "plan-review rejects a zero timeout (00)" $? 1
 
 # the reviewer list is NOT glob-expanded: a wildcard in a dir with matching files stays
 # literal (→ unknown reviewer → fail 3), it does not become those filenames.
-GDIR="$WORK/globdir"; mkdir -p "$GDIR"; : > "$GDIR/aaa"; : > "$GDIR/abb"
-( cd "$GDIR" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers 'a*' >/dev/null 2>&1 ); check "plan-review does not glob-expand the reviewer list" $? 3
+GDIR="$WORK/globdir"
+mkdir -p "$GDIR"
+: >"$GDIR/aaa"
+: >"$GDIR/abb"
+(cd "$GDIR" && printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers 'a*' >/dev/null 2>&1)
+check "plan-review does not glob-expand the reviewer list" $? 3
 
 # `help` prints the header comment block, and it must name every command. It used to print a
 # hardcoded line range, so documenting a new flag in the header silently truncated help mid-
 # sentence and dropped the last command — invisible unless someone reads the output. There was no
 # test at all; this is it.
-help_out=$(bash "$CLI" help 2>&1); check "help exits 0" $? 0
+help_out=$(bash "$CLI" help 2>&1)
+check "help exits 0" $? 0
 for _c in preflight relay plan-review help; do
-  printf '%s' "$help_out" | grep -q "ship-feature $_c"; check "help documents the '$_c' command" $? 0
+  printf '%s' "$help_out" | grep -q "ship-feature $_c"
+  check "help documents the '$_c' command" $? 0
 done
 
 # The default really is CONCURRENT, not merely "produces the same output as parallel would".
@@ -1726,7 +2906,7 @@ done
 # NB: the `glm` reviewer runs the `opencode` binary — stub the tool names, not the seat names.
 OVERLAP_LOG="$WORK/overlap.log"
 for _slow in claude codex opencode; do
-  cat > "$PBIN/$_slow" <<SLOWSTUB
+  cat >"$PBIN/$_slow" <<SLOWSTUB
 #!/usr/bin/env bash
 echo "start" >> "$OVERLAP_LOG"
 sleep 1
@@ -1743,55 +2923,69 @@ done
 # loaded machine a genuinely parallel run can exceed any threshold you pick, so the test would
 # fail for being slow rather than for being sequential. This shape holds however slow the box
 # is; it only needs the dispatch loop to start three processes within one stub's sleep.
-overlap_run() {   # $1 = extra args; echoes the run's stdout, leaves the log in $OVERLAP_LOG
-  : > "$OVERLAP_LOG"
+overlap_run() { # $1 = extra args; echoes the run's stdout, leaves the log in $OVERLAP_LOG
+  : >"$OVERLAP_LOG"
   printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm $1 2>/dev/null
 }
 
 out=$(overlap_run "")
-n=$(printf '%s' "$out" | grep -c "REVIEW-"); check "plan-review (default) still ran all three slow reviewers" "$n" 3
-shape=$(tr '\n' ' ' < "$OVERLAP_LOG")
+n=$(printf '%s' "$out" | grep -c "REVIEW-")
+check "plan-review (default) still ran all three slow reviewers" "$n" 3
+shape=$(tr '\n' ' ' <"$OVERLAP_LOG")
 check "plan-review (default) overlaps the reviewers" "$shape" "start start start end end end "
 
 out=$(overlap_run "--sequential")
-n=$(printf '%s' "$out" | grep -c "REVIEW-"); check "plan-review --sequential ran all three slow reviewers" "$n" 3
-shape=$(tr '\n' ' ' < "$OVERLAP_LOG")
+n=$(printf '%s' "$out" | grep -c "REVIEW-")
+check "plan-review --sequential ran all three slow reviewers" "$n" 3
+shape=$(tr '\n' ' ' <"$OVERLAP_LOG")
 check "plan-review --sequential never overlaps them" "$shape" "start end start end start end "
 
 # "The last flag wins" is a documented promise, so it gets a test in both orders — using the
 # same overlap shape, which is what the promise is actually about.
 out=$(overlap_run "--sequential --parallel")
-shape=$(tr '\n' ' ' < "$OVERLAP_LOG")
+shape=$(tr '\n' ' ' <"$OVERLAP_LOG")
 check "plan-review --sequential --parallel ends up parallel" "$shape" "start start start end end end "
 
 out=$(overlap_run "--parallel --sequential")
-shape=$(tr '\n' ' ' < "$OVERLAP_LOG")
+shape=$(tr '\n' ' ' <"$OVERLAP_LOG")
 check "plan-review --parallel --sequential ends up sequential" "$shape" "start end start end start end "
 
-make_reviewer claude 0 claude; make_reviewer codex 0 codex; make_reviewer glm 0 opencode   # restore
+make_reviewer claude 0 claude
+make_reviewer codex 0 codex
+make_reviewer glm 0 opencode # restore
 
 # Parallel is the DEFAULT, so the flagless run must behave like the --parallel one: reviews are
 # buffered and emitted in panel order after the barrier, and the banner does not say "sequential".
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm 2>&1)
+rc=$?
 check "plan-review runs the panel in parallel with no flag (0)" "$rc" 0
-n=$(printf '%s' "$out" | grep -c "REVIEW-"); check "plan-review (default) ran all three reviewers" "$n" 3
-n=$(printf '%s' "$out" | grep -c -- "— sequential"); check "plan-review (default) does not announce sequential" "$n" 0
+n=$(printf '%s' "$out" | grep -c "REVIEW-")
+check "plan-review (default) ran all three reviewers" "$n" 3
+n=$(printf '%s' "$out" | grep -c -- "— sequential")
+check "plan-review (default) does not announce sequential" "$n" 0
 
 # --sequential is the opt-out: still clean, still every reviewer, and it says so on the banner.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm --sequential 2>&1); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm --sequential 2>&1)
+rc=$?
 check "plan-review --sequential clean run exits 0" "$rc" 0
-n=$(printf '%s' "$out" | grep -c "REVIEW-"); check "plan-review --sequential ran all three reviewers" "$n" 3
-n=$(printf '%s' "$out" | grep -c -- "— sequential"); check "plan-review --sequential announces the mode" "$n" 1
+n=$(printf '%s' "$out" | grep -c "REVIEW-")
+check "plan-review --sequential ran all three reviewers" "$n" 3
+n=$(printf '%s' "$out" | grep -c -- "— sequential")
+check "plan-review --sequential announces the mode" "$n" 1
 
 # --parallel: clean run exits 0 and prints every reviewer (order-independent)
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm --parallel 2>/dev/null); rc=$?
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm --parallel 2>/dev/null)
+rc=$?
 check "plan-review --parallel clean run exits 0" "$rc" 0
-n=$(printf '%s' "$out" | grep -c "REVIEW-"); check "plan-review --parallel ran all three reviewers" "$n" 3
+n=$(printf '%s' "$out" | grep -c "REVIEW-")
+check "plan-review --parallel ran all three reviewers" "$n" 3
 
 # --parallel is still fail-closed: one empty reviewer fails the whole round (3)
-printf '#!/usr/bin/env bash\nexit 0\n' > "$PBIN/codex"; chmod +x "$PBIN/codex"
-( printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm --parallel >/dev/null 2>&1 ); check "plan-review --parallel stays fail-closed (3)" $? 3
-make_reviewer codex 0 codex   # restore
+printf '#!/usr/bin/env bash\nexit 0\n' >"$PBIN/codex"
+chmod +x "$PBIN/codex"
+(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude,codex,glm --parallel >/dev/null 2>&1)
+check "plan-review --parallel stays fail-closed (3)" $? 3
+make_reviewer codex 0 codex # restore
 
 # The EXIT trap must actually delete STATUS_DIR. It expands "$STATUS_DIR" when it fires, which is
 # after cmd_plan_review has returned — so if that variable is ever made function-local again, the
@@ -1800,50 +2994,83 @@ make_reviewer codex 0 codex   # restore
 # stderr line, which is why it survived ~310 leaks a day until someone counted /tmp.
 # Give the CLI its own TMPDIR so this measures only what plan-review created, and keep the panel to
 # codex: glm forces TMPDIR=/tmp for its own isolated cwd, which would muddy the count.
-leakdir="$WORK/leak"; mkdir -p "$leakdir"
+leakdir="$WORK/leak"
+mkdir -p "$leakdir"
 leakerr="$WORK/leak.err"
-( printf 'plan\n' | PATH="$PBIN:$PATH" TMPDIR="$leakdir" bash "$CLI" plan-review --reviewers codex >/dev/null 2>"$leakerr" ); leakrc=$?
+(printf 'plan\n' | PATH="$PBIN:$PATH" TMPDIR="$leakdir" bash "$CLI" plan-review --reviewers codex >/dev/null 2>"$leakerr")
+leakrc=$?
 # Assert the run actually SUCCEEDED first. Without this the other two assertions pass vacuously:
 # a `die` before mktemp -d would leave nothing behind and print no unbound-variable line, so a
 # broken CLI would look like a clean one and the cleanup path would never be exercised at all.
 check "plan-review leak probe ran successfully" "$leakrc" 0
 # Numeric compare: `wc -l` can emit padded output, so a string test against "0" would false-fail.
 leftovers=$(find "$leakdir" -mindepth 1 | wc -l)
-[ "$leftovers" -eq 0 ] \
-  && { echo "  ok   [-] plan-review removes its temp dir on exit"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL plan-review leaked $leftovers entries under its TMPDIR: $(find "$leakdir" -mindepth 1 -maxdepth 1)"; FAIL=$((FAIL+1)); }
+[ "$leftovers" -eq 0 ] &&
+  {
+    echo "  ok   [-] plan-review removes its temp dir on exit"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL plan-review leaked $leftovers entries under its TMPDIR: $(find "$leakdir" -mindepth 1 -maxdepth 1)"
+    FAIL=$((FAIL + 1))
+  }
 # Secondary, and only that: a fix which merely silenced the message would still pass this one.
-grep -q 'unbound variable' "$leakerr" \
-  && { echo "  FAIL plan-review printed an unbound-variable error: $(grep 'unbound variable' "$leakerr")"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] plan-review exits without an unbound-variable error"; PASS=$((PASS+1)); }
+grep -q 'unbound variable' "$leakerr" &&
+  {
+    echo "  FAIL plan-review printed an unbound-variable error: $(grep 'unbound variable' "$leakerr")"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] plan-review exits without an unbound-variable error"
+    PASS=$((PASS + 1))
+  }
 
 # Interrupt teardown: ^C during --parallel must kill the reviewer's deep descendants
 # (subshell -> $() -> timeout -> agent), not leak them. A slow stub holds a `sleep`
 # grandchild; we record every descendant PID, SIGINT the CLI, then assert they're gone.
 # pgrep is required for kill_tree; skip cleanly where it's absent rather than false-fail.
 if command -v pgrep >/dev/null 2>&1; then
-  _descendants() { local p="$1" c; for c in $(pgrep -P "$p" 2>/dev/null); do echo "$c"; _descendants "$c"; done; }
-  printf 'a plan\n' > "$WORK/intplan.md"
-  printf '#!/usr/bin/env bash\nsleep 30\n' > "$PBIN/codex"; chmod +x "$PBIN/codex"   # a "slow agent"
+  _descendants() {
+    local p="$1" c
+    for c in $(pgrep -P "$p" 2>/dev/null); do
+      echo "$c"
+      _descendants "$c"
+    done
+  }
+  printf 'a plan\n' >"$WORK/intplan.md"
+  printf '#!/usr/bin/env bash\nsleep 30\n' >"$PBIN/codex"
+  chmod +x "$PBIN/codex" # a "slow agent"
   PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/intplan.md" --reviewers codex --parallel >/dev/null 2>&1 &
   cli=$!
   # Wait (up to ~4s) for the sleep grandchild to materialize under the CLI.
   sleeppids=""
   for _i in $(seq 1 20); do
-    for k in $(_descendants "$cli"); do case "$(ps -o comm= -p "$k" 2>/dev/null)" in *sleep) sleeppids="$sleeppids $k";; esac; done
-    [ -n "$sleeppids" ] && break; sleep 0.2
+    for k in $(_descendants "$cli"); do case "$(ps -o comm= -p "$k" 2>/dev/null)" in *sleep) sleeppids="$sleeppids $k" ;; esac done
+    [ -n "$sleeppids" ] && break
+    sleep 0.2
   done
-  kill -INT "$cli" 2>/dev/null; wait "$cli" 2>/dev/null; sleep 0.5
+  kill -INT "$cli" 2>/dev/null
+  wait "$cli" 2>/dev/null
+  sleep 0.5
   if [ -z "$sleeppids" ]; then
-    echo "  FAIL interrupt test: reviewer subtree never materialized (inconclusive)"; FAIL=$((FAIL+1))
+    echo "  FAIL interrupt test: reviewer subtree never materialized (inconclusive)"
+    FAIL=$((FAIL + 1))
   else
-    alive=0; for p in $sleeppids; do kill -0 "$p" 2>/dev/null && alive=1; done
-    if [ "$alive" = 0 ]; then echo "  ok   [-] ^C during --parallel kills the reviewer's descendants"; PASS=$((PASS+1))
-    else echo "  FAIL interrupt left a reviewer descendant alive"; FAIL=$((FAIL+1)); for p in $sleeppids; do kill -9 "$p" 2>/dev/null; done; fi
+    alive=0
+    for p in $sleeppids; do kill -0 "$p" 2>/dev/null && alive=1; done
+    if [ "$alive" = 0 ]; then
+      echo "  ok   [-] ^C during --parallel kills the reviewer's descendants"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL interrupt left a reviewer descendant alive"
+      FAIL=$((FAIL + 1))
+      for p in $sleeppids; do kill -9 "$p" 2>/dev/null; done
+    fi
   fi
-  make_reviewer codex 0 codex   # restore
+  make_reviewer codex 0 codex # restore
 else
-  echo "  ok   [-] interrupt teardown test skipped (no pgrep)"; PASS=$((PASS+1))
+  echo "  ok   [-] interrupt teardown test skipped (no pgrep)"
+  PASS=$((PASS + 1))
 fi
 
 # --- git isolation: proven against a hostile environment ---------------------
@@ -1861,93 +3088,186 @@ fi
 # Everything runs in a subshell so a planted variable cannot leak back into the suite.
 
 # 0. Still in force after every fixture has run: nothing in the suite re-polluted the environment.
-sf_check_isolated \
-  && { echo "  ok   [-] the git isolation is still in force after the whole suite"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the git isolation was lost partway through the run"; FAIL=$((FAIL+1)); }
+sf_check_isolated &&
+  {
+    echo "  ok   [-] the git isolation is still in force after the whole suite"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the git isolation was lost partway through the run"
+    FAIL=$((FAIL + 1))
+  }
 
 # 0b. init.templateDir="" was in the first draft of sf_isolate_git and broke `>> .git/info/exclude`,
 #     which is how the worktree marker gets ignored. It was removed with only a comment as memory —
 #     this is the assertion that fires if someone "helps" the function again.
-( T="$WORK/tpl"; rm -rf "$T"; mkdir -p "$T"; cd "$T" || exit 1
+(
+  T="$WORK/tpl"
+  rm -rf "$T"
+  mkdir -p "$T"
+  cd "$T" || exit 1
   sf_isolate_git
-  git init -q . 2>/dev/null || exit 4          # tell "init itself broke" from "no info dir"
-  echo x >> .git/info/exclude 2>/dev/null || exit 3 ) >/dev/null 2>&1
+  git init -q . 2>/dev/null || exit 4 # tell "init itself broke" from "no info dir"
+  echo x >>.git/info/exclude 2>/dev/null || exit 3
+) >/dev/null 2>&1
 t0b=$?
 case "$t0b" in
-  0) echo "  ok   [-] git init still produces .git/info (no empty templateDir)"; PASS=$((PASS+1));;
-  3) echo "  FAIL .git/info missing — init.templateDir was probably reintroduced"; FAIL=$((FAIL+1));;
-  *) echo "  FAIL .git/info check could not run (git init failed, rc=$t0b)"; FAIL=$((FAIL+1));;
+  0)
+    echo "  ok   [-] git init still produces .git/info (no empty templateDir)"
+    PASS=$((PASS + 1))
+    ;;
+  3)
+    echo "  FAIL .git/info missing — init.templateDir was probably reintroduced"
+    FAIL=$((FAIL + 1))
+    ;;
+  *)
+    echo "  FAIL .git/info check could not run (git init failed, rc=$t0b)"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
 
 # 1. Signing off at the COMMIT level, against a genuinely planted ambient gpgsign.
 #    Asserted as exactly %G? = N, not "not G": a signature that fails verification reports E/B/R,
 #    which would slip past a denylist while still meaning isolation failed.
-( H="$WORK/h1"; mkdir -p "$H"; cd "$H" || exit 1
+(
+  H="$WORK/h1"
+  mkdir -p "$H"
+  cd "$H" || exit 1
   git init -q . 2>/dev/null
   export GIT_CONFIG_PARAMETERS="'commit.gpgsign=true'"
-  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || { echo PLANT_DEAD; exit 3; }
+  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   sf_isolate_git
-  git commit -q --allow-empty -m one 2>/dev/null || { echo COMMIT_DEAD; exit 4; }
-  git log -1 --format='%G?' 2>/dev/null | tail -1 ) > "$WORK/h1.out" 2>/dev/null
-h1=$?; h1v="$(tail -1 "$WORK/h1.out" 2>/dev/null)"
-[ "$h1" = 0 ] && [ "$h1v" = "N" ] \
-  && { echo "  ok   [-] a planted ambient commit.gpgsign is defeated (%G? = N)"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL git isolation: planted signing survived (rc=$h1 out='$h1v')"; FAIL=$((FAIL+1)); }
+  git commit -q --allow-empty -m one 2>/dev/null || {
+    echo COMMIT_DEAD
+    exit 4
+  }
+  git log -1 --format='%G?' 2>/dev/null | tail -1
+) >"$WORK/h1.out" 2>/dev/null
+h1=$?
+h1v="$(tail -1 "$WORK/h1.out" 2>/dev/null)"
+[ "$h1" = 0 ] && [ "$h1v" = "N" ] &&
+  {
+    echo "  ok   [-] a planted ambient commit.gpgsign is defeated (%G? = N)"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL git isolation: planted signing survived (rc=$h1 out='$h1v')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 2. GIT_CONFIG_PARAMETERS specifically: it OVERRIDES GIT_CONFIG_COUNT, so if the unset loop is
 #    deleted while the exports stay, the controlled values are silently ignored. The control
 #    proves the override is live before isolation runs.
-( cd "$WORK" || exit 1
+(
+  cd "$WORK" || exit 1
   export GIT_CONFIG_PARAMETERS="'commit.gpgsign=true'"
   export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
-  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || { echo PLANT_DEAD; exit 3; }
+  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   sf_isolate_git
-  [ -z "${GIT_CONFIG_PARAMETERS:-}" ] || { echo STILL_SET; exit 4; }
-  git config --get commit.gpgsign 2>/dev/null | tail -1 ) > "$WORK/h2.out" 2>/dev/null
-h2=$?; h2v="$(tail -1 "$WORK/h2.out" 2>/dev/null)"
-[ "$h2" = 0 ] && [ "$h2v" = "false" ] \
-  && { echo "  ok   [-] GIT_CONFIG_PARAMETERS beats GIT_CONFIG_COUNT, and is cleared first"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL git isolation: GIT_CONFIG_PARAMETERS override not neutralised (rc=$h2 out='$h2v')"; FAIL=$((FAIL+1)); }
+  [ -z "${GIT_CONFIG_PARAMETERS:-}" ] || {
+    echo STILL_SET
+    exit 4
+  }
+  git config --get commit.gpgsign 2>/dev/null | tail -1
+) >"$WORK/h2.out" 2>/dev/null
+h2=$?
+h2v="$(tail -1 "$WORK/h2.out" 2>/dev/null)"
+[ "$h2" = 0 ] && [ "$h2v" = "false" ] &&
+  {
+    echo "  ok   [-] GIT_CONFIG_PARAMETERS beats GIT_CONFIG_COUNT, and is cleared first"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL git isolation: GIT_CONFIG_PARAMETERS override not neutralised (rc=$h2 out='$h2v')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 3. A planted core.hooksPath must not reach fixture commits. Without this, deleting
 #    GIT_CONFIG_KEY_2 would go unnoticed — the same rot the tag.gpgsign check exists to prevent.
-( H="$WORK/h3"; HK="$WORK/h3hooks"; mkdir -p "$H" "$HK"; cd "$H" || exit 1
+(
+  H="$WORK/h3"
+  HK="$WORK/h3hooks"
+  mkdir -p "$H" "$HK"
+  cd "$H" || exit 1
   # The hook prints a unique marker, so the control proves the commit failed BECAUSE OF THE HOOK
   # rather than for any other reason — otherwise "the commit failed" is satisfied by a broken
   # fixture and the post-isolation success does all the work.
-  printf '#!/bin/sh\necho SF_HOOK_MARKER >&2\nexit 1\n' > "$HK/pre-commit"; chmod +x "$HK/pre-commit"
+  printf '#!/bin/sh\necho SF_HOOK_MARKER >&2\nexit 1\n' >"$HK/pre-commit"
+  chmod +x "$HK/pre-commit"
   git init -q . 2>/dev/null
   export GIT_CONFIG_PARAMETERS="'core.hooksPath=$HK'"
-  cerr=$(git commit --allow-empty -m blocked 2>&1); crc=$?
-  [ "$crc" != 0 ] || { echo PLANT_DEAD_COMMIT_SUCCEEDED; exit 3; }
-  case "$cerr" in *SF_HOOK_MARKER*) ;; *) echo "PLANT_DEAD_NOT_THE_HOOK"; exit 3;; esac
+  cerr=$(git commit --allow-empty -m blocked 2>&1)
+  crc=$?
+  [ "$crc" != 0 ] || {
+    echo PLANT_DEAD_COMMIT_SUCCEEDED
+    exit 3
+  }
+  case "$cerr" in *SF_HOOK_MARKER*) ;; *)
+    echo "PLANT_DEAD_NOT_THE_HOOK"
+    exit 3
+    ;;
+  esac
   sf_isolate_git
-  git commit -q --allow-empty -m allowed 2>/dev/null || { echo STILL_BLOCKED; exit 4; }
-  echo OK ) > "$WORK/h3.out" 2>/dev/null
+  git commit -q --allow-empty -m allowed 2>/dev/null || {
+    echo STILL_BLOCKED
+    exit 4
+  }
+  echo OK
+) >"$WORK/h3.out" 2>/dev/null
 h3=$?
-[ "$h3" = 0 ] \
-  && { echo "  ok   [-] a planted core.hooksPath cannot block a fixture commit"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL git isolation: hostile hooksPath (rc=$h3 out='$(tail -1 "$WORK/h3.out" 2>/dev/null)')"; FAIL=$((FAIL+1)); }
+[ "$h3" = 0 ] &&
+  {
+    echo "  ok   [-] a planted core.hooksPath cannot block a fixture commit"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL git isolation: hostile hooksPath (rc=$h3 out='$(tail -1 "$WORK/h3.out" 2>/dev/null)')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 3b. The original bug is a developer with commit.gpgsign=true in ~/.gitconfig — no hook, no
 #     GIT_CONFIG_PARAMETERS. Test 1 plants the strictly stronger override, so this plants the plain
 #     global one via GIT_CONFIG_GLOBAL, which is how git reads a user config without touching theirs.
-( H="$WORK/h3b"; G="$WORK/h3b.gitconfig"; mkdir -p "$H"; cd "$H" || exit 1
+(
+  H="$WORK/h3b"
+  G="$WORK/h3b.gitconfig"
+  mkdir -p "$H"
+  cd "$H" || exit 1
   # A fresh shell first: the suite already exported GIT_CONFIG_COUNT, and env config OUTRANKS the
   # global file, so the plant would be defeated before isolation ever ran and the case would report
   # PLANT_DEAD. Clearing git's own env list is what "a developer's plain shell" actually looks like.
   while IFS= read -r _v; do [ -n "$_v" ] && unset "$_v"; done < <(git rev-parse --local-env-vars)
-  printf '[commit]\n\tgpgsign = true\n' > "$G"
+  printf '[commit]\n\tgpgsign = true\n' >"$G"
   export GIT_CONFIG_GLOBAL="$G"
   git init -q . 2>/dev/null
-  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || { echo PLANT_DEAD; exit 3; }
+  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   sf_isolate_git
-  git commit -q --allow-empty -m global 2>/dev/null || { echo COMMIT_DEAD; exit 4; }
-  git log -1 --format='%G?' 2>/dev/null | tail -1 ) > "$WORK/h3b.out" 2>/dev/null
-h3b=$?; h3bv="$(tail -1 "$WORK/h3b.out" 2>/dev/null)"
-[ "$h3b" = 0 ] && [ "$h3bv" = "N" ] \
-  && { echo "  ok   [-] a plain global commit.gpgsign is defeated too (%G? = N)"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL git isolation: global-config signing survived (rc=$h3b out='$h3bv')"; FAIL=$((FAIL+1)); }
+  git commit -q --allow-empty -m global 2>/dev/null || {
+    echo COMMIT_DEAD
+    exit 4
+  }
+  git log -1 --format='%G?' 2>/dev/null | tail -1
+) >"$WORK/h3b.out" 2>/dev/null
+h3b=$?
+h3bv="$(tail -1 "$WORK/h3b.out" 2>/dev/null)"
+[ "$h3b" = 0 ] && [ "$h3bv" = "N" ] &&
+  {
+    echo "  ok   [-] a plain global commit.gpgsign is defeated too (%G? = N)"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL git isolation: global-config signing survived (rc=$h3b out='$h3bv')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 3c. core.excludesFile is the sharpest of the remaining ambient settings and had no plant: a global
 #     ignore rule for a pattern a fixture uses makes that file invisible to `git add`, and the test
@@ -1955,61 +3275,112 @@ h3b=$?; h3bv="$(tail -1 "$WORK/h3b.out" 2>/dev/null)"
 #     binary-scan fixture commits a .dat file.) The other three neutralised keys —
 #     core.attributesFile, core.fsmonitor, color.ui — are asserted through this same function being
 #     in force, not individually; excludesFile is the one with a demonstrated failure.
-( H="$WORK/h3c"; IG="$WORK/h3c.ignore"; mkdir -p "$H"; cd "$H" || exit 1
+(
+  H="$WORK/h3c"
+  IG="$WORK/h3c.ignore"
+  mkdir -p "$H"
+  cd "$H" || exit 1
   while IFS= read -r _v; do [ -n "$_v" ] && unset "$_v"; done < <(git rev-parse --local-env-vars)
-  printf '*.dat\n' > "$IG"
+  printf '*.dat\n' >"$IG"
   export GIT_CONFIG_GLOBAL="$IG.cfg"
-  printf '[core]\n\texcludesFile = %s\n' "$IG" > "$IG.cfg"
+  printf '[core]\n\texcludesFile = %s\n' "$IG" >"$IG.cfg"
   git init -q . 2>/dev/null
-  : > payload.dat
+  : >payload.dat
   git add payload.dat 2>/dev/null
-  git diff --cached --name-only 2>/dev/null | grep -q payload.dat && { echo PLANT_DEAD; exit 3; }
+  git diff --cached --name-only 2>/dev/null | grep -q payload.dat && {
+    echo PLANT_DEAD
+    exit 3
+  }
   sf_isolate_git
   git add payload.dat 2>/dev/null
-  git diff --cached --name-only 2>/dev/null | grep -q payload.dat || { echo STILL_IGNORED; exit 4; }
-  echo OK ) > "$WORK/h3c.out" 2>/dev/null
+  git diff --cached --name-only 2>/dev/null | grep -q payload.dat || {
+    echo STILL_IGNORED
+    exit 4
+  }
+  echo OK
+) >"$WORK/h3c.out" 2>/dev/null
 h3c=$?
-[ "$h3c" = 0 ] \
-  && { echo "  ok   [-] a planted core.excludesFile cannot hide a fixture's file"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL git isolation: excludesFile (rc=$h3c out='$(tail -1 "$WORK/h3c.out" 2>/dev/null)')"; FAIL=$((FAIL+1)); }
+[ "$h3c" = 0 ] &&
+  {
+    echo "  ok   [-] a planted core.excludesFile cannot hide a fixture's file"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL git isolation: excludesFile (rc=$h3c out='$(tail -1 "$WORK/h3c.out" 2>/dev/null)')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 3d. The three remaining neutralised keys have no commit-level symptom in this suite, so they get
 #     config assertions — the same weight as tag.gpgsign. Without these you could no-op KEY_4..6,
 #     keep seven keys so the startup guard still passes, and stay green. color.ui is the one that
 #     would bite first: color.ui=always puts ANSI into the `%G?` read above.
-( cd "$WORK" || exit 1; sf_isolate_git
+(
+  cd "$WORK" || exit 1
+  sf_isolate_git
   printf '%s|%s|%s' "$(git config --get core.attributesFile 2>/dev/null)" \
-                    "$(git config --get core.fsmonitor 2>/dev/null)" \
-                    "$(git config --get color.ui 2>/dev/null)" ) > "$WORK/h3d.out" 2>/dev/null
+    "$(git config --get core.fsmonitor 2>/dev/null)" \
+    "$(git config --get color.ui 2>/dev/null)"
+) >"$WORK/h3d.out" 2>/dev/null
 h3dv="$(tail -1 "$WORK/h3d.out" 2>/dev/null)"
-[ "$h3dv" = "/dev/null|false|false" ] \
-  && { echo "  ok   [-] attributesFile, fsmonitor and color.ui are neutralised too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL git isolation: attributesFile/fsmonitor/color.ui (got '"'"'$h3dv'"'"')"; FAIL=$((FAIL+1)); }
+[ "$h3dv" = "/dev/null|false|false" ] &&
+  {
+    echo "  ok   [-] attributesFile, fsmonitor and color.ui are neutralised too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL git isolation: attributesFile/fsmonitor/color.ui (got '"'"'$h3dv'"'"')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 4. tag.gpgsign has no commit-level effect in this suite, which is exactly why it would rot
 #    unnoticed. A config assertion is the right weight for it.
-( cd "$WORK" || exit 1; sf_isolate_git; git config --get tag.gpgsign 2>/dev/null | tail -1 ) > "$WORK/h4.out" 2>/dev/null
-[ "$(tail -1 "$WORK/h4.out" 2>/dev/null)" = "false" ] \
-  && { echo "  ok   [-] tag.gpgsign is forced off too"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL tag.gpgsign not forced off"; FAIL=$((FAIL+1)); }
+(
+  cd "$WORK" || exit 1
+  sf_isolate_git
+  git config --get tag.gpgsign 2>/dev/null | tail -1
+) >"$WORK/h4.out" 2>/dev/null
+[ "$(tail -1 "$WORK/h4.out" 2>/dev/null)" = "false" ] &&
+  {
+    echo "  ok   [-] tag.gpgsign is forced off too"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL tag.gpgsign not forced off"
+    FAIL=$((FAIL + 1))
+  }
 
 # 5. A planted GIT_DIR must not capture a fixture's commits — the failure that corrupted a real
 #    repository. The control proves the decoy really would have taken it.
-( DECOY="$WORK/decoy"; FIX="$WORK/fix5"; rm -rf "$DECOY" "$FIX"; mkdir -p "$DECOY" "$FIX"
-  git init -q "$DECOY" 2>/dev/null; git init -q "$FIX" 2>/dev/null
+(
+  DECOY="$WORK/decoy"
+  FIX="$WORK/fix5"
+  rm -rf "$DECOY" "$FIX"
+  mkdir -p "$DECOY" "$FIX"
+  git init -q "$DECOY" 2>/dev/null
+  git init -q "$FIX" 2>/dev/null
   before=$(git -C "$DECOY" rev-list --all --count 2>/dev/null || echo 0)
-  ( cd "$FIX" && GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" git commit -q --allow-empty -m captured 2>/dev/null )
+  (cd "$FIX" && GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" git commit -q --allow-empty -m captured 2>/dev/null)
   mid=$(git -C "$DECOY" rev-list --all --count 2>/dev/null || echo 0)
-  [ "$mid" -gt "$before" ] || { echo PLANT_DEAD; exit 3; }
-  ( cd "$FIX" && export GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" \
-    && sf_isolate_git && git commit -q --allow-empty -m isolated 2>/dev/null )
+  [ "$mid" -gt "$before" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
+  (cd "$FIX" && export GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" &&
+    sf_isolate_git && git commit -q --allow-empty -m isolated 2>/dev/null)
   after=$(git -C "$DECOY" rev-list --all --count 2>/dev/null || echo 0)
   fixn=$(git -C "$FIX" rev-list --all --count 2>/dev/null || echo 0)
-  [ "$after" = "$mid" ] && [ "$fixn" -ge 1 ] && echo OK || echo "LEAKED:$mid->$after fixture=$fixn" ) > "$WORK/h5.out" 2>/dev/null
+  [ "$after" = "$mid" ] && [ "$fixn" -ge 1 ] && echo OK || echo "LEAKED:$mid->$after fixture=$fixn"
+) >"$WORK/h5.out" 2>/dev/null
 h5=$?
-[ "$h5" = 0 ] && [ "$(tail -1 "$WORK/h5.out" 2>/dev/null)" = "OK" ] \
-  && { echo "  ok   [-] a planted GIT_DIR cannot capture a fixture's commit"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL git isolation: GIT_DIR capture (rc=$h5 out='$(tail -1 "$WORK/h5.out" 2>/dev/null)')"; FAIL=$((FAIL+1)); }
+[ "$h5" = 0 ] && [ "$(tail -1 "$WORK/h5.out" 2>/dev/null)" = "OK" ] &&
+  {
+    echo "  ok   [-] a planted GIT_DIR cannot capture a fixture's commit"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL git isolation: GIT_DIR capture (rc=$h5 out='$(tail -1 "$WORK/h5.out" 2>/dev/null)')"
+    FAIL=$((FAIL + 1))
+  }
 
 # --- the adapters must state the same rules as WORKFLOW.md ---------------------------------------
 # WORKFLOW.md is NOT the propagation. Each adapter restates the rules in its own words for its own
@@ -2039,14 +3410,20 @@ SF_ADAPTERS="adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md ad
 # macOS only, while GNU grep on Linux passes it. That is the worst shape a test failure can take:
 # it names the wrong cause, and it is invisible on the machine most of this gets written on. To span
 # a longer distance, concatenate intervals — `.{0,200}.{0,200}` — rather than raising one.
-sf_clause() {  # sf_clause <label> <extended-regex>
+sf_clause() { # sf_clause <label> <extended-regex>
   local label="$1" re="$2" f miss=""
   for f in $SF_ADAPTERS; do
-    tr '\n' ' ' < "$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" || miss="$miss $f"
+    tr '\n' ' ' <"$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" || miss="$miss $f"
   done
-  [ -z "$miss" ] \
-    && { echo "  ok   [-] every adapter states: $label"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL adapter consistency: '$label' missing from$miss"; FAIL=$((FAIL+1)); }
+  [ -z "$miss" ] &&
+    {
+      echo "  ok   [-] every adapter states: $label"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL adapter consistency: '$label' missing from$miss"
+      FAIL=$((FAIL + 1))
+    }
 }
 # THE CAP IS ENFORCED, not merely documented. This suite is written and run on Linux, where GNU grep
 # accepts any interval, so a clause with `.{0,300}` looks perfectly healthy here and fails only on
@@ -2066,15 +3443,21 @@ sf_clause() {  # sf_clause <label> <extended-regex>
 # number that is not a regex at all. Left alone: telling where a comment starts in shell needs a
 # parser, and a rare false alarm that names the real rule is a better failure than a parser that
 # gets quoting wrong.)
-sf_intervals_over_cap() {  # <file> -> prints every bound above the cap, empty when the file is fine
-  grep -vE '^[[:space:]]*#' "$1" \
-    | grep -oE '\{[0-9,]+\}' | tr -d '{}' | tr ',' '\n' \
-    | grep -E '^[0-9]+$' | awk '$1 > 255' | sort -u | tr '\n' ' '
+sf_intervals_over_cap() { # <file> -> prints every bound above the cap, empty when the file is fine
+  grep -vE '^[[:space:]]*#' "$1" |
+    grep -oE '\{[0-9,]+\}' | tr -d '{}' | tr ',' '\n' |
+    grep -E '^[0-9]+$' | awk '$1 > 255' | sort -u | tr '\n' ' '
 }
 sf_over_cap=$(sf_intervals_over_cap "$HERE/test-ship-feature.sh")
-[ -z "$sf_over_cap" ] \
-  && { echo "  ok   [-] every regex interval stays within BSD grep's 255 cap"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL regex interval(s) over BSD grep's 255 cap (fails on macOS only): $sf_over_cap"; FAIL=$((FAIL+1)); }
+[ -z "$sf_over_cap" ] &&
+  {
+    echo "  ok   [-] every regex interval stays within BSD grep's 255 cap"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL regex interval(s) over BSD grep's 255 cap (fails on macOS only): $sf_over_cap"
+    FAIL=$((FAIL + 1))
+  }
 
 # THE GUARD'S OWN NEGATIVE PATH. The check above only says this file is currently clean, which it
 # would also say if the guard matched nothing at all — and this suite has already shipped exactly
@@ -2083,46 +3466,56 @@ sf_over_cap=$(sf_intervals_over_cap "$HERE/test-ship-feature.sh")
 #
 # The interval forms are BUILT from parts rather than written literally, because a literal one on a
 # non-comment line of this file would be flagged by the very check these cases exercise.
-sf_lb='{'; sf_rb='}'
-sf_capdir="$WORK/capguard"; mkdir -p "$sf_capdir"
-sf_cap_case() {  # <spec> <flag|clean> <description>
+sf_lb='{'
+sf_rb='}'
+sf_capdir="$WORK/capguard"
+mkdir -p "$sf_capdir"
+sf_cap_case() { # <spec> <flag|clean> <description>
   local spec="$1" want="$2" why="$3" got
-  printf "sf_clause \"x\" 'a.%s%s%s b'\n" "$sf_lb" "$spec" "$sf_rb" > "$sf_capdir/case"
+  printf "sf_clause \"x\" 'a.%s%s%s b'\n" "$sf_lb" "$spec" "$sf_rb" >"$sf_capdir/case"
   got=$(sf_intervals_over_cap "$sf_capdir/case")
   if { [ "$want" = flag ] && [ -n "$got" ]; } || { [ "$want" = clean ] && [ -z "$got" ]; }; then
-    echo "  ok   [-] the interval guard $why"; PASS=$((PASS+1))
+    echo "  ok   [-] the interval guard $why"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL the interval guard failed to $why (reported '$got')"; FAIL=$((FAIL+1))
+    echo "  FAIL the interval guard failed to $why (reported '$got')"
+    FAIL=$((FAIL + 1))
   fi
 }
-sf_cap_case "0,300" flag  "rejects the {0,n} form this change fixed"
-sf_cap_case "300"   flag  "rejects the exact-count {n} form"
-sf_cap_case "300,"  flag  "rejects the open {n,} form"
-sf_cap_case "1,300" flag  "rejects a high upper bound in {m,n}"
-sf_cap_case ",300"  flag  "rejects the {,n} form"
-sf_cap_case "256"   flag  "rejects a bound one over the cap"
-sf_cap_case "255"   clean "accepts a bound exactly at the cap"
+sf_cap_case "0,300" flag "rejects the {0,n} form this change fixed"
+sf_cap_case "300" flag "rejects the exact-count {n} form"
+sf_cap_case "300," flag "rejects the open {n,} form"
+sf_cap_case "1,300" flag "rejects a high upper bound in {m,n}"
+sf_cap_case ",300" flag "rejects the {,n} form"
+sf_cap_case "256" flag "rejects a bound one over the cap"
+sf_cap_case "255" clean "accepts a bound exactly at the cap"
 sf_cap_case "0,200" clean "accepts an ordinary interval"
 # The comment skip is load-bearing, not cosmetic: without it the paragraph that documents this rule
 # fails the suite, and the next person makes it green by deleting the paragraph.
-printf '# an example naming .%s0,300%s as the thing to avoid\n' "$sf_lb" "$sf_rb" > "$sf_capdir/comment"
+printf '# an example naming .%s0,300%s as the thing to avoid\n' "$sf_lb" "$sf_rb" >"$sf_capdir/comment"
 sf_cap_comment=$(sf_intervals_over_cap "$sf_capdir/comment")
-[ -z "$sf_cap_comment" ] \
-  && { echo "  ok   [-] the interval guard ignores a full-line comment"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL the interval guard flagged an interval inside a comment"; FAIL=$((FAIL+1)); }
+[ -z "$sf_cap_comment" ] &&
+  {
+    echo "  ok   [-] the interval guard ignores a full-line comment"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the interval guard flagged an interval inside a comment"
+    FAIL=$((FAIL + 1))
+  }
 
 # The patterns are MULTI-WORD ANCHORS, not single tokens. The first version of this test grepped for
 # `qualifying`, `narrow`, `benched`, `dispositions` — words that survive having the rule around them
 # deleted or REVERSED, so the test would stay green while the adapter said the opposite. Two reviewers
 # caught it independently. Each pattern below has to match a phrase that only the correct rule makes.
-sf_clause "always pass the plan with --context-file"  'always pass the plan.{0,40}context-file|context-file.{0,80}always pass the plan'
+sf_clause "always pass the plan with --context-file" 'always pass the plan.{0,40}context-file|context-file.{0,80}always pass the plan'
 sf_clause "the plan file is the source of the PR body" 'plan file is the source'
-sf_clause "iterate ONLY for a Blocker or qualifying"  'iterate only for a .{0,20}blocker.{0,60}qualifying'
-sf_clause "narrow panel = stake + downgraded"         'narrow.{0,200}(stake|open finding).{0,120}downgraded'
-sf_clause "the closing round is the full quorum"      'closing.{0,140}full quorum|full quorum again.{0,160}(candidate|merge)'
+sf_clause "iterate ONLY for a Blocker or qualifying" 'iterate only for a .{0,20}blocker.{0,60}qualifying'
+sf_clause "narrow panel = stake + downgraded" 'narrow.{0,200}(stake|open finding).{0,120}downgraded'
+sf_clause "the closing round is the full quorum" 'closing.{0,140}full quorum|full quorum again.{0,160}(candidate|merge)'
 sf_clause "a new closing finding restarts the cycle" '(closing|final).{0,120}(new qualifying|raises).{0,140}initial|initial round of another cycle'
-sf_clause "never publish the derived context file"   '(never|not) .{0,20}(gh pr edit|re-publish).{0,120}derived|derived file to the pr body'
-sf_clause "exit 4 = escalate, never --reset"          'exit .?4.?.{0,120}(escalat|stop)'
+sf_clause "never publish the derived context file" '(never|not) .{0,20}(gh pr edit|re-publish).{0,120}derived|derived file to the pr body'
+sf_clause "exit 4 = escalate, never --reset" 'exit .?4.?.{0,120}(escalat|stop)'
 # The pattern matches "no --reviewers" / "do not pass --reviewers" and NOT the old advice, which
 # read "name the reviewers you have — the quorum". `sf_clause` requires EVERY file in SF_ADAPTERS to
 # match — the three adapters AND `WORKFLOW.md`, which is the source they compress — so one file
@@ -2141,14 +3534,20 @@ sf_clause "exit 4 = escalate, never --reset"          'exit .?4.?.{0,120}(escala
 # reference prose and config.example is a template. The panel clauses below are the ones that do
 # apply to all five, and a revert in either file is exactly as damaging as one in an adapter.
 SF_PANEL_DOCS="$SF_ADAPTERS README.md config.example"
-sf_panel_clause() {  # sf_panel_clause <label> <extended-regex>
+sf_panel_clause() { # sf_panel_clause <label> <extended-regex>
   local label="$1" re="$2" f miss=""
   for f in $SF_PANEL_DOCS; do
-    tr '\n' ' ' < "$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" || miss="$miss $f"
+    tr '\n' ' ' <"$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" || miss="$miss $f"
   done
-  [ -z "$miss" ] \
-    && { echo "  ok   [-] every panel doc states: $label"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL panel doc consistency: '$label' missing from$miss"; FAIL=$((FAIL+1)); }
+  [ -z "$miss" ] &&
+    {
+      echo "  ok   [-] every panel doc states: $label"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL panel doc consistency: '$label' missing from$miss"
+      FAIL=$((FAIL + 1))
+    }
 }
 # `\bno\b`, not bare `no`: without the boundary "know --reviewers" or "into --reviewers" satisfies
 # the pin without the rule being stated at all.
@@ -2164,14 +3563,20 @@ sf_panel_clause "omit --reviewers: the config is the panel" '\bno\b .?--reviewer
 # Best-effort by construction: this is a blacklist of the phrasings that have actually appeared, so
 # a NEW way of saying the same thing would slip past it. The positive clauses above carry the load;
 # this one stops the exact regressions we have already seen twice.
-sf_panel_absent() {  # sf_panel_absent <label> <extended-regex>
+sf_panel_absent() { # sf_panel_absent <label> <extended-regex>
   local label="$1" re="$2" f hit=""
   for f in $SF_PANEL_DOCS; do
-    tr '\n' ' ' < "$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" && hit="$hit $f"
+    tr '\n' ' ' <"$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" && hit="$hit $f"
   done
-  [ -z "$hit" ] \
-    && { echo "  ok   [-] no panel doc states: $label"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL panel doc consistency: '$label' still present in$hit"; FAIL=$((FAIL+1)); }
+  [ -z "$hit" ] &&
+    {
+      echo "  ok   [-] no panel doc states: $label"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL panel doc consistency: '$label' still present in$hit"
+      FAIL=$((FAIL + 1))
+    }
 }
 # Every phrasing of the old advice that has actually appeared, not just the ones containing
 # `--reviewers`: the flag name is exactly what a grep finds, and twice now the surviving sentence
@@ -2184,16 +3589,16 @@ sf_panel_absent() {  # sf_panel_absent <label> <extended-regex>
 # reading the output catches a seat that dropped out.
 sf_panel_clause "read each round's startup lines" 'startup lines.{0,200}(actually ran|benched|relay-only|exits .?0)'
 sf_panel_absent "type the panel yourself" 'explicit list = the agents|name the reviewers you have|--reviewers <your|pass an .{0,10}explicit reviewer list|always pass an explicit'
-sf_clause "a clean round 1 IS the closing round"      'round 1 was already clean|clean initial round is the closing round'
+sf_clause "a clean round 1 IS the closing round" 'round 1 was already clean|clean initial round is the closing round'
 sf_clause "exit 0 = DISPATCHED, and benched still exits 0" '(dispatched reviewer ran|supposed to dispatch).{0,200}.{0,200}benched'
-sf_clause "non-qualifying findings are left unfixed"  'non-qualifying findings are recorded and left unfixed'
-sf_clause "post dispositions BEFORE re-running"       'post (the )?dispositions before re-running'
+sf_clause "non-qualifying findings are left unfixed" 'non-qualifying findings are recorded and left unfixed'
+sf_clause "post dispositions BEFORE re-running" 'post (the )?dispositions before re-running'
 sf_clause "keep the relay marker out of that comment" '(do .{0,4}not.{0,4} put|keep|must not contain).{0,80}marker text.{0,180}delet'
 sf_clause "disputes are routed to Gate 2 with both positions" 'disput.{0,80}gate 2.{0,60}both positions|disput.{0,80}both positions'
-sf_clause "and that is not a third gate"                     'two.{0,12}gates, (never|not) three'
-sf_clause "the plan is immutable once approved"              'immutable once approved'
-sf_clause "the initial quorum excludes the author"           'except the author'
-sf_clause "the author classifies findings in writing"        'author classifies( each finding)? in writing'
+sf_clause "and that is not a third gate" 'two.{0,12}gates, (never|not) three'
+sf_clause "the plan is immutable once approved" 'immutable once approved'
+sf_clause "the initial quorum excludes the author" 'except the author'
+sf_clause "the author classifies findings in writing" 'author classifies( each finding)? in writing'
 
 # --- plan-review (step 2) gets the SAME discipline, in its own terms ----------------------------
 # A real session ran 13 rounds of plan-review before the panel agreed (~1h15m burned on convergence,
@@ -2201,17 +3606,17 @@ sf_clause "the author classifies findings in writing"        'author classifies(
 # "plan-qualifying" is asserted as a term DISTINCT from step 5's "qualifying Should-fix" (PR-qualifying:
 # correctness/safety/deployability/verification) — the two must not collapse into one grep-satisfying
 # phrase, or an adapter could state step 5's rule alone and wrongly pass for step 2's.
-sf_clause "plan-review round excludes exit 3"                'exit .?3.?.{0,200}does.{0,6}not.{0,6}count as a round'
+sf_clause "plan-review round excludes exit 3" 'exit .?3.?.{0,200}does.{0,6}not.{0,6}count as a round'
 sf_clause "two consecutive exit-3s stop retrying and drop that reviewer" 'two consecutive attempts.{0,120}stop retrying.{0,160}drop that reviewer'
 sf_clause "a reduced panel is escalated to the human, not silent" '(tell the human|human.{0,20}call).{0,160}reduced panel|reduced panel.{0,160}(tell the human|human.{0,20}call)'
-sf_clause "plan-review cap is 6 rounds"                       '(6|six).{0,10}round.{0,40}cap|cap.{0,20}(6|six).{0,10}round'
-sf_clause "a clean round 1 skips a wasted round 2"            'clean round 1|round 1 .{0,60}(raises no|no blocker).{0,120}gate 1'
+sf_clause "plan-review cap is 6 rounds" '(6|six).{0,10}round.{0,40}cap|cap.{0,20}(6|six).{0,10}round'
+sf_clause "a clean round 1 skips a wasted round 2" 'clean round 1|round 1 .{0,60}(raises no|no blocker).{0,120}gate 1'
 sf_clause "round 2 runs the same full panel, never narrowed" 'same full panel.{0,60}never.{0,10}narrow|never.{0,10}narrow.{0,120}same full panel'
 sf_clause "plan-qualifying is compared against PR-qualifying/qualifying Should-fix" 'plan-qualifying.{0,150}.{0,150}(qualifying should-fix|pr-qualifying)|(qualifying should-fix|pr-qualifying).{0,150}.{0,150}plan-qualifying'
-sf_clause "plan-qualifying must not be conflated with PR-qualifying"       '(not the same as|must not be conflated|distinct term|do not conflate)'
-sf_clause "plan-qualifying covers a missing edge case"                    'materially incomplete.{0,160}missing edge case|missing edge case.{0,160}materially incomplete'
-sf_clause "plan-qualifying covers an unhandled failure mode"              'materially incomplete.{0,160}failure mode|failure mode.{0,160}materially incomplete'
-sf_clause "plan-qualifying covers missing verification"                   'materially incomplete.{0,160}verification|verification.{0,160}materially incomplete'
+sf_clause "plan-qualifying must not be conflated with PR-qualifying" '(not the same as|must not be conflated|distinct term|do not conflate)'
+sf_clause "plan-qualifying covers a missing edge case" 'materially incomplete.{0,160}missing edge case|missing edge case.{0,160}materially incomplete'
+sf_clause "plan-qualifying covers an unhandled failure mode" 'materially incomplete.{0,160}failure mode|failure mode.{0,160}materially incomplete'
+sf_clause "plan-qualifying covers missing verification" 'materially incomplete.{0,160}verification|verification.{0,160}materially incomplete'
 sf_clause "round 6 still open -> disagreement summary -> Gate 1" 'round 6.{0,150}.{0,150}disagreement summary.{0,200}gate 1|disagreement summary.{0,150}.{0,150}round 6'
 sf_clause "disagreement summary states objection + classification + reason" 'objection.{0,60}classification.{0,60}reason|disagreement summary.{0,200}.{0,200}(objection|classification|reason).{0,120}(objection|classification|reason).{0,120}(objection|classification|reason)'
 sf_clause "a human-authorized round is not an agent-initiated round" 'human-authorized.{0,80}not an agent-initiated round'
@@ -2220,26 +3625,32 @@ sf_clause "Gate 1 accepts the plan plus a disagreement summary" 'plan plus a dis
 sf_clause "dropping the last reviewer is not a completed round" 'zero reviewers.{0,120}(not a completed round|isn.t a completed round)'
 # Iterate to consensus without asking (Fizzy #1351). The same four literals are in WORKFLOW.md, the three
 # adapters and the plan-review exit-0 echo, so one clause per literal checks every place.
-sf_clause "a qualifying finding: run the next round at once"   'run the next round at once'
-sf_clause "never ask the human for one more round"             'never ask the human for one more round'
-sf_clause "an unreviewed plan revision never reaches Gate 1"   'an unreviewed plan revision never reaches gate 1'
-sf_clause "round 6 still open: do not run a round 7"           'do not run a round 7 on your own'
+sf_clause "a qualifying finding: run the next round at once" 'run the next round at once'
+sf_clause "never ask the human for one more round" 'never ask the human for one more round'
+sf_clause "an unreviewed plan revision never reaches Gate 1" 'an unreviewed plan revision never reaches gate 1'
+sf_clause "round 6 still open: do not run a round 7" 'do not run a round 7 on your own'
 sf_clause "only a qualifying finding changes the plan; a Nit is recorded" 'change the plan only for a blocker or a plan-qualifying should-fix.{0,200}nit.{0,60}recorded.{0,40}not applied'
 # The old cap must be ABSENT, not merely outvoted: a file that says both teaches the old rule.
 # README.md and CHANGELOG.md keep the 2-round cap as history, so they are not scanned.
-sf_absent() {  # sf_absent <label> <extended-regex> [files]
+sf_absent() { # sf_absent <label> <extended-regex> [files]
   local label="$1" re="$2" files="${3:-$SF_ADAPTERS}" f hit=""
   for f in $files; do
-    tr '\n' ' ' < "$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" && hit="$hit $f"
+    tr '\n' ' ' <"$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" && hit="$hit $f"
   done
-  [ -z "$hit" ] \
-    && { echo "  ok   [-] no adapter states: $label"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL adapter consistency: '$label' still present in$hit"; FAIL=$((FAIL+1)); }
+  [ -z "$hit" ] &&
+    {
+      echo "  ok   [-] no adapter states: $label"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL adapter consistency: '$label' still present in$hit"
+      FAIL=$((FAIL + 1))
+    }
 }
-sf_absent "the old 'Cap: 2 rounds'"        'cap: 2 rounds'
-sf_absent "the old '2-round cap'"          '2-round cap'
+sf_absent "the old 'Cap: 2 rounds'" 'cap: 2 rounds'
+sf_absent "the old '2-round cap'" '2-round cap'
 sf_absent "the old 'do not run a round 3'" 'do not run a round 3'
-sf_absent "the old 'revise **once**'"      'revise \*\*once\*\*' WORKFLOW.md
+sf_absent "the old 'revise **once**'" 'revise \*\*once\*\*' WORKFLOW.md
 
 # And the TOOL, not only the documents. `bin/ship-feature` prints the loop rule to the operator on
 # every relay run, which out-ranks any document nobody re-reads — so a revert of that one string must
@@ -2249,13 +3660,19 @@ sf_absent "the old 'revise **once**'"      'revise \*\*once\*\*' WORKFLOW.md
 # arm also contains the words, so a whole-file grep stays green when the operator-facing string is
 # reverted — the test would then be asserting my own comment, which is the greenwash this whole
 # section exists to remove. A reviewer caught it; grep the message, not the prose about it.
-sf_tool_clause() {  # sf_tool_clause <label> <extended-regex>
+sf_tool_clause() { # sf_tool_clause <label> <extended-regex>
   local label="$1" re="$2"
-  grep -E '^[[:space:]]*0\)[[:space:]]*echo' "$CLI" | grep -Eqi -- "$re" \
-    && { echo "  ok   [-] bin/ship-feature's exit-0 message states: $label"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL adapter consistency: '$label' missing from bin/ship-feature's exit-0 message"; FAIL=$((FAIL+1)); }
+  grep -E '^[[:space:]]*0\)[[:space:]]*echo' "$CLI" | grep -Eqi -- "$re" &&
+    {
+      echo "  ok   [-] bin/ship-feature's exit-0 message states: $label"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL adapter consistency: '$label' missing from bin/ship-feature's exit-0 message"
+      FAIL=$((FAIL + 1))
+    }
 }
-sf_tool_clause "every DISPATCHED reviewer ran"          'every dispatched reviewer ran'
+sf_tool_clause "every DISPATCHED reviewer ran" 'every dispatched reviewer ran'
 sf_tool_clause "check the startup lines for a benched seat" 'startup lines for a benched seat'
 sf_tool_clause "resolve UNDISPUTED qualifying Should-fix" 'undisputed qualifying should-fix'
 
@@ -2263,11 +3680,17 @@ sf_tool_clause "resolve UNDISPUTED qualifying Should-fix" 'undisputed qualifying
 # which itself pushed unbounded revision loops. Matched against that ECHO LINE ONLY (not the whole
 # file, for the same greenwash reason as sf_tool_clause above), so a revert of the operator-facing
 # string turns the suite red even though the surrounding comments still describe the rule correctly.
-sf_plan_tool_clause() {  # sf_plan_tool_clause <label> <extended-regex>
+sf_plan_tool_clause() { # sf_plan_tool_clause <label> <extended-regex>
   local label="$1" re="$2"
-  grep -E 'Plan review done' "$CLI" | grep -Eqi -- "$re" \
-    && { echo "  ok   [-] bin/ship-feature's plan-review exit-0 message states: $label"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL adapter consistency: '$label' missing from bin/ship-feature's plan-review exit-0 message"; FAIL=$((FAIL+1)); }
+  grep -E 'Plan review done' "$CLI" | grep -Eqi -- "$re" &&
+    {
+      echo "  ok   [-] bin/ship-feature's plan-review exit-0 message states: $label"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL adapter consistency: '$label' missing from bin/ship-feature's plan-review exit-0 message"
+      FAIL=$((FAIL + 1))
+    }
 }
 # Every adapter must name the durable plans directory, and none may still suggest a
 # bare `plan.md`. The adapters are what an agent actually loads — WORKFLOW.md is
@@ -2276,54 +3699,72 @@ sf_plan_tool_clause() {  # sf_plan_tool_clause <label> <extended-regex>
 for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md adapters/skill/SKILL.md; do
   # shellcheck disable=SC2088 # a literal tilde: the adapter text holds the path as written
   if grep -qF '~/.config/ship-feature/plans/' "$HERE/../$adapter"; then
-    echo "  ok   [-] $adapter names the durable plans directory"; PASS=$((PASS+1))
+    echo "  ok   [-] $adapter names the durable plans directory"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL $adapter does not name ~/.config/ship-feature/plans/"; FAIL=$((FAIL+1))
+    echo "  FAIL $adapter does not name ~/.config/ship-feature/plans/"
+    FAIL=$((FAIL + 1))
   fi
   # Say so, because no CLI path can run before it: the agent writes the plan
   # first, and an install updated by `git pull` alone never re-runs install.sh.
   if grep -qF 'mkdir -p' "$HERE/../$adapter"; then
-    echo "  ok   [-] $adapter tells the agent to create the directory"; PASS=$((PASS+1))
+    echo "  ok   [-] $adapter tells the agent to create the directory"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL $adapter does not say to create the plans directory"; FAIL=$((FAIL+1))
+    echo "  FAIL $adapter does not say to create the plans directory"
+    FAIL=$((FAIL + 1))
   fi
   if grep -qE '<plan\.md>|`plan\.md`|\./plan\.md' "$HERE/../$adapter"; then
-    echo "  FAIL $adapter still suggests a bare plan.md"; FAIL=$((FAIL+1))
+    echo "  FAIL $adapter still suggests a bare plan.md"
+    FAIL=$((FAIL + 1))
   else
-    echo "  ok   [-] $adapter no longer suggests a bare plan.md"; PASS=$((PASS+1))
+    echo "  ok   [-] $adapter no longer suggests a bare plan.md"
+    PASS=$((PASS + 1))
   fi
 done
 
-sf_plan_tool_clause "clean round goes straight to Gate 1"     'straight to gate 1'
-sf_plan_tool_clause "cap is 6 rounds"                         'cap.{0,10}(6|six) rounds'
-sf_plan_tool_clause "do not run a round 7 on your own"        'do not run a round 7 on your own'
-sf_plan_tool_clause "write a disagreement summary instead"    'disagreement summary'
+sf_plan_tool_clause "clean round goes straight to Gate 1" 'straight to gate 1'
+sf_plan_tool_clause "cap is 6 rounds" 'cap.{0,10}(6|six) rounds'
+sf_plan_tool_clause "do not run a round 7 on your own" 'do not run a round 7 on your own'
+sf_plan_tool_clause "write a disagreement summary instead" 'disagreement summary'
 sf_plan_tool_clause "a qualifying finding: run the next round at once" 'run the next round at once'
-sf_plan_tool_clause "never ask the human for one more round"  'never ask the human for one more round'
+sf_plan_tool_clause "never ask the human for one more round" 'never ask the human for one more round'
 sf_plan_tool_clause "an unreviewed plan revision never reaches Gate 1" 'an unreviewed plan revision never reaches gate 1'
 sf_plan_tool_clause "keeps the review vocabulary (plan-qualifying)" 'plan-qualifying'
 # Every 'Plan review done' line: none may still state the old cap.
-sf_plan_tool_absent() {  # sf_plan_tool_absent <label> <extended-regex>
+sf_plan_tool_absent() { # sf_plan_tool_absent <label> <extended-regex>
   local label="$1" re="$2"
-  grep -E 'Plan review done' "$CLI" | grep -Eqi -- "$re" \
-    && { echo "  FAIL bin/ship-feature's plan-review exit-0 message still states: $label"; FAIL=$((FAIL+1)); } \
-    || { echo "  ok   [-] bin/ship-feature's plan-review exit-0 message does not state: $label"; PASS=$((PASS+1)); }
+  grep -E 'Plan review done' "$CLI" | grep -Eqi -- "$re" &&
+    {
+      echo "  FAIL bin/ship-feature's plan-review exit-0 message still states: $label"
+      FAIL=$((FAIL + 1))
+    } ||
+    {
+      echo "  ok   [-] bin/ship-feature's plan-review exit-0 message does not state: $label"
+      PASS=$((PASS + 1))
+    }
 }
-sf_plan_tool_absent "the old 'both times'"          'both times'
+sf_plan_tool_absent "the old 'both times'" 'both times'
 sf_plan_tool_absent "the old 'do not run a round 3'" 'do not run a round 3'
-sf_plan_tool_absent "the old 2-round cap"           'cap.{0,10}(2|two) rounds'
+sf_plan_tool_absent "the old 2-round cap" 'cap.{0,10}(2|two) rounds'
 
 # The exit-3 (NOT clean) message gets the same treatment: it used to say "Fix and re-run" with no
 # mention of the two-consecutive-failure drop rule, which itself invites retrying the same reviewer
 # forever.
-sf_plan_tool_clause_notclean() {  # same pattern as sf_plan_tool_clause, but for the "NOT clean" line
+sf_plan_tool_clause_notclean() { # same pattern as sf_plan_tool_clause, but for the "NOT clean" line
   local label="$1" re="$2"
-  grep -E 'Plan review NOT clean' "$CLI" | grep -Eqi -- "$re" \
-    && { echo "  ok   [-] bin/ship-feature's plan-review exit-3 message states: $label"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL adapter consistency: '$label' missing from bin/ship-feature's plan-review exit-3 message"; FAIL=$((FAIL+1)); }
+  grep -E 'Plan review NOT clean' "$CLI" | grep -Eqi -- "$re" &&
+    {
+      echo "  ok   [-] bin/ship-feature's plan-review exit-3 message states: $label"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL adapter consistency: '$label' missing from bin/ship-feature's plan-review exit-3 message"
+      FAIL=$((FAIL + 1))
+    }
 }
 sf_plan_tool_clause_notclean "drop the reviewer on a second consecutive attempt" 'second consecutive attempt.{0,60}drop'
-sf_plan_tool_clause_notclean "tell the human about the reduced panel"           'reduced panel'
+sf_plan_tool_clause_notclean "tell the human about the reduced panel" 'reduced panel'
 
 # The pre-push hook rule (Fizzy #1370): WORKFLOW.md and the three adapters, then the files that carry
 # the merge-gate and CLI text.
@@ -2331,10 +3772,16 @@ sf_clause "preflight refuses a repo without the hook" 'preflight`[^`]{0,30}refus
 sf_clause "the hook lives at .githooks/pre-push" '\.githooks/pre-push'
 sf_clause "the hook runs the tests, a linter and a formatter check" 'tests, a linter and a formatter'
 sf_clause "the agent names the hook's checks in the implementation notes" 'implementation notes'
-sf_doc() {  # sf_doc <label> <file> <extended-regex>
-  tr '\n' ' ' < "$HERE/../$2" | tr -s ' ' | grep -Eqi -- "$3" \
-    && { echo "  ok   [-] $2 states: $1"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL $2 does not state: $1"; FAIL=$((FAIL+1)); }
+sf_doc() { # sf_doc <label> <file> <extended-regex>
+  tr '\n' ' ' <"$HERE/../$2" | tr -s ' ' | grep -Eqi -- "$3" &&
+    {
+      echo "  ok   [-] $2 states: $1"
+      PASS=$((PASS + 1))
+    } ||
+    {
+      echo "  FAIL $2 does not state: $1"
+      FAIL=$((FAIL + 1))
+    }
 }
 sf_doc "check 6 reads the hook in the PR head and the base tip" WORKFLOW.md 'pre-push hook on both sides of the merge, for every PR: a `100755` `\.githooks/pre-push` in the PR head and in the base tip'
 sf_doc "check 6 needs both commits fetched" WORKFLOW.md 'run `git fetch` first'
@@ -2342,31 +3789,35 @@ sf_doc "check 7 always treats the gate's entry points as sensitive" WORKFLOW.md 
 sf_doc "the residual risks name what the tool cannot prove about the hook" WORKFLOW.md 'neither `preflight` nor the merge gate can prove what the hook runs'
 sf_doc "the preflight bullet names the hook" README.md 'ship-feature preflight` — .{0,200}`\.githooks/pre-push`'
 sf_doc "the sensitive-paths note names the always-added entry points" config.example '\.githooks/\*, bin/ci and config/ci\.rb are always added'
-bash "$CLI" help | grep -q '\.githooks/pre-push'; check "ship-feature help names the pre-push hook in preflight" $? 0
+bash "$CLI" help | grep -q '\.githooks/pre-push'
+check "ship-feature help names the pre-push hook in preflight" $? 0
 
 # --- autonomous mode (experimental): plan-consensus, relay --autonomous, merge-gate ----------------
 # Fake gh / pr-review-relay / reviewers; no network. The merge call is the thing under test: every
 # failing case also asserts the fake `gh pr merge` log stayed empty.
-ABIN="$WORK/abin"; mkdir -p "$ABIN"
+ABIN="$WORK/abin"
+mkdir -p "$ABIN"
 # A real repository for check 6, which reads .githooks/pre-push from the PR head and the base tip:
 # BASE40 and HEAD40 carry a 100755 hook; NOHOOK40, MODE644_40 and SYML40 do not carry a usable one.
 # run_gate runs merge-gate inside it.
-GREPO="$WORK/gate-repo"; git init -q "$GREPO"
-( cd "$GREPO" && sf_seed_hook . && git commit -q -m base )
+GREPO="$WORK/gate-repo"
+git init -q "$GREPO"
+(cd "$GREPO" && sf_seed_hook . && git commit -q -m base)
 BASE40="$(git -C "$GREPO" rev-parse HEAD)"
-( cd "$GREPO" && printf 'x\n' > a.txt && git add a.txt && git commit -q -m head )
+(cd "$GREPO" && printf 'x\n' >a.txt && git add a.txt && git commit -q -m head)
 HEAD40="$(git -C "$GREPO" rev-parse HEAD)"
-( cd "$GREPO" && git rm -q .githooks/pre-push && git commit -q -m nohook )
+(cd "$GREPO" && git rm -q .githooks/pre-push && git commit -q -m nohook)
 NOHOOK40="$(git -C "$GREPO" rev-parse HEAD)"
-( cd "$GREPO" && git checkout -q "$HEAD40" && chmod -x .githooks/pre-push && git add --chmod=-x .githooks/pre-push && git commit -q -m mode644 )
+(cd "$GREPO" && git checkout -q "$HEAD40" && chmod -x .githooks/pre-push && git add --chmod=-x .githooks/pre-push && git commit -q -m mode644)
 MODE644_40="$(git -C "$GREPO" rev-parse HEAD)"
-( cd "$GREPO" && git checkout -q "$HEAD40" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink )
+(cd "$GREPO" && git checkout -q "$HEAD40" && mv .githooks/pre-push .githooks/real-hook && git add --chmod=+x .githooks/real-hook && ln -s real-hook .githooks/pre-push && git add .githooks/pre-push && git commit -q -m symlink)
 SYML40="$(git -C "$GREPO" rev-parse HEAD)"
-git -C "$GREPO" checkout -q "$HEAD40"; mkdir -p "$GREPO/sub/dir"
+git -C "$GREPO" checkout -q "$HEAD40"
+mkdir -p "$GREPO/sub/dir"
 OTHER40=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 # shellcheck disable=SC2034 # used inside the single-quoted gate_case mutations that are eval'd (two Plan-Key lines; a wrong context_sha256)
 OTHER64=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-cat > "$ABIN/gh" <<'GHSTUB'
+cat >"$ABIN/gh" <<'GHSTUB'
 #!/usr/bin/env bash
 f() { cat "$GHF/$1" 2>/dev/null; }
 seq_pop() { local s="$GHF/$1.seq"; if [ -s "$s" ]; then head -n1 "$s"; tail -n +2 "$s" > "$s.t"; mv "$s.t" "$s"; else cat "$GHF/$1" 2>/dev/null; fi; }
@@ -2399,7 +3850,7 @@ GHSTUB
 chmod +x "$ABIN/gh"
 # Fake reviewers for plan-consensus: print a body, then the verdict (or none) from STUB_LAST_<name>.
 for _s in codex grok; do
-  cat > "$ABIN/$_s" <<STUB
+  cat >"$ABIN/$_s" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "\$STUB_LOG.$_s"
 cat >/dev/null
@@ -2413,7 +3864,7 @@ STUB
 done
 # The antigravity seat runs `gemini`: the suite's gemini stub answers the version probe; a review is a
 # body and the verdict line (the suite's stub echoes the prompt, whose rules quote both verdict forms).
-cat > "$ABIN/gemini" <<GSTUB
+cat >"$ABIN/gemini" <<GSTUB
 #!/usr/bin/env bash
 for a in "\$@"; do case "\$a" in --version|-v) exec "$PBIN/gemini" "\$@";; esac; done
 cat >/dev/null
@@ -2422,7 +3873,7 @@ GSTUB
 chmod +x "$ABIN/gemini"
 # The other plan seats (claude, cursor, glm via opencode): a body and the verdict line.
 for _b in claude cursor-agent opencode; do
-  cat > "$ABIN/$_b" <<STUB
+  cat >"$ABIN/$_b" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "\$STUB_LOG.$_b"
 case " \$* " in *" --version "*|*" -v "*) echo "1.0.0"; exit 0;; esac
@@ -2432,7 +3883,7 @@ STUB
   chmod +x "$ABIN/$_b"
 done
 # Fake pr-review-relay: record argv; write a verdict file when asked; exit with STUB_RELAY_RC.
-cat > "$ABIN/pr-review-relay" <<'RSTUB'
+cat >"$ABIN/pr-review-relay" <<'RSTUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_RELAY_LOG"
 vf=""; prev=""; for a in "$@"; do [ "$prev" = "--verdict-file" ] && vf="$a"; prev="$a"; done
@@ -2456,58 +3907,89 @@ b64_of() { base64 | tr -d '\n'; }
 
 # One fresh, fully valid world per case: $AH (HOME), $GH (fake gh state), plan, consensus, verdict.
 mk_world() {
-  AH="$(mktemp -d "$WORK/ah.XXXXXX")"; GH="$AH/gh"; mkdir -p "$GH" "$AH/.config/ship-feature" "$AH/state/autonomous/consensus" "$AH/state/autonomous/o_r/pr-7"
-  printf 'REVIEWERS=claude,codex,grok,opencode\nPLAN_REVIEWERS=codex,grok\n' > "$AH/relay.conf"
-  printf 'the plan text\n' > "$AH/plan.md"
-  PKEY="$(sha256_of < "$AH/plan.md")"
-  printf 'plan_sha256=%s\nplan_path=%s\nround=1\nseats=codex,grok\nplan_panel=codex,grok\ndegraded=grok\nseat.codex=clean\nseat.grok=clean\n' "$PKEY" "$AH/plan.md" > "$AH/state/autonomous/consensus/plan-$PKEY.consensus"
+  AH="$(mktemp -d "$WORK/ah.XXXXXX")"
+  GH="$AH/gh"
+  mkdir -p "$GH" "$AH/.config/ship-feature" "$AH/state/autonomous/consensus" "$AH/state/autonomous/o_r/pr-7"
+  printf 'REVIEWERS=claude,codex,grok,opencode\nPLAN_REVIEWERS=codex,grok\n' >"$AH/relay.conf"
+  printf 'the plan text\n' >"$AH/plan.md"
+  PKEY="$(sha256_of <"$AH/plan.md")"
+  printf 'plan_sha256=%s\nplan_path=%s\nround=1\nseats=codex,grok\nplan_panel=codex,grok\ndegraded=grok\nseat.codex=clean\nseat.grok=clean\n' "$PKEY" "$AH/plan.md" >"$AH/state/autonomous/consensus/plan-$PKEY.consensus"
   VF="$AH/state/autonomous/o_r/pr-7/round-1.verdict"
-  printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\npr_round=1\ncontext_sha256=%s\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" "$PKEY" > "$VF"
-  printf 'o/r\n' > "$GH/repo"; printf 'main\n' > "$GH/defb"
-  printf 'OPEN\n' > "$GH/pr_state"; printf 'false\n' > "$GH/pr_isDraft"; printf 'main\n' > "$GH/pr_baseRefName"
-  printf 'MERGEABLE\n' > "$GH/pr_mergeable"; printf '%s\n' "$HEAD40" > "$GH/pr_headRefOid"; printf '%s\n' "$BASE40" > "$GH/pr_baseRefOid"
-  printf 'summary\n\nPlan-Key: %s\n' "$PKEY" > "$GH/pr_body"
-  printf 'alice\n' > "$GH/pr_author"
-  printf 'alice\t%s\n' "$(printf 'Disposition, round 1 (reviewed sha 1234567):\n- fixed it\nDisputed findings: none\n' | b64_of)" > "$GH/pr_comments"
-  printf 'COMPLETED|SUCCESS|-\nCOMPLETED|NEUTRAL|-\n-|-|SUCCESS\n' > "$GH/pr_statusCheckRollup"
-  printf 'src/a.js\ntest/a.test.js\n' > "$GH/diff"
-  printf 'merge options:\n  --match-head-commit SHA\n' > "$GH/merge_help"
-  printf 'cccccccccccccccccccccccccccccccccccccccc\n' > "$GH/pr_mergeCommit"
+  printf 'repo=o/r\npr=7\nhead_sha=%s\nround=1\npr_round=1\ncontext_sha256=%s\nexit=0\nauthor=claude\nconfigured=codex,grok,opencode\nrequested=codex,grok,opencode\nran=codex,grok,opencode\nbenched=\nseat.codex=clean\nseat.grok=clean\nseat.opencode=clean\nall_clean=true\nrun_id=x\nts=t\n' "$HEAD40" "$PKEY" >"$VF"
+  printf 'o/r\n' >"$GH/repo"
+  printf 'main\n' >"$GH/defb"
+  printf 'OPEN\n' >"$GH/pr_state"
+  printf 'false\n' >"$GH/pr_isDraft"
+  printf 'main\n' >"$GH/pr_baseRefName"
+  printf 'MERGEABLE\n' >"$GH/pr_mergeable"
+  printf '%s\n' "$HEAD40" >"$GH/pr_headRefOid"
+  printf '%s\n' "$BASE40" >"$GH/pr_baseRefOid"
+  printf 'summary\n\nPlan-Key: %s\n' "$PKEY" >"$GH/pr_body"
+  printf 'alice\n' >"$GH/pr_author"
+  printf 'alice\t%s\n' "$(printf 'Disposition, round 1 (reviewed sha 1234567):\n- fixed it\nDisputed findings: none\n' | b64_of)" >"$GH/pr_comments"
+  printf 'COMPLETED|SUCCESS|-\nCOMPLETED|NEUTRAL|-\n-|-|SUCCESS\n' >"$GH/pr_statusCheckRollup"
+  printf 'src/a.js\ntest/a.test.js\n' >"$GH/diff"
+  printf 'merge options:\n  --match-head-commit SHA\n' >"$GH/merge_help"
+  printf 'cccccccccccccccccccccccccccccccccccccccc\n' >"$GH/pr_mergeCommit"
   KILL="$AH/.config/ship-feature/AUTONOMOUS_OFF"
 }
 # shellcheck disable=SC2120 # "$@" is the helper's interface (run_gate [extra args]); today no call passes any
 run_gate() { # run_gate [extra args]; env: SHIP_FEATURE_AUTONOMOUS unless AUTO_ENV=0; runs in GATE_CWD, else $GREPO
-  ( cd "${GATE_CWD:-$GREPO}" || exit 99; export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" SHIP_FEATURE_MERGEABLE_SLEEP=0 PR_RELAY_CONFIG="$AH/relay.conf" SHIP_FEATURE_PLAN_REVIEWERS="${GATE_PANEL:-codex,grok}" PATH="$ABIN:$PATH"
+  (
+    cd "${GATE_CWD:-$GREPO}" || exit 99
+    export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" SHIP_FEATURE_MERGEABLE_SLEEP=0 PR_RELAY_CONFIG="$AH/relay.conf" SHIP_FEATURE_PLAN_REVIEWERS="${GATE_PANEL:-codex,grok}" PATH="$ABIN:$PATH"
     [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
-    bash "$CLI" merge-gate 7 ${GATE_FLAG---autonomous} ${GATE_MERGE---merge} "$@" >"$AH/gate.out" 2>"$AH/gate.err" )
+    bash "$CLI" merge-gate 7 ${GATE_FLAG---autonomous} ${GATE_MERGE---merge} "$@" >"$AH/gate.out" 2>"$AH/gate.err"
+  )
 }
 # gate_case <desc> <want_rc> <mutation code run inside the world>
 gate_case() {
   local desc="$1" want="$2" mut="${3:-:}" why="${4:-}" rc got
-  mk_world; eval "$mut"; run_gate; rc=$?
-  got="$rc"; if [ "$want" != 0 ] && [ -s "$GH/merge.log" ]; then got="merge-called"; fi
+  mk_world
+  eval "$mut"
+  run_gate
+  rc=$?
+  got="$rc"
+  if [ "$want" != 0 ] && [ -s "$GH/merge.log" ]; then got="merge-called"; fi
   # WHY: the case must fail for the reason it names, not because some other check happened to fail.
-  if [ -n "$why" ] && [ "$got" = "$want" ] && ! grep -Eq -- "$why" "$AH/gate.err"; then got="wrong-reason($(tr '\n' ' ' < "$AH/gate.err" | cut -c1-90))"; fi
+  if [ -n "$why" ] && [ "$got" = "$want" ] && ! grep -Eq -- "$why" "$AH/gate.err"; then got="wrong-reason($(tr '\n' ' ' <"$AH/gate.err" | cut -c1-90))"; fi
   check "merge-gate: $desc" "$got" "$want"
 }
 
 gate_case "happy path (author seat in REVIEWERS, full panel, green CI)" 0
-mk_world; run_gate; rc=$?
-check "merge-gate happy path: exactly one pinned merge call, no other merge flag" "$(wc -l < "$GH/merge.log" | tr -d ' ')|$(cat "$GH/merge.log")" "1|pr merge 7 --merge --match-head-commit $HEAD40"
-grep -q "autonomous_env=1" "$GH/audit_posted" 2>/dev/null && grep -q "plan_degraded_seats=grok" "$GH/audit_posted" && grep -q "head_sha=$HEAD40" "$GH/audit_posted"; check "merge-gate happy path: audit comment records env key, degraded seats and head" $? 0
-grep -q 'src/a.js' "$GH/audit_posted" && grep -q 'test/a.test.js' "$GH/audit_posted" && grep -q 'COMPLETED|SUCCESS' "$GH/audit_posted"; check "merge-gate happy path: the audit comment lists the files and CI checks it saw" $? 0
+mk_world
+run_gate
+rc=$?
+check "merge-gate happy path: exactly one pinned merge call, no other merge flag" "$(wc -l <"$GH/merge.log" | tr -d ' ')|$(cat "$GH/merge.log")" "1|pr merge 7 --merge --match-head-commit $HEAD40"
+grep -q "autonomous_env=1" "$GH/audit_posted" 2>/dev/null && grep -q "plan_degraded_seats=grok" "$GH/audit_posted" && grep -q "head_sha=$HEAD40" "$GH/audit_posted"
+check "merge-gate happy path: audit comment records env key, degraded seats and head" $? 0
+grep -q 'src/a.js' "$GH/audit_posted" && grep -q 'test/a.test.js' "$GH/audit_posted" && grep -q 'COMPLETED|SUCCESS' "$GH/audit_posted"
+check "merge-gate happy path: the audit comment lists the files and CI checks it saw" $? 0
 check "merge-gate happy path prints the merge commit" "$(cat "$AH/gate.out")" "cccccccccccccccccccccccccccccccccccccccc"
-mk_world; GATE_MERGE="" run_gate; rc=$?
+mk_world
+GATE_MERGE="" run_gate
+rc=$?
 check "merge-gate without --merge only reports and never merges" "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)" "0|none"
 
 # keys and kill switch
-mk_world; AUTO_ENV=0 run_gate; check "merge-gate: flag without the env key is refused (7)" "$?" 7
-mk_world; GATE_FLAG="" run_gate; check "merge-gate: env key without the flag is refused (7)" "$?" 7
+mk_world
+AUTO_ENV=0 run_gate
+check "merge-gate: flag without the env key is refused (7)" "$?" 7
+mk_world
+GATE_FLAG="" run_gate
+check "merge-gate: env key without the flag is refused (7)" "$?" 7
 gate_case "kill switch present at the start (7)" 7 ': > "$KILL"'
-mk_world; : > "$GH/kill_on_second_head"; printf '%s\n' "$KILL" > "$GH/kill_on_second_head"; run_gate; rc=$?
+mk_world
+: >"$GH/kill_on_second_head"
+printf '%s\n' "$KILL" >"$GH/kill_on_second_head"
+run_gate
+rc=$?
 check "merge-gate: kill switch created between the checks and the call (7, no merge)" "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)" "7|none"
 
-mk_world; printf '%s\n' "$KILL" > "$GH/kill_on_help"; run_gate; rc=$?
+mk_world
+printf '%s\n' "$KILL" >"$GH/kill_on_help"
+run_gate
+rc=$?
 check "merge-gate: kill switch created while the gh version is checked (7, no merge)" "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)" "7|none"
 
 # plan binding
@@ -2555,14 +4037,25 @@ gate_case "no verdict file" 6 'rm -f "$VF"'
 # No disposition: allowed only when every counted round was all_clean and the author disputed nothing.
 # The cases that expect 0 are bespoke blocks: gate_case reads merge.log only for a non-zero status.
 MERGED_OK="0|1|pr merge 7 --merge --match-head-commit $HEAD40"
-merged_state() { printf '%s|%s|%s' "$1" "$(wc -l < "$GH/merge.log" 2>/dev/null | tr -d ' ')" "$(cat "$GH/merge.log" 2>/dev/null)"; }
-mk_round2() { sed 's/^pr_round=1$/pr_round=2/' "$VF" > "$AH/state/autonomous/o_r/pr-7/round-2.verdict"; }
-mk_world; : > "$GH/pr_comments"; run_gate; rc=$?
+merged_state() { printf '%s|%s|%s' "$1" "$(wc -l <"$GH/merge.log" 2>/dev/null | tr -d ' ')" "$(cat "$GH/merge.log" 2>/dev/null)"; }
+mk_round2() { sed 's/^pr_round=1$/pr_round=2/' "$VF" >"$AH/state/autonomous/o_r/pr-7/round-2.verdict"; }
+mk_world
+: >"$GH/pr_comments"
+run_gate
+rc=$?
 check "merge-gate: no disposition, round 1 clean, no dispute → merges" "$(merged_state "$rc")" "$MERGED_OK"
-mk_world; : > "$GH/pr_comments"; mk_round2; run_gate; rc=$?
+mk_world
+: >"$GH/pr_comments"
+mk_round2
+run_gate
+rc=$?
 check "merge-gate: no disposition, rounds 1 and 2 both clean, no dispute → merges" "$(merged_state "$rc")" "$MERGED_OK"
 gate_case "no disposition, round 1 clean, an author - DISPUTED: line in a review comment" 6 ': > "$GH/pr_comments"; printf "alice\t%s\n" "$(printf "%s\n" "- DISPUTED: inline objection" | b64_of)" > "$GH/pr_review_comments"' 'no author disposition'
-mk_world; : > "$GH/pr_comments"; printf 'bob\t%s\n' "$(printf '%s\n' '- DISPUTED: not the author' | b64_of)" > "$GH/pr_review_comments"; run_gate; rc=$?
+mk_world
+: >"$GH/pr_comments"
+printf 'bob\t%s\n' "$(printf '%s\n' '- DISPUTED: not the author' | b64_of)" >"$GH/pr_review_comments"
+run_gate
+rc=$?
 check "merge-gate: no disposition, round 1 clean, a - DISPUTED: line by someone else → merges" "$(merged_state "$rc")" "$MERGED_OK"
 gate_case "no disposition, round 2 candidate, round 1 had findings" 6 ': > "$GH/pr_comments"; mk_round2; sed -i.bak "s/^all_clean=.*/all_clean=false/" "$VF"' 'no author disposition'
 gate_case "no disposition, round 2 candidate, round-1.verdict missing" 6 ': > "$GH/pr_comments"; mk_round2; rm -f "$VF"' 'no author disposition'
@@ -2602,13 +4095,20 @@ gate_case "custom sensitive-paths file: defaults no longer apply" 0 'printf "doc
 gate_case "a sensitive-paths file that cannot be read" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; chmod 000 "$AH/.config/ship-feature/sensitive-paths"' 'cannot read'
 gate_case "an empty sensitive-paths file is refused, not read as allow-all" 6 ': > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"' 'no active pattern'
 gate_case "a sensitive-paths file of comments and blanks is refused" 6 'printf "# none\n\n   \n" > "$AH/.config/ship-feature/sensitive-paths"' 'no active pattern'
-mk_world; printf 'src/a$(touch %s/pwned1)`touch %s/pwned2`.js\n' "$AH" "$AH" > "$GH/diff"; printf 'x$(touch %s/pwned3)\n*$(touch*\n' "$AH" > "$AH/.config/ship-feature/sensitive-paths"; run_gate; rc=$?
+mk_world
+printf 'src/a$(touch %s/pwned1)`touch %s/pwned2`.js\n' "$AH" "$AH" >"$GH/diff"
+printf 'x$(touch %s/pwned3)\n*$(touch*\n' "$AH" >"$AH/.config/ship-feature/sensitive-paths"
+run_gate
+rc=$?
 # shellcheck disable=SC2010 # $AH is a temp dir this test controls; the check counts names that contain pwned
 check "merge-gate: \$(...) and backticks in a path or a pattern are never run, and the path is matched as written" "$rc|$(ls "$AH" | grep -c pwned)|$(grep -c 'sensitive path' "$AH/gate.err")" "6|0|1"
 gate_case "a rename OUT of a protected path is caught by its old name" 6 'printf "src/a.js\ndocs/ci.yml\t.github/workflows/ci.yml\n" > "$GH/diff"' 'sensitive path \(\.github/workflows/ci\.yml'
 gate_case "a rename INTO a protected path is caught by its new name" 6 'printf "bin/mac-ios-build.sh\tsrc/build.sh\n" > "$GH/diff"' 'sensitive path \(bin/mac-ios-build\.sh'
 gate_case "a plain rename between safe paths passes" 0 'printf "src/b.js\tsrc/a.js\n" > "$GH/diff"'
-mk_world; printf 'src/b.js\tsrc/a.js\n' > "$GH/diff"; run_gate; rc=$?
+mk_world
+printf 'src/b.js\tsrc/a.js\n' >"$GH/diff"
+run_gate
+rc=$?
 check "merge-gate: the audit comment shows a rename as 'old -> new'" "$rc|$(grep -c '^    src/a.js -> src/b.js$' "$GH/audit_posted")" "0|1"
 gate_case "a file list shorter than the PR's changedFiles (truncated) fails closed" 6 'printf "3\n" > "$GH/pr_changedFiles"' 'incomplete'
 gate_case "the PR files API cannot be read" 6 'printf "1\n" > "$GH/api_files_rc"' 'cannot read the PR file list'
@@ -2619,14 +4119,22 @@ gate_case "head moved before the merge call" 6 'printf "%s\n%s\n" "$HEAD40" "$OT
 gate_case "CI turns red between the checks and the merge call" 6 'printf "COMPLETED|SUCCESS|-\nCOMPLETED|FAILURE|-\n" > "$GH/pr_statusCheckRollup.seq"' 'CI changed after the checks'
 
 # Check 6, the pre-push hook on both sides of the merge: every PR, with CI or without.
-mk_world; run_gate
+mk_world
+run_gate
 grep -q "pre-push hook: .githooks/pre-push 100755 at head $(printf '%s' "$HEAD40" | cut -c1-7) and base $(printf '%s' "$BASE40" | cut -c1-7)" "$GH/audit_posted"
 check "merge-gate happy path: the audit names the pre-push hook on both sides" $? 0
-mk_world; : > "$GH/pr_statusCheckRollup"; printf "o/r\n" > "$AH/.config/ship-feature/allow-no-ci"; run_gate; rc=$?
+mk_world
+: >"$GH/pr_statusCheckRollup"
+printf "o/r\n" >"$AH/.config/ship-feature/allow-no-ci"
+run_gate
+rc=$?
 check "merge-gate: the allow-no-ci path still merges, and its audit names the hook" \
   "$rc|$(grep -c 'allowed by the allow-no-ci file' "$GH/audit_posted")|$(grep -c 'pre-push hook: .githooks/pre-push 100755 at head' "$GH/audit_posted")" "0|1|1"
-gate_head_case() {  # gate_head_case <desc> <head sha> <why>: the PR head, and the verdict's head_sha, is <sha>
-  local keep="$HEAD40"; HEAD40="$2"; gate_case "$1" 6 ':' "$3"; HEAD40="$keep"
+gate_head_case() { # gate_head_case <desc> <head sha> <why>: the PR head, and the verdict's head_sha, is <sha>
+  local keep="$HEAD40"
+  HEAD40="$2"
+  gate_case "$1" 6 ':' "$3"
+  HEAD40="$keep"
 }
 gate_head_case "check 6: the PR head has no .githooks/pre-push, with green CI" "$NOHOOK40" 'head [0-9a-f]{7} has no \.githooks/pre-push with mode 100755'
 gate_head_case "check 6: the hook is 100644 in the PR head" "$MODE644_40" 'head [0-9a-f]{7} has no \.githooks/pre-push with mode 100755'
@@ -2637,12 +4145,20 @@ gate_case "check 6: the base tip is not in this checkout" 6 'printf "%s\n" "$OTH
 gate_case "check 6: an unreadable base tip" 6 ': > "$GH/pr_baseRefOid"' "cannot read the PR's base tip"
 # The base loses the hook between the checks and the merge call. The base read is the trigger, and
 # head.count=2 proves the check-8 re-read in sf_gate_merge ran (one head read there, one in sf_gate_pr).
-mk_world; printf '%s\n%s\n' "$BASE40" "$NOHOOK40" > "$GH/pr_baseRefOid.seq"; run_gate; rc=$?
+mk_world
+printf '%s\n%s\n' "$BASE40" "$NOHOOK40" >"$GH/pr_baseRefOid.seq"
+run_gate
+rc=$?
 check "merge-gate: the base loses the hook at the check-8 re-read (6, no merge, the hook reason only, the re-read ran)" \
   "$rc|$([ -s "$GH/merge.log" ] && echo called || echo none)|$(grep -c 'base [0-9a-f]\{7\} has no .githooks/pre-push' "$AH/gate.err")|$(grep -c 'CI changed after the checks' "$AH/gate.err")|$(cat "$GH/base.count" 2>/dev/null)|$(cat "$GH/head.count" 2>/dev/null)" \
   "6|none|1|0|2|2"
-mk_world; GATE_CWD="$GREPO/sub/dir" run_gate; check "merge-gate: the happy path from a subdirectory of the checkout" "$?" 0
-mkdir -p "$WORK/not-a-repo"; mk_world; GATE_CWD="$WORK/not-a-repo" GIT_CEILING_DIRECTORIES="$WORK" run_gate; rc=$?
+mk_world
+GATE_CWD="$GREPO/sub/dir" run_gate
+check "merge-gate: the happy path from a subdirectory of the checkout" "$?" 0
+mkdir -p "$WORK/not-a-repo"
+mk_world
+GATE_CWD="$WORK/not-a-repo" GIT_CEILING_DIRECTORIES="$WORK" run_gate
+rc=$?
 check "merge-gate: run outside a checkout of the repository (6, the reason named, no merge)" \
   "$rc|$(grep -c 'must run from a checkout of the repository' "$AH/gate.err")|$([ -s "$GH/merge.log" ] && echo called || echo none)" "6|1|none"
 # Check 7: the gate's entry points are always sensitive, also with a custom patterns file.
@@ -2651,276 +4167,729 @@ gate_case "check 7: a custom sensitive-paths file still stops .githooks/pre-push
 gate_case "check 7: a custom sensitive-paths file still stops bin/ci" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf "bin/ci\n" > "$GH/diff"' "matches 'bin/ci'"
 gate_case "check 7: a custom sensitive-paths file still stops config/ci.rb" 6 'printf "docs/*\n" > "$AH/.config/ship-feature/sensitive-paths"; printf "config/ci.rb\n" > "$GH/diff"' "matches 'config/ci\.rb'"
 gate_case "gh without --match-head-commit" 6 'printf "options:\n  --squash\n" > "$GH/merge_help"' 'match-head-commit'
-mk_world; printf 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=false/; s/^run_id=.*/run_id=y/" "%s" > "%s"\n' "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict" > "$GH/on_second_head"; run_gate; rc=$?
+mk_world
+printf 'sed "s/^pr_round=.*/pr_round=2/; s/^all_clean=.*/all_clean=false/; s/^run_id=.*/run_id=y/" "%s" > "%s"\n' "$VF" "$AH/state/autonomous/o_r/pr-7/round-2.verdict" >"$GH/on_second_head"
+run_gate
+rc=$?
 check "merge-gate: a newer, non-clean round recorded during the checks stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
-mk_world; printf 'sed -i.bak "s/^run_id=.*/run_id=rewritten/" "%s"\n' "$VF" > "$GH/on_second_head"; run_gate; rc=$?
+mk_world
+printf 'sed -i.bak "s/^run_id=.*/run_id=rewritten/" "%s"\n' "$VF" >"$GH/on_second_head"
+run_gate
+rc=$?
 check "merge-gate: the same round rewritten during the checks (new run_id) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'newer round' "$AH/gate.err")" "6|none|1"
-mk_world; ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"; run_gate; rc=$?
+mk_world
+ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"
+run_gate
+rc=$?
 check "merge-gate --merge: a live PR lock (a round in progress) stops the merge (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'holds the lock' "$AH/gate.err")" "6|none|1"
-mk_world; ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"; GATE_MERGE="" run_gate; rc=$?
+mk_world
+ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"
+GATE_MERGE="" run_gate
+rc=$?
 check "merge-gate without --merge takes no lock (reports 0 while a round runs)" "$rc" 0
-mk_world; run_gate; rc=$?
+mk_world
+run_gate
+rc=$?
 check "merge-gate: the PR lock is released after the merge" "$rc|$([ -L "$AH/state/autonomous/o_r/pr-7.lock" ] && echo held || echo free)" "0|free"
-mk_world; for _i in $(seq 1 250); do printf 'src/f%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
+mk_world
+for _i in $(seq 1 250); do printf 'src/f%s.js\n' "$_i"; done >"$GH/diff"
+run_gate
+rc=$?
 check "merge-gate: 250 files are all listed in the audit comment, with the total" "$rc|$(grep -c '^    src/f[0-9]*\.js$' "$GH/audit_posted")|$(grep -c '^files_checked (250):$' "$GH/audit_posted")" "0|250|1"
-mk_world; for _i in $(seq 1 1500); do printf 'src/a/very/long/directory/name/for/the/audit/file_%s.js\n' "$_i"; done > "$GH/diff"; run_gate; rc=$?
+mk_world
+for _i in $(seq 1 1500); do printf 'src/a/very/long/directory/name/for/the/audit/file_%s.js\n' "$_i"; done >"$GH/diff"
+run_gate
+rc=$?
 check "merge-gate: a list too long for one comment is shortened, says so, and audit.txt has every file" "$rc|$(grep -c '^files_checked (1500):$' "$GH/audit_posted")|$(grep -c '200 of 1500 files listed here; the full list is in .*audit.txt' "$GH/audit_posted")|$(grep -c 'file_[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|1|1|1500"
-mk_world; _long="$(printf 'd%.0s' $(seq 1 400))"; for _i in $(seq 1 1500); do printf 'src/%s/f%s.js\n' "$_long" "$_i"; done > "$GH/diff"; run_gate; rc=$?
-check "merge-gate: 200 very long paths are shortened again until the comment fits (posted, under 60000 bytes)" "$rc|$([ "$(wc -c < "$GH/audit_posted")" -le 60000 ] && echo fits)|$(grep -Ec '^    \.\.\. [0-9]+ of 1500 files listed here' "$GH/audit_posted")|$(grep -c 'f[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|fits|1|1500"
-mk_world; printf 'printf "alice\\t%%s\\n" "%s" >> "%s"\n' "$(printf '%s\n' '- DISPUTED: raised during the merge' | b64_of)" "$GH/pr_comments" > "$GH/on_second_head"; run_gate; rc=$?
+mk_world
+_long="$(printf 'd%.0s' $(seq 1 400))"
+for _i in $(seq 1 1500); do printf 'src/%s/f%s.js\n' "$_long" "$_i"; done >"$GH/diff"
+run_gate
+rc=$?
+check "merge-gate: 200 very long paths are shortened again until the comment fits (posted, under 60000 bytes)" "$rc|$([ "$(wc -c <"$GH/audit_posted")" -le 60000 ] && echo fits)|$(grep -Ec '^    \.\.\. [0-9]+ of 1500 files listed here' "$GH/audit_posted")|$(grep -c 'f[0-9]*\.js$' "$AH/state/autonomous/o_r/pr-7/audit.txt")" "0|fits|1|1500"
+mk_world
+printf 'printf "alice\\t%%s\\n" "%s" >> "%s"\n' "$(printf '%s\n' '- DISPUTED: raised during the merge' | b64_of)" "$GH/pr_comments" >"$GH/on_second_head"
+run_gate
+rc=$?
 check "merge-gate: a dispute posted after check 5 stops the merge under the lock (6)" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)|$(grep -c 'dispute appeared' "$AH/gate.err")" "6|none|1"
-mk_world; printf '1\n' > "$GH/merge_rc"; run_gate; rc=$?
-check "merge-gate: a failing merge call exits 6 and is not retried (one call logged)" "$rc|$(wc -l < "$GH/merge.log" | tr -d ' ')" "6|1"
-mk_world; printf '1\n' > "$GH/comment_rc"; run_gate; rc=$?
+mk_world
+printf '1\n' >"$GH/merge_rc"
+run_gate
+rc=$?
+check "merge-gate: a failing merge call exits 6 and is not retried (one call logged)" "$rc|$(wc -l <"$GH/merge.log" | tr -d ' ')" "6|1"
+mk_world
+printf '1\n' >"$GH/comment_rc"
+run_gate
+rc=$?
 check "merge-gate: audit comment fails to post → exit 8, text printed, audit.txt written" "$rc|$(grep -q 'head_sha=' "$AH/gate.out" && echo text)|$([ -s "$AH/state/autonomous/o_r/pr-7/audit.txt" ] && echo file)" "8|text|file"
-mk_world; chmod 555 "$AH/state/autonomous/o_r/pr-7"; run_gate; rc=$?; chmod 755 "$AH/state/autonomous/o_r/pr-7"
+mk_world
+chmod 555 "$AH/state/autonomous/o_r/pr-7"
+run_gate
+rc=$?
+chmod 755 "$AH/state/autonomous/o_r/pr-7"
 check "merge-gate: audit.txt cannot be written → the comment is still posted with the full text" "$rc|$(grep -c "^head_sha=$HEAD40" "$GH/audit_posted" 2>/dev/null)" "0|1"
-mk_world; chmod 555 "$AH/state/autonomous/o_r/pr-7"; printf '1\n' > "$GH/comment_rc"; run_gate; rc=$?; chmod 755 "$AH/state/autonomous/o_r/pr-7"
+mk_world
+chmod 555 "$AH/state/autonomous/o_r/pr-7"
+printf '1\n' >"$GH/comment_rc"
+run_gate
+rc=$?
+chmod 755 "$AH/state/autonomous/o_r/pr-7"
 check "merge-gate: neither audit.txt nor the comment → exit 8 and the text on stdout" "$rc|$(grep -c "^head_sha=$HEAD40" "$AH/gate.out")" "8|1"
 
 # relay --autonomous
-mk_relay_world() { mk_world; RL="$AH/relay.log"; : > "$RL"; printf '7\n' > "$GH/pr_number"; }
-run_relay() { # extra args
-  ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH"
-    [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
-    bash "$CLI" relay --autonomous --author claude --context-file "$AH/plan.md" "$@" >"$AH/relay.out" 2>"$AH/relay.err" )
+mk_relay_world() {
+  mk_world
+  RL="$AH/relay.log"
+  : >"$RL"
+  printf '7\n' >"$GH/pr_number"
 }
-mk_relay_world; run_relay --pr 7; rc=$?
+run_relay() { # extra args
+  (
+    export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH"
+    [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
+    bash "$CLI" relay --autonomous --author claude --context-file "$AH/plan.md" "$@" >"$AH/relay.out" 2>"$AH/relay.err"
+  )
+}
+mk_relay_world
+run_relay --pr 7
+rc=$?
 check "relay --autonomous: runs, exit 0" "$rc" 0
 check "relay --autonomous: full panel (no --reviewers), computed verdict path, --max-rounds 6, --autonomous stripped" "$(grep -c -- '--reviewers' "$RL")|$(grep -c -- "--verdict-file $AH/state/autonomous/o_r/pr-7/round-1.verdict --max-rounds 6" "$RL")|$(grep -c -- '--autonomous' "$RL")" "0|1|0"
-run_relay --pr 7; rc=$?
-check "relay --autonomous: the second round writes round-2 with pr_round=2 beside the relay's own round=1" "$(sf_vf="$AH/state/autonomous/o_r/pr-7/round-2.verdict"; echo "$(grep -c '^pr_round=2$' "$sf_vf")|$(grep -c '^round=1$' "$sf_vf")")" "1|1"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: the second round writes round-2 with pr_round=2 beside the relay's own round=1" "$(
+  sf_vf="$AH/state/autonomous/o_r/pr-7/round-2.verdict"
+  echo "$(grep -c '^pr_round=2$' "$sf_vf")|$(grep -c '^round=1$' "$sf_vf")"
+)" "1|1"
 check "relay --autonomous: the second round writes round-2" "$([ -s "$AH/state/autonomous/o_r/pr-7/round-2.verdict" ] && echo yes)" yes
-mk_relay_world; run_relay; rc=$?
+mk_relay_world
+run_relay
+rc=$?
 check "relay --autonomous: the PR is resolved from the current branch when --pr is absent" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)" "0|yes"
-mk_relay_world; : > "$GH/pr_number"; run_relay; rc=$?
-check "relay --autonomous: an unresolvable PR is a retry (3), nothing counted, and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')|$([ -e "$AH/state/autonomous/o_r/pr-7/fails" ] && echo counted || echo none)" "3|0|none"
-mk_relay_world; : > "$GH/repo_view_fail"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a failed repo lookup is a retry (3) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "3|0"
-mk_relay_world; run_relay --pr abc; rc=$?
-check "relay --autonomous: a non-numeric --pr is refused (7) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
-mk_relay_world; run_relay --pr=7; rc=$?
+mk_relay_world
+: >"$GH/pr_number"
+run_relay
+rc=$?
+check "relay --autonomous: an unresolvable PR is a retry (3), nothing counted, and the relay is not called" "$rc|$(wc -l <"$RL" | tr -d ' ')|$([ -e "$AH/state/autonomous/o_r/pr-7/fails" ] && echo counted || echo none)" "3|0|none"
+mk_relay_world
+: >"$GH/repo_view_fail"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: a failed repo lookup is a retry (3) and the relay is not called" "$rc|$(wc -l <"$RL" | tr -d ' ')" "3|0"
+mk_relay_world
+run_relay --pr abc
+rc=$?
+check "relay --autonomous: a non-numeric --pr is refused (7) and the relay is not called" "$rc|$(wc -l <"$RL" | tr -d ' ')" "7|0"
+mk_relay_world
+run_relay --pr=7
+rc=$?
 check "relay --autonomous: the --pr=N form is honoured and passed to the relay as --pr N" "$rc|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo yes)|$(grep -c -- '--pr 7 ' "$RL")|$(grep -c -- '--pr=7' "$RL")" "0|yes|1|0"
 check "relay --autonomous: --context-file reaches the relay as two fields" "$(grep -c -- "--context-file $AH/plan.md " "$RL")" 1
-mk_relay_world; run_relay --pr 7 --context-file="$AH/plan.md"; rc=$?
-check "relay --autonomous: a second --context-file (here the = form) is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
-mk_relay_world; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file="$AH/plan.md" >/dev/null 2>&1 ); rc=$?
+mk_relay_world
+run_relay --pr 7 --context-file="$AH/plan.md"
+rc=$?
+check "relay --autonomous: a second --context-file (here the = form) is refused (7), the relay is not called" "$rc|$(wc -l <"$RL" | tr -d ' ')" "7|0"
+mk_relay_world
+(
+  export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1
+  bash "$CLI" relay --autonomous --author claude --pr 7 --context-file="$AH/plan.md" >/dev/null 2>&1
+)
+rc=$?
 check "relay --autonomous: the --context-file=PATH form is passed to the relay as two fields" "$rc|$(grep -c -- "--context-file $AH/plan.md " "$RL")|$(grep -c -- '--context-file=' "$RL")" "0|1|0"
-mk_relay_world; export STUB_RELAY_TOUCH="$AH/plan.md"; run_relay --pr 7; rc=$?; unset STUB_RELAY_TOUCH
-check "relay --autonomous: a plan edited during the round is not a round (3) and leaves no verdict" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|0|gone"
-mk_relay_world; run_relay --pr=7
+mk_relay_world
+export STUB_RELAY_TOUCH="$AH/plan.md"
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_TOUCH
+check "relay --autonomous: a plan edited during the round is not a round (3) and leaves no verdict" "$rc|$(
+  sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0)
+  echo "$sf_n"
+)|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|0|gone"
+mk_relay_world
+run_relay --pr=7
 check "relay --autonomous: the verdict file records the context's SHA-256" "$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" 1
-mk_relay_world; printf 'not the plan\n' > "$AH/other.md"; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 --context-file "$AH/other.md" >/dev/null 2>"$AH/relay.err" ); rc=$?
-check "relay --autonomous: a context file that is not a consensus plan is refused (7), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
-mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; ln -s "$$" "$_LK"; touch -h -t 200001010000 "$_LK"; run_relay --pr 7; rc=$?
-check "relay --autonomous: an old lock whose owner is alive is held (4): age never frees a lock" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(readlink "$_LK")" "4|0|$$"
-mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$_LK"; printf '999999\n' > "$_LK/pid"; run_relay --pr 7; rc=$?
-check "relay --autonomous: an old-format lock directory is held (4) and nothing is written into it" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(ls -A "$_LK" | tr '\n' ' ')" "4|0|pid "
-mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$AH/state/autonomous/o_r/$$"; ln -s "$$" "$_LK"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a live lock whose target is also a directory is held (4), nothing is created inside it" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(ls -A "$AH/state/autonomous/o_r/$$" | wc -l | tr -d ' ')" "4|0|0"
-mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; ln -s garbage "$_LK"; run_relay --pr 7; rc=$?
+mk_relay_world
+printf 'not the plan\n' >"$AH/other.md"
+(
+  export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1
+  bash "$CLI" relay --autonomous --author claude --pr 7 --context-file "$AH/other.md" >/dev/null 2>"$AH/relay.err"
+)
+rc=$?
+check "relay --autonomous: a context file that is not a consensus plan is refused (7), the relay is not called" "$rc|$(wc -l <"$RL" | tr -d ' ')" "7|0"
+mk_relay_world
+_LK="$AH/state/autonomous/o_r/pr-7.lock"
+ln -s "$$" "$_LK"
+touch -h -t 200001010000 "$_LK"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: an old lock whose owner is alive is held (4): age never frees a lock" "$rc|$(wc -l <"$RL" | tr -d ' ')|$(readlink "$_LK")" "4|0|$$"
+mk_relay_world
+_LK="$AH/state/autonomous/o_r/pr-7.lock"
+mkdir "$_LK"
+printf '999999\n' >"$_LK/pid"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: an old-format lock directory is held (4) and nothing is written into it" "$rc|$(wc -l <"$RL" | tr -d ' ')|$(ls -A "$_LK" | tr '\n' ' ')" "4|0|pid "
+mk_relay_world
+_LK="$AH/state/autonomous/o_r/pr-7.lock"
+mkdir "$AH/state/autonomous/o_r/$$"
+ln -s "$$" "$_LK"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: a live lock whose target is also a directory is held (4), nothing is created inside it" "$rc|$(wc -l <"$RL" | tr -d ' ')|$(ls -A "$AH/state/autonomous/o_r/$$" | wc -l | tr -d ' ')" "4|0|0"
+mk_relay_world
+_LK="$AH/state/autonomous/o_r/pr-7.lock"
+ln -s garbage "$_LK"
+run_relay --pr 7
+rc=$?
 check "relay --autonomous: a lock whose target is not a pid is taken over, and released after the round" "$rc|$([ -L "$_LK" ] && echo locked || echo free)" "0|free"
-mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$_LK.guard"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a held guard blocks every acquisition (4), even with no lock link" "$rc|$(wc -l < "$RL" | tr -d ' ')|$([ -L "$_LK" ] && echo linked || echo none)" "4|0|none"
-mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$_LK.takeover"; run_relay --pr 7; rc=$?
-check "relay --autonomous: an old .lock.takeover directory is ignored" "$rc|$(wc -l < "$RL" | tr -d ' ')" "0|1"
-mk_relay_world; _LK="$AH/state/autonomous/o_r/pr-7.lock"; export STUB_RELAY_RELINK="$_LK" STUB_RELAY_RELINK_TO="$$"; run_relay --pr 7; rc=$?; unset STUB_RELAY_RELINK STUB_RELAY_RELINK_TO
+mk_relay_world
+_LK="$AH/state/autonomous/o_r/pr-7.lock"
+mkdir "$_LK.guard"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: a held guard blocks every acquisition (4), even with no lock link" "$rc|$(wc -l <"$RL" | tr -d ' ')|$([ -L "$_LK" ] && echo linked || echo none)" "4|0|none"
+mk_relay_world
+_LK="$AH/state/autonomous/o_r/pr-7.lock"
+mkdir "$_LK.takeover"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: an old .lock.takeover directory is ignored" "$rc|$(wc -l <"$RL" | tr -d ' ')" "0|1"
+mk_relay_world
+_LK="$AH/state/autonomous/o_r/pr-7.lock"
+export STUB_RELAY_RELINK="$_LK" STUB_RELAY_RELINK_TO="$$"
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_RELINK STUB_RELAY_RELINK_TO
 check "relay --autonomous: unlock removes only its own lock (a link to another live pid stays)" "$rc|$(readlink "$_LK")" "0|$$"
-mk_relay_world; export STUB_RELAY_CLEAN=false; run_relay --pr 7; rc=$?; unset STUB_RELAY_CLEAN
+mk_relay_world
+export STUB_RELAY_CLEAN=false
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_CLEAN
 check "relay --autonomous: a findings round (all_clean=false) is counted and exits 2" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/rounds")|$([ -s "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept)" "2|1|kept"
-mk_relay_world; export STUB_RELAY_CLEAN=""; run_relay --pr 7; rc=$?; unset STUB_RELAY_CLEAN
-check "relay --autonomous: a verdict file with no all_clean value is not a round (3) and is removed" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|0|gone"
-mk_relay_world; export STUB_RELAY_REPO=x/y; run_relay --pr 7; rc=$?; unset STUB_RELAY_REPO
+mk_relay_world
+export STUB_RELAY_CLEAN=""
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_CLEAN
+check "relay --autonomous: a verdict file with no all_clean value is not a round (3) and is removed" "$rc|$(
+  sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0)
+  echo "$sf_n"
+)|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|0|gone"
+mk_relay_world
+export STUB_RELAY_REPO=x/y
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_REPO
 check "relay --autonomous: a verdict file for another repo is not a round (3) and is removed" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7/round-1.verdict" ] && echo kept || echo gone)" "3|gone"
-mk_relay_world; run_relay --pr 7; export STUB_RELAY_RC=3; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+mk_relay_world
+run_relay --pr 7
+export STUB_RELAY_RC=3
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_RC
 check "relay --autonomous: a failed round (exit 3) leaves no higher verdict file behind" "$rc|$([ -e "$AH/state/autonomous/o_r/pr-7/round-2.verdict" ] && echo kept || echo gone)" "3|gone"
-mk_relay_world; ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1; bash "$CLI" relay --autonomous --author claude --pr 7 >/dev/null 2>"$AH/relay.err" ); rc=$?
-check "relay --autonomous without --context-file is refused (7) and the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')" "7|0"
-mk_relay_world; chmod 555 "$AH/state/autonomous/o_r/pr-7"; run_relay --pr 7; rc=$?; chmod 755 "$AH/state/autonomous/o_r/pr-7"
-check "relay --autonomous: an unwritable round state stops before dispatch (4), the relay is not called" "$rc|$(wc -l < "$RL" | tr -d ' ')|$(grep -c 'cannot write the round state' "$AH/relay.err")" "4|0|1"
-mk_relay_world; ln -s 999999 "$AH/state/autonomous/o_r/pr-7.lock"; mkdir "$AH/state/autonomous/o_r/pr-7.lock.guard"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a stale lock is not taken while another process holds the guard (4)" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
-mk_relay_world; run_relay --pr 7 --reviewers codex; check "relay --autonomous refuses --reviewers (7)" "$?" 7
-mk_relay_world; run_relay --pr 7 --verdict-file /tmp/x; check "relay --autonomous refuses a caller verdict path (7)" "$?" 7
-mk_relay_world; run_relay --pr 7 --reset; check "relay --autonomous refuses --reset (7)" "$?" 7
-mk_relay_world; AUTO_ENV=0 run_relay --pr 7; check "relay --autonomous without the env key is refused (7)" "$?" 7
-mk_relay_world; : > "$KILL"; run_relay --pr 7; check "relay --autonomous with the kill switch is refused (7)" "$?" 7
-mk_relay_world; for _i in 1 2 3 4 5 6; do run_relay --pr 7; done; run_relay --pr 7; rc=$?
-check "relay --autonomous: the 7th round is refused (4) and the relay is not called again" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|6"
-mk_relay_world; for _i in 1 2 3; do run_relay --pr 7; done; printf 'head moved\n' > "$AH/note"; run_relay --pr 7; run_relay --pr 7; rc=$?
+mk_relay_world
+(
+  export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" PR_RELAY_CONFIG="$AH/relay.conf" STUB_RELAY_LOG="$RL" PATH="$ABIN:$PATH" SHIP_FEATURE_AUTONOMOUS=1
+  bash "$CLI" relay --autonomous --author claude --pr 7 >/dev/null 2>"$AH/relay.err"
+)
+rc=$?
+check "relay --autonomous without --context-file is refused (7) and the relay is not called" "$rc|$(wc -l <"$RL" | tr -d ' ')" "7|0"
+mk_relay_world
+chmod 555 "$AH/state/autonomous/o_r/pr-7"
+run_relay --pr 7
+rc=$?
+chmod 755 "$AH/state/autonomous/o_r/pr-7"
+check "relay --autonomous: an unwritable round state stops before dispatch (4), the relay is not called" "$rc|$(wc -l <"$RL" | tr -d ' ')|$(grep -c 'cannot write the round state' "$AH/relay.err")" "4|0|1"
+mk_relay_world
+ln -s 999999 "$AH/state/autonomous/o_r/pr-7.lock"
+mkdir "$AH/state/autonomous/o_r/pr-7.lock.guard"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: a stale lock is not taken while another process holds the guard (4)" "$rc|$(wc -l <"$RL" | tr -d ' ')" "4|0"
+mk_relay_world
+run_relay --pr 7 --reviewers codex
+check "relay --autonomous refuses --reviewers (7)" "$?" 7
+mk_relay_world
+run_relay --pr 7 --verdict-file /tmp/x
+check "relay --autonomous refuses a caller verdict path (7)" "$?" 7
+mk_relay_world
+run_relay --pr 7 --reset
+check "relay --autonomous refuses --reset (7)" "$?" 7
+mk_relay_world
+AUTO_ENV=0 run_relay --pr 7
+check "relay --autonomous without the env key is refused (7)" "$?" 7
+mk_relay_world
+: >"$KILL"
+run_relay --pr 7
+check "relay --autonomous with the kill switch is refused (7)" "$?" 7
+mk_relay_world
+for _i in 1 2 3 4 5 6; do run_relay --pr 7; done
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: the 7th round is refused (4) and the relay is not called again" "$rc|$(wc -l <"$RL" | tr -d ' ')" "4|6"
+mk_relay_world
+for _i in 1 2 3; do run_relay --pr 7; done
+printf 'head moved\n' >"$AH/note"
+run_relay --pr 7
+run_relay --pr 7
+rc=$?
 check "relay --autonomous: rounds are counted per PR (the 5th call writes round-5)" "$([ -s "$AH/state/autonomous/o_r/pr-7/round-5.verdict" ] && echo yes)" yes
-mk_relay_world; export STUB_RELAY_RC=3; for _i in 1 2 3; do run_relay --pr 7; done; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+mk_relay_world
+export STUB_RELAY_RC=3
+for _i in 1 2 3; do run_relay --pr 7; done
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_RC
 check "relay --autonomous: the 4th failed attempt exits 4" "$rc" 4
-mk_relay_world; export STUB_RELAY_RC=3; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
-check "relay --autonomous: a failed round (exit 3) is not counted as a round" "$rc|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")" "3|0"
-mk_relay_world; export STUB_RELAY_WRITE=0; run_relay --pr 7; rc=$?; unset STUB_RELAY_WRITE
+mk_relay_world
+export STUB_RELAY_RC=3
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_RC
+check "relay --autonomous: a failed round (exit 3) is not counted as a round" "$rc|$(
+  sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0)
+  echo "$sf_n"
+)" "3|0"
+mk_relay_world
+export STUB_RELAY_WRITE=0
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_WRITE
 check "relay --autonomous: exit 0 without a verdict file is not a counted round (3)" "$rc" 3
-mk_relay_world; ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
-check "relay --autonomous: a live lock on the PR refuses the round (4) and does not call the relay" "$rc|$(wc -l < "$RL" | tr -d ' ')" "4|0"
-mk_relay_world; ln -s 999999 "$AH/state/autonomous/o_r/pr-7.lock"; run_relay --pr 7; rc=$?
+mk_relay_world
+ln -s "$$" "$AH/state/autonomous/o_r/pr-7.lock"
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: a live lock on the PR refuses the round (4) and does not call the relay" "$rc|$(wc -l <"$RL" | tr -d ' ')" "4|0"
+mk_relay_world
+ln -s 999999 "$AH/state/autonomous/o_r/pr-7.lock"
+run_relay --pr 7
+rc=$?
 check "relay --autonomous: a stale lock (owner gone) is taken over, and released after the round" "$rc|$([ -L "$AH/state/autonomous/o_r/pr-7.lock" ] && echo locked || echo free)|$([ -e "$AH/state/autonomous/o_r/pr-7.lock.guard" ] && echo left || echo clean)" "0|free|clean"
-mk_relay_world; export STUB_RELAY_RC=1; run_relay --pr 7; rc=$?
-check "relay --autonomous: a relay exit outside 0/3/4 is a failed attempt (3), not a round" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/fails" 2>/dev/null)|$(sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0); echo "$sf_n")" "3|1|0"
-run_relay --pr 7; run_relay --pr 7; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+mk_relay_world
+export STUB_RELAY_RC=1
+run_relay --pr 7
+rc=$?
+check "relay --autonomous: a relay exit outside 0/3/4 is a failed attempt (3), not a round" "$rc|$(cat "$AH/state/autonomous/o_r/pr-7/fails" 2>/dev/null)|$(
+  sf_n=$(cat "$AH/state/autonomous/o_r/pr-7/rounds" 2>/dev/null || echo 0)
+  echo "$sf_n"
+)" "3|1|0"
+run_relay --pr 7
+run_relay --pr 7
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_RC
 check "relay --autonomous: unexpected relay exits are bounded by the same cap (the 4th exits 4)" "$rc" 4
-mk_relay_world; export STUB_RELAY_RC=4; run_relay --pr 7; rc=$?; unset STUB_RELAY_RC
+mk_relay_world
+export STUB_RELAY_RC=4
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_RC
 check "relay --autonomous passes the relay's exit 4 through" "$rc" 4
 
 # relay --autonomous → merge-gate, with a verdict file in the shape the real relay writes
-mk_relay_world; rm -f "$VF"; export STUB_RELAY_A3=1; run_relay --pr 7; rc=$?; unset STUB_RELAY_A3
+mk_relay_world
+rm -f "$VF"
+export STUB_RELAY_A3=1
+run_relay --pr 7
+rc=$?
+unset STUB_RELAY_A3
 check "relay → merge-gate: relay --autonomous accepts an A3-shaped verdict as an all_clean round 1" "$rc|$(grep -c '^pr_round=1$' "$AH/state/autonomous/o_r/pr-7/round-1.verdict")|$(grep -c "^context_sha256=$PKEY\$" "$AH/state/autonomous/o_r/pr-7/round-1.verdict")" "0|1|1"
-run_gate; rc=$?
+run_gate
+rc=$?
 check "relay → merge-gate: merge-gate merges on the wrapper's own verdict file, once" "$rc|$(cat "$GH/merge.log" 2>/dev/null)" "0|pr merge 7 --merge --match-head-commit $HEAD40"
-mk_relay_world; rm -f "$VF"; export STUB_RELAY_A3=1; run_relay --pr 7; unset STUB_RELAY_A3; sed -i.bak 's/^seat.grok=.*/seat.grok=findings/' "$AH/state/autonomous/o_r/pr-7/round-1.verdict"; run_gate; rc=$?
+mk_relay_world
+rm -f "$VF"
+export STUB_RELAY_A3=1
+run_relay --pr 7
+unset STUB_RELAY_A3
+sed -i.bak 's/^seat.grok=.*/seat.grok=findings/' "$AH/state/autonomous/o_r/pr-7/round-1.verdict"
+run_gate
+rc=$?
 check "relay → merge-gate: the same chain with one seat 'findings' does not merge" "$rc|$([ -s "$GH/merge.log" ] && echo merged || echo none)" "6|none"
 
 # plan-consensus
-mk_plan_world() { mk_world; PL="$AH/plan.md"; SL="$AH/stub.log"; rm -f "$AH/state/autonomous/consensus/"*; }
+mk_plan_world() {
+  mk_world
+  PL="$AH/plan.md"
+  SL="$AH/stub.log"
+  rm -f "$AH/state/autonomous/consensus/"*
+}
 run_pc() { # extra args
-  ( export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH"
+  (
+    export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH"
     [ -z "${PLAN_ENV:-}" ] || export SHIP_FEATURE_PLAN_REVIEWERS="$PLAN_ENV"
     # The grok seat is degraded when the machine has no bwrap (a CI runner, for one). Pin the probe so
     # the result does not depend on the machine; the =fail case below covers the degraded path.
     export SHIP_FEATURE_FORCE_SANDBOX_PROBE="${SHIP_FEATURE_FORCE_SANDBOX_PROBE:-ok}"
     [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
-    bash "$CLI" plan-consensus "$PL" --autonomous "$@" >"$AH/pc.out" 2>"$AH/pc.err" )
+    bash "$CLI" plan-consensus "$PL" --autonomous "$@" >"$AH/pc.out" 2>"$AH/pc.err"
+  )
 }
-mk_plan_world; run_pc; rc=$?
+mk_plan_world
+run_pc
+rc=$?
 check "plan-consensus: every seat clean → exit 0" "$rc" 0
-check "plan-consensus: result file binds the plan hash, panel and degraded seats" "$(sf_kv_get_t() { awk -F= -v k="$2" '$1==k{print $2}' "$1"; }; c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"; echo "$(sf_kv_get_t "$c" plan_sha256)|$(sf_kv_get_t "$c" plan_panel)|$(sf_kv_get_t "$c" degraded)")" "$PKEY|codex,grok|"
-grep -q 'VERDICT: clean' "$SL.codex" && grep -q 'VERDICT LINE' "$SL.codex"; check "plan-consensus: the verdict-line rules are added to the reviewer prompt" $? 0
-printf 'plan\n' | ( export STUB_LOG="$AH/p2.log"; PATH="$ABIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 )
-[ -s "$AH/p2.log.codex" ] && ! grep -q 'VERDICT LINE' "$AH/p2.log.codex"; check "plan-review (not autonomous) does NOT get the verdict-line rules" $? 0
+check "plan-consensus: result file binds the plan hash, panel and degraded seats" "$(
+  sf_kv_get_t() { awk -F= -v k="$2" '$1==k{print $2}' "$1"; }
+  c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"
+  echo "$(sf_kv_get_t "$c" plan_sha256)|$(sf_kv_get_t "$c" plan_panel)|$(sf_kv_get_t "$c" degraded)"
+)" "$PKEY|codex,grok|"
+grep -q 'VERDICT: clean' "$SL.codex" && grep -q 'VERDICT LINE' "$SL.codex"
+check "plan-consensus: the verdict-line rules are added to the reviewer prompt" $? 0
+printf 'plan\n' | (
+  export STUB_LOG="$AH/p2.log"
+  PATH="$ABIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1
+)
+[ -s "$AH/p2.log.codex" ] && ! grep -q 'VERDICT LINE' "$AH/p2.log.codex"
+check "plan-review (not autonomous) does NOT get the verdict-line rules" $? 0
 # The plan's state directory (rounds, attempts), keyed by the plan's absolute path.
 pc_dir() { printf '%s/state/autonomous/plan/%s' "$AH" "$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; }
 FINDINGS="VERDICT: findings blockers=0 should_fix=1"
 # Cap 6 rounds (Fizzy #1351): rounds 1 to 5 with findings exit 2, round 6 with findings exits 5.
-mk_plan_world; export STUB_LAST_grok="$FINDINGS"; _rcs=""
-for _i in 1 2 3 4 5; do run_pc; _rcs="$_rcs$? "; [ "$_i" = 2 ] && cp "$AH/pc.err" "$AH/pc.r2"; done
+mk_plan_world
+export STUB_LAST_grok="$FINDINGS"
+_rcs=""
+for _i in 1 2 3 4 5; do
+  run_pc
+  _rcs="$_rcs$? "
+  [ "$_i" = 2 ] && cp "$AH/pc.err" "$AH/pc.r2"
+done
 check "plan-consensus: rounds 1 to 5 with findings each exit 2 (revise)" "$_rcs" "2 2 2 2 2 "
 check "plan-consensus: the exit-2 line names the round of 6, the attempt of 9 and says run plan-consensus again" "$(grep -c 'round 2 of 6 had findings' "$AH/pc.r2")|$(grep -c 'attempt 2/9' "$AH/pc.r2")|$(grep -c 'run plan-consensus again' "$AH/pc.r2")" "1|1|1"
-run_pc; rc=$?
+run_pc
+rc=$?
 check "plan-consensus: round 6 with findings → exit 5 (round cap)" "$rc|$(grep -c 'round 6 still has findings' "$AH/pc.err")" "5|1"
-n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?
-check "plan-consensus: a 7th call exits 5 on the round cap and runs no reviewer" "$rc|$(grep -c 'no more rounds and no reset' "$AH/pc.err")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|$n_before"
+n_before="$(wc -l <"$SL.codex" | tr -d ' ')"
+run_pc
+rc=$?
+check "plan-consensus: a 7th call exits 5 on the round cap and runs no reviewer" "$rc|$(grep -c 'no more rounds and no reset' "$AH/pc.err")|$(wc -l <"$SL.codex" | tr -d ' ')" "5|1|$n_before"
 unset STUB_LAST_grok
-mk_plan_world; export STUB_LAST_grok="$FINDINGS"; for _i in 1 2 3 4 5; do run_pc; done; unset STUB_LAST_grok
-_nc="$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')"; run_pc; rc=$?
+mk_plan_world
+export STUB_LAST_grok="$FINDINGS"
+for _i in 1 2 3 4 5; do run_pc; done
+unset STUB_LAST_grok
+_nc="$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')"
+run_pc
+rc=$?
 check "plan-consensus: five findings rounds write no consensus file, then a clean round 6 exits 0 with round=6" "$_nc|$rc|$(awk -F= '$1=="round"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)" "0|0|6"
-mk_plan_world; run_pc; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; n1="$(wc -l < "$SL.grok" | tr -d ' ')"; run_pc; rc=$?; unset STUB_LAST_grok
-check "plan-consensus: a re-run after consensus on the same text and panel exits 0 and runs no reviewer" "$rc|$(wc -l < "$SL.grok" | tr -d ' ')" "0|$n1"
+mk_plan_world
+run_pc
+export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"
+n1="$(wc -l <"$SL.grok" | tr -d ' ')"
+run_pc
+rc=$?
+unset STUB_LAST_grok
+check "plan-consensus: a re-run after consensus on the same text and panel exits 0 and runs no reviewer" "$rc|$(wc -l <"$SL.grok" | tr -d ' ')" "0|$n1"
 # Human-only closing lines must not leak into plan-consensus output (they contradict "never drop a seat").
 HUMAN_RE='drop that one reviewer|do not run a round 7|straight to Gate 1'
-mk_plan_world; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"
+mk_plan_world
+run_pc
+cat "$AH/pc.out" "$AH/pc.err" >"$AH/pc.all"
 check "plan-consensus: a clean round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
-mk_plan_world; export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"; unset STUB_LAST_grok
+mk_plan_world
+export STUB_LAST_grok="VERDICT: findings blockers=0 should_fix=1"
+run_pc
+cat "$AH/pc.out" "$AH/pc.err" >"$AH/pc.all"
+unset STUB_LAST_grok
 check "plan-consensus: a findings round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
-mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"
+mk_plan_world
+: >"$AH/fail_grok"
+export STUB_FAIL_grok="$AH/fail_grok"
+run_pc
+cat "$AH/pc.out" "$AH/pc.err" >"$AH/pc.all"
 check "plan-consensus: a seat-failure round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
 check "plan-consensus: its own exit-3 line says autonomous mode never drops a seat" "$(grep -c 'Run plan-consensus again; autonomous mode never drops a seat\.' "$AH/pc.all")" 1
 unset STUB_FAIL_grok
 PR_OUT="$AH/plain.out"
-printf 'plan\n' | ( export STUB_LOG="$AH/p3.log"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
+printf 'plan\n' | (
+  export STUB_LOG="$AH/p3.log"
+  PATH="$ABIN:$PATH"
+  bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1
+)
 check "plan-review (plain, clean): still prints the human closing lines" "$(grep -c 'straight to Gate 1' "$PR_OUT")|$(grep -c 'do not run a round 7' "$PR_OUT")" "1|1"
-printf 'plan\n' | ( export STUB_LOG="$AH/p4.log" STUB_FAIL_grok="$AH/fail_grok"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1 )
+printf 'plan\n' | (
+  export STUB_LOG="$AH/p4.log" STUB_FAIL_grok="$AH/fail_grok"
+  PATH="$ABIN:$PATH"
+  bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1
+)
 check "plan-review (plain, seat failed): still prints the drop-the-reviewer line" "$(grep -c 'drop that one reviewer' "$PR_OUT")" 1
 unset STUB_FAIL_grok
-mk_plan_world; export STUB_LAST_grok=""; run_pc; cat "$AH/pc.out" "$AH/pc.err" > "$AH/pc.all"; unset STUB_LAST_grok
+mk_plan_world
+export STUB_LAST_grok=""
+run_pc
+cat "$AH/pc.out" "$AH/pc.err" >"$AH/pc.all"
+unset STUB_LAST_grok
 check "plan-consensus: an unusable-verdict round prints none of the human closing lines" "$(grep -cE "$HUMAN_RE" "$AH/pc.all")" 0
 check "plan-consensus: its no-usable-verdict line says autonomous mode never drops a seat" "$(grep -c 'Run plan-consensus again; autonomous mode never drops a seat\.' "$AH/pc.all")" 1
-mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail run_pc; rc=$?
+mk_plan_world
+SHIP_FEATURE_FORCE_SANDBOX_PROBE=fail run_pc
+rc=$?
 check "plan-consensus: a real degraded_note (grok without its sandbox) is recorded as degraded=grok" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|grok"
-mk_plan_world; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
+mk_plan_world
+SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc
+rc=$?
 check "plan-consensus: no degraded_note → nothing recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus")" "0|"
-mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=agy,codex/' "$AH/relay.conf"; SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc; rc=$?
+mk_plan_world
+sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=agy,codex/' "$AH/relay.conf"
+SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc
+rc=$?
 check "plan-consensus: the antigravity seat (named agy) is always recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)|$(awk -F= '$1=="plan_panel"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)" "0|antigravity|antigravity,codex"
-mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=claude,codex,cursor,glm,grok,antigravity/' "$AH/relay.conf"; run_pc; rc=$?
+mk_plan_world
+sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=claude,codex,cursor,glm,grok,antigravity/' "$AH/relay.conf"
+run_pc
+rc=$?
 _c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"
 check "plan-consensus: every supported plan seat's verdict is read back by name (claude, codex, cursor, glm, grok, antigravity)" "$rc|$(for _s in claude codex cursor glm grok antigravity; do awk -F= -v k="seat.$_s" '$1==k{printf "%s ", $2}' "$_c" 2>/dev/null; done)" "0|clean clean clean clean clean clean "
-mk_plan_world; export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
+mk_plan_world
+export STUB_TOUCH_PLAN="$AH/plan.md"
+run_pc
+rc=$?
+unset STUB_TOUCH_PLAN
 check "plan-consensus: a plan edited while the panel reads it → exit 3, no consensus file, no round" "$rc|$(ls "$AH/state/autonomous/consensus" | wc -l | tr -d ' ')|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0|0"
-mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan"; ln -s "$$" "$AH/state/autonomous/plan/$_pk.lock"; run_pc; rc=$?
+mk_plan_world
+_pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"
+mkdir -p "$AH/state/autonomous/plan"
+ln -s "$$" "$AH/state/autonomous/plan/$_pk.lock"
+run_pc
+rc=$?
 check "plan-consensus: a live lock on the plan refuses the run (5) and runs no reviewer" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)" "5|none"
-mk_plan_world; export STUB_LAST_grok=""; run_pc; rc=$?; unset STUB_LAST_grok
+mk_plan_world
+export STUB_LAST_grok=""
+run_pc
+rc=$?
+unset STUB_LAST_grok
 check "plan-consensus: a seat with no VERDICT line → exit 3, no round counted" "$rc|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0"
-mk_plan_world; export STUB_LAST_grok="VERDICT: Clean"; run_pc; rc=$?; unset STUB_LAST_grok
+mk_plan_world
+export STUB_LAST_grok="VERDICT: Clean"
+run_pc
+rc=$?
+unset STUB_LAST_grok
 check "plan-consensus: 'VERDICT: Clean' (wrong case) is unknown → exit 3" "$rc" 3
-mk_plan_world; export STUB_LAST_grok="VERDICT: clean
-VERDICT: clean"; run_pc; rc=$?; unset STUB_LAST_grok
+mk_plan_world
+export STUB_LAST_grok="VERDICT: clean
+VERDICT: clean"
+run_pc
+rc=$?
+unset STUB_LAST_grok
 check "plan-consensus: two verdict lines are unknown → exit 3" "$rc" 3
-mk_plan_world; export STUB_LAST_grok="VERDICT: clean   "; run_pc; rc=$?; unset STUB_LAST_grok
+mk_plan_world
+export STUB_LAST_grok="VERDICT: clean   "
+run_pc
+rc=$?
+unset STUB_LAST_grok
 check "plan-consensus: trailing blanks after the verdict are unknown → exit 3" "$rc" 3
-mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; run_pc; rc=$?
+mk_plan_world
+: >"$AH/fail_grok"
+export STUB_FAIL_grok="$AH/fail_grok"
+run_pc
+rc=$?
 check "plan-consensus: a failed seat → exit 3, no round counted" "$rc|$(cat "$AH/state/autonomous/plan/"*/rounds 2>/dev/null || echo 0)" "3|0"
 unset STUB_FAIL_grok
 # Cap 9 attempts (Fizzy #1351). An attempt is a call that dispatches the panel. On the 9th attempt a
 # result that would say "run again" (exit 2 or 3) is exit 5: no later call can dispatch.
-_want8=""; for _i in 1 2 3 4 5 6 7 8; do _want8="${_want8}3:attempt $_i/9 "; done
-pc_attempts() { local _k="$1"; _seq=""; for _i in $(seq 1 "$_k"); do run_pc; _rc=$?; _seq="$_seq$_rc:$(grep -o 'attempt [0-9]*/9' "$AH/pc.err" | head -n1) "; done; }
-mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8
+_want8=""
+for _i in 1 2 3 4 5 6 7 8; do _want8="${_want8}3:attempt $_i/9 "; done
+pc_attempts() {
+  local _k="$1"
+  _seq=""
+  for _i in $(seq 1 "$_k"); do
+    run_pc
+    _rc=$?
+    _seq="$_seq$_rc:$(grep -o 'attempt [0-9]*/9' "$AH/pc.err" | head -n1) "
+  done
+}
+mk_plan_world
+: >"$AH/fail_grok"
+export STUB_FAIL_grok="$AH/fail_grok"
+pc_attempts 8
 check "plan-consensus: attempts 1 to 8 with a seat failure each exit 3 and print attempt N/9" "$_seq" "$_want8"
-run_pc; rc=$?
+run_pc
+rc=$?
 check "plan-consensus: the 9th seat failure exits 5 (no attempts left), does not say to run again, counts no round" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(cat "$(pc_dir)/rounds" 2>/dev/null || echo 0)" "5|1|0|9|0"
-n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?; unset STUB_FAIL_grok
-check "plan-consensus: a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
-mk_plan_world; export STUB_LAST_grok=""; pc_attempts 8
+n_before="$(wc -l <"$SL.codex" | tr -d ' ')"
+run_pc
+rc=$?
+unset STUB_FAIL_grok
+check "plan-consensus: a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l <"$SL.codex" | tr -d ' ')" "5|$n_before"
+mk_plan_world
+export STUB_LAST_grok=""
+pc_attempts 8
 check "plan-consensus: attempts 1 to 8 with an unusable verdict each exit 3 and print attempt N/9" "$_seq" "$_want8"
-run_pc; rc=$?
+run_pc
+rc=$?
 check "plan-consensus: the 9th unusable verdict exits 5 (no attempts left), does not say to run again, counts no round" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(cat "$(pc_dir)/rounds" 2>/dev/null || echo 0)" "5|1|0|9|0"
-n_before="$(wc -l < "$SL.codex" | tr -d ' ')"; run_pc; rc=$?; unset STUB_LAST_grok
-check "plan-consensus: after nine unusable verdicts a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l < "$SL.codex" | tr -d ' ')" "5|$n_before"
-mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8; unset STUB_FAIL_grok; run_pc; rc=$?
+n_before="$(wc -l <"$SL.codex" | tr -d ' ')"
+run_pc
+rc=$?
+unset STUB_LAST_grok
+check "plan-consensus: after nine unusable verdicts a 10th call exits 5 and runs no reviewer" "$rc|$(wc -l <"$SL.codex" | tr -d ' ')" "5|$n_before"
+mk_plan_world
+: >"$AH/fail_grok"
+export STUB_FAIL_grok="$AH/fail_grok"
+pc_attempts 8
+unset STUB_FAIL_grok
+run_pc
+rc=$?
 check "plan-consensus: eight seat failures, then a clean panel on attempt 9 exits 0 and writes the consensus file" "$rc|$([ -f "$AH/state/autonomous/consensus/plan-$PKEY.consensus" ] && echo written)" "0|written"
-mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 8; unset STUB_FAIL_grok
-export STUB_TOUCH_PLAN="$AH/plan.md"; run_pc; rc=$?; unset STUB_TOUCH_PLAN
+mk_plan_world
+: >"$AH/fail_grok"
+export STUB_FAIL_grok="$AH/fail_grok"
+pc_attempts 8
+unset STUB_FAIL_grok
+export STUB_TOUCH_PLAN="$AH/plan.md"
+run_pc
+rc=$?
+unset STUB_TOUCH_PLAN
 check "plan-consensus: a plan edited under the panel on attempt 9 exits 5 (no attempts left), not 3" "$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")" "5|1|0"
-mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 3; unset STUB_FAIL_grok
-export STUB_LAST_grok="$FINDINGS"; _rcs=""; for _i in 1 2 3 4 5; do run_pc; _rcs="$_rcs$? "; done; run_pc; rc=$?; unset STUB_LAST_grok
+mk_plan_world
+: >"$AH/fail_grok"
+export STUB_FAIL_grok="$AH/fail_grok"
+pc_attempts 3
+unset STUB_FAIL_grok
+export STUB_LAST_grok="$FINDINGS"
+_rcs=""
+for _i in 1 2 3 4 5; do
+  run_pc
+  _rcs="$_rcs$? "
+done
+run_pc
+rc=$?
+unset STUB_LAST_grok
 check "plan-consensus: 3 seat failures, then rounds 1 to 5 exit 2 and round 6 (attempt 9) exits 5 on the round cap" "$_rcs|$rc|$(grep -c 'round 6 still has findings' "$AH/pc.err")" "2 2 2 2 2 |5|1"
-mk_plan_world; : > "$AH/fail_grok"; export STUB_FAIL_grok="$AH/fail_grok"; pc_attempts 4; unset STUB_FAIL_grok
-export STUB_LAST_grok="$FINDINGS"; _rcs=""; for _i in 1 2 3 4; do run_pc; _rcs="$_rcs$? "; done; run_pc; rc=$?; unset STUB_LAST_grok
+mk_plan_world
+: >"$AH/fail_grok"
+export STUB_FAIL_grok="$AH/fail_grok"
+pc_attempts 4
+unset STUB_FAIL_grok
+export STUB_LAST_grok="$FINDINGS"
+_rcs=""
+for _i in 1 2 3 4; do
+  run_pc
+  _rcs="$_rcs$? "
+done
+run_pc
+rc=$?
+unset STUB_LAST_grok
 check "plan-consensus: 4 seat failures, then rounds 1 to 4 exit 2 and round 5 (attempt 9) exits 5 with its verdicts, not 2" "$_rcs|$rc|$(grep -c 'No attempts left' "$AH/pc.err")|$(grep -c 'seat.grok=findings' "$AH/pc.err")|$(grep -ci 'again' "$AH/pc.err")" "2 2 2 2 |5|1|1|0"
 # A call refused before dispatch spends no attempt.
-mk_plan_world; export STUB_LAST_grok="$FINDINGS"; run_pc; unset STUB_LAST_grok
-_a1="$(cat "$(pc_dir)/attempts")"; n_before="$(wc -l < "$SL.codex" | tr -d ' ')"
-sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; rc=$?; mv "$AH/relay.conf.bak" "$AH/relay.conf"
-check "plan-consensus: a refused call (no panel) leaves the attempts file unchanged and runs no reviewer" "$rc|$_a1|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
+mk_plan_world
+export STUB_LAST_grok="$FINDINGS"
+run_pc
+unset STUB_LAST_grok
+_a1="$(cat "$(pc_dir)/attempts")"
+n_before="$(wc -l <"$SL.codex" | tr -d ' ')"
+sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"
+run_pc
+rc=$?
+mv "$AH/relay.conf.bak" "$AH/relay.conf"
+check "plan-consensus: a refused call (no panel) leaves the attempts file unchanged and runs no reviewer" "$rc|$_a1|$(cat "$(pc_dir)/attempts")|$(wc -l <"$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
 # A stub mktemp that always fails: TMPDIR set to a missing directory does not make mktemp fail on macOS
 # (the CI job ran the panel). The first mktemp on the plan-consensus path is the panel's temp dir.
-mkdir -p "$AH/mkbin"; printf '#!/bin/sh\nexit 1\n' > "$AH/mkbin/mktemp"; chmod +x "$AH/mkbin/mktemp"
-( export PATH="$AH/mkbin:$PATH"; run_pc ); rc=$?
-check "plan-consensus: a temp-dir failure exits 5, leaves the attempts file unchanged and runs no reviewer" "$rc|$(grep -c 'cannot create a temp dir' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
+mkdir -p "$AH/mkbin"
+printf '#!/bin/sh\nexit 1\n' >"$AH/mkbin/mktemp"
+chmod +x "$AH/mkbin/mktemp"
+(
+  export PATH="$AH/mkbin:$PATH"
+  run_pc
+)
+rc=$?
+check "plan-consensus: a temp-dir failure exits 5, leaves the attempts file unchanged and runs no reviewer" "$rc|$(grep -c 'cannot create a temp dir' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l <"$SL.codex" | tr -d ' ')" "5|1|1|$n_before"
 # plan-review's own refusals (an invalid setting, its own temp dir) come before the count: plan-review
 # records the attempt right before the first seat starts (Gate 2 of #33).
-( export SHIP_FEATURE_PLAN_TIMEOUT=abc; run_pc ); rc=$?
-check "plan-consensus: a setting plan-review refuses (SHIP_FEATURE_PLAN_TIMEOUT=abc) spends no attempt and runs no reviewer" "$rc|$(grep -c 'invalid SHIP_FEATURE_PLAN_TIMEOUT' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "1|1|1|$n_before"
+(
+  export SHIP_FEATURE_PLAN_TIMEOUT=abc
+  run_pc
+)
+rc=$?
+check "plan-consensus: a setting plan-review refuses (SHIP_FEATURE_PLAN_TIMEOUT=abc) spends no attempt and runs no reviewer" "$rc|$(grep -c 'invalid SHIP_FEATURE_PLAN_TIMEOUT' "$AH/pc.err")|$(cat "$(pc_dir)/attempts")|$(wc -l <"$SL.codex" | tr -d ' ')" "1|1|1|$n_before"
 # A stub mktemp that runs the real one once, then fails: the first call is plan-consensus's temp dir,
 # the second is plan-review's own.
 mkdir -p "$AH/mk2bin"
-printf '#!/bin/sh\nc="$0.count"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$c"; [ "$n" -ge 2 ] && exit 1; exec "%s" "$@"\n' "$(command -v mktemp)" > "$AH/mk2bin/mktemp"; chmod +x "$AH/mk2bin/mktemp"
-( export PATH="$AH/mk2bin:$PATH"; run_pc ); rc=$?
-check "plan-consensus: plan-review's own temp dir failing (the second mktemp) spends no attempt and runs no reviewer" "$rc|$(grep -c 'cannot create temp dir' "$AH/pc.err")|$(cat "$AH/mk2bin/mktemp.count")|$(cat "$(pc_dir)/attempts")|$(wc -l < "$SL.codex" | tr -d ' ')" "1|1|2|1|$n_before"
-printf 'plan\n' | ( export STUB_LOG="$AH/p5.log" SF_ATTEMPT_FILE="$AH/att"; PATH="$ABIN:$PATH"; bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 ); rc=$?
+printf '#!/bin/sh\nc="$0.count"; n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$c"; [ "$n" -ge 2 ] && exit 1; exec "%s" "$@"\n' "$(command -v mktemp)" >"$AH/mk2bin/mktemp"
+chmod +x "$AH/mk2bin/mktemp"
+(
+  export PATH="$AH/mk2bin:$PATH"
+  run_pc
+)
+rc=$?
+check "plan-consensus: plan-review's own temp dir failing (the second mktemp) spends no attempt and runs no reviewer" "$rc|$(grep -c 'cannot create temp dir' "$AH/pc.err")|$(cat "$AH/mk2bin/mktemp.count")|$(cat "$(pc_dir)/attempts")|$(wc -l <"$SL.codex" | tr -d ' ')" "1|1|2|1|$n_before"
+printf 'plan\n' | (
+  export STUB_LOG="$AH/p5.log" SF_ATTEMPT_FILE="$AH/att"
+  PATH="$ABIN:$PATH"
+  bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1
+)
+rc=$?
 check "plan-review: an attempt file with no valid attempt number stops before any seat (5)" "$rc|$([ -e "$AH/p5.log.codex" ] && echo ran || echo none)|$([ -e "$AH/att" ] && echo written || echo none)" "5|none|none"
-mk_plan_world; printf ' \n\t\n' > "$AH/plan.md"; run_pc; rc=$?
+mk_plan_world
+printf ' \n\t\n' >"$AH/plan.md"
+run_pc
+rc=$?
 check "plan-consensus: an empty plan is refused before any counter or lock and runs no reviewer" "$rc|$(ls "$AH/state/autonomous/plan" 2>/dev/null | wc -l | tr -d ' ')|$([ -e "$SL.codex" ] && echo ran || echo none)" "1|0|none"
-mk_plan_world; sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"; run_pc; check "plan-consensus: PLAN_REVIEWERS unset → exit 5" "$?" 5
-mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=, ,/' "$AH/relay.conf"; run_pc; rc=$?
+mk_plan_world
+sed -i.bak '/^PLAN_REVIEWERS/d' "$AH/relay.conf"
+run_pc
+check "plan-consensus: PLAN_REVIEWERS unset → exit 5" "$?" 5
+mk_plan_world
+sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=, ,/' "$AH/relay.conf"
+run_pc
+rc=$?
 check "plan-consensus: PLAN_REVIEWERS that names no seat → exit 5, no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)" "5|none"
-mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=codex,opencode/' "$AH/relay.conf"; run_pc; check "plan-consensus: a relay-only name in PLAN_REVIEWERS → exit 5" "$?" 5
-mk_plan_world; sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=codex,nonesuch/' "$AH/relay.conf"; run_pc; check "plan-consensus: an unknown seat → exit 5" "$?" 5
-mk_plan_world; PLAN_ENV=codex run_pc; rc=$?
+mk_plan_world
+sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=codex,opencode/' "$AH/relay.conf"
+run_pc
+check "plan-consensus: a relay-only name in PLAN_REVIEWERS → exit 5" "$?" 5
+mk_plan_world
+sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=codex,nonesuch/' "$AH/relay.conf"
+run_pc
+check "plan-consensus: an unknown seat → exit 5" "$?" 5
+mk_plan_world
+PLAN_ENV=codex run_pc
+rc=$?
 check "plan-consensus: SHIP_FEATURE_PLAN_REVIEWERS narrower than the relay config → exit 5, no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)|$(grep -c 'differs from PLAN_REVIEWERS' "$AH/pc.err")" "5|none|1"
-mk_plan_world; PLAN_ENV="grok, codex" run_pc; check "plan-consensus: an override naming the same set as the relay config runs" "$?" 0
-mk_plan_world; _pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"; mkdir -p "$AH/state/autonomous/plan/$_pk"; chmod 555 "$AH/state/autonomous/plan/$_pk"; run_pc; rc=$?; chmod 755 "$AH/state/autonomous/plan/$_pk"
+mk_plan_world
+PLAN_ENV="grok, codex" run_pc
+check "plan-consensus: an override naming the same set as the relay config runs" "$?" 0
+mk_plan_world
+_pk="$(printf '%s' "$(cd "$AH" && pwd -P)/plan.md" | sha256_of)"
+mkdir -p "$AH/state/autonomous/plan/$_pk"
+chmod 555 "$AH/state/autonomous/plan/$_pk"
+run_pc
+rc=$?
+chmod 755 "$AH/state/autonomous/plan/$_pk"
 check "plan-consensus: an unwritable attempt counter stops before dispatch (5), no reviewer ran" "$rc|$([ -e "$SL.codex" ] && echo ran || echo none)|$(grep -c 'cannot record the attempt' "$AH/pc.err")" "5|none|1"
-mk_plan_world; run_pc; cp "$AH/plan.md" "$AH/plan-copy.md"; n1="$(wc -l < "$SL.codex" | tr -d ' ')"; PL="$AH/plan-copy.md" run_pc; rc=$?
-check "plan-consensus: the same text at another path is reviewed again (no reuse across paths)" "$rc|$([ "$(wc -l < "$SL.codex" | tr -d ' ')" -gt "$n1" ] && echo reviewed)" "0|reviewed"
-mk_plan_world; run_pc --reviewers codex; check "plan-consensus refuses --reviewers (7)" "$?" 7
-mk_plan_world; ( export SHIP_FEATURE_AUTONOMOUS=1 HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state"; bash "$CLI" plan-consensus - --autonomous </dev/null >/dev/null 2>&1 ); check "plan-consensus refuses stdin" "$?" 1
-mk_plan_world; AUTO_ENV=0 run_pc; check "plan-consensus without the env key is refused (7)" "$?" 7
-mk_plan_world; : > "$KILL"; run_pc; check "plan-consensus with the kill switch is refused (7)" "$?" 7
-mk_plan_world; ( export HOME="$AH" SHIP_FEATURE_AUTONOMOUS=1 SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH" SHIP_FEATURE_PLAN_REVIEWERS=codex,grok; bash "$CLI" plan-consensus "$PL" >/dev/null 2>&1 ); check "plan-consensus without --autonomous is refused (7)" "$?" 7
+mk_plan_world
+run_pc
+cp "$AH/plan.md" "$AH/plan-copy.md"
+n1="$(wc -l <"$SL.codex" | tr -d ' ')"
+PL="$AH/plan-copy.md" run_pc
+rc=$?
+check "plan-consensus: the same text at another path is reviewed again (no reuse across paths)" "$rc|$([ "$(wc -l <"$SL.codex" | tr -d ' ')" -gt "$n1" ] && echo reviewed)" "0|reviewed"
+mk_plan_world
+run_pc --reviewers codex
+check "plan-consensus refuses --reviewers (7)" "$?" 7
+mk_plan_world
+(
+  export SHIP_FEATURE_AUTONOMOUS=1 HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state"
+  bash "$CLI" plan-consensus - --autonomous </dev/null >/dev/null 2>&1
+)
+check "plan-consensus refuses stdin" "$?" 1
+mk_plan_world
+AUTO_ENV=0 run_pc
+check "plan-consensus without the env key is refused (7)" "$?" 7
+mk_plan_world
+: >"$KILL"
+run_pc
+check "plan-consensus with the kill switch is refused (7)" "$?" 7
+mk_plan_world
+(
+  export HOME="$AH" SHIP_FEATURE_AUTONOMOUS=1 SHIP_FEATURE_STATE_DIR="$AH/state" STUB_LOG="$SL" PR_RELAY_CONFIG="$AH/relay.conf" PATH="$ABIN:$PATH" SHIP_FEATURE_PLAN_REVIEWERS=codex,grok
+  bash "$CLI" plan-consensus "$PL" >/dev/null 2>&1
+)
+check "plan-consensus without --autonomous is refused (7)" "$?" 7
 
 # The autonomous texts no longer encode the 2-round cap (Fizzy #1351). Each extract is asserted
 # non-empty first, so a broken extract cannot pass by matching nothing. The code extract runs from each
