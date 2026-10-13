@@ -3,6 +3,16 @@
 # pr-review-relay; no network. Run: bash test/test-ship-feature.sh
 set -uo pipefail
 
+# The own-gate cases at the end run bin/ci, and bin/ci runs this suite as its last stage. Those
+# cases stop bin/ci before that stage, but a broken bin/ci (a dropped stage) would let one reach it,
+# and the suite would then start itself again and again with no end. This guard turns that into a
+# fast failure: a suite started inside a running suite exits 2 at once.
+if [ -n "${SHIP_FEATURE_SUITE_RUNNING:-}" ]; then
+  echo "ship-feature tests: started inside a running suite (a bin/ci case reached the tests stage) — refusing" >&2
+  exit 2
+fi
+export SHIP_FEATURE_SUITE_RUNNING=1
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLI="$HERE/../bin/ship-feature"
 SCAN="$HERE/../scripts/scan-personal-data.sh"
@@ -4915,8 +4925,13 @@ check "WORKFLOW.md documents the kill switch, Plan-Key and the disposition/dispu
 # reaches the suite stage of the real checkout: the hook cases run a stub bin/ci, and the bin/ci
 # cases either fail before the suite stage or run a copy of bin/ci whose ROOT is a temp repo with a
 # stub suite. Every fixture lives under $WORK, never in the checkout, so the hook's "the gate
-# created untracked files" check cannot fire on a leftover.
+# created untracked files" check cannot fire on a leftover. If a broken bin/ci lets a case reach
+# the suite stage anyway, the guard at the top of this file stops the nested suite at once.
 OWN="$HERE/.."
+
+bash "$HERE/test-ship-feature.sh" >"$WORK/nested.out" 2>&1
+_nested_rc=$?
+check "own gate: a suite started inside a running suite exits 2 at once and says why" "$_nested_rc|$(grep -c 'started inside a running suite' "$WORK/nested.out" | tr -d ' ')" "2|1"
 
 _own_modes="$(git -C "$OWN" ls-files -s -- .githooks/pre-push bin/ci | awk '{ printf "%s %s;", $1, $4 }')"
 check "own gate: .githooks/pre-push and bin/ci are in the index with mode 100755" "$_own_modes" "100755 .githooks/pre-push;100755 bin/ci;"
@@ -5080,7 +5095,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=674
+EXPECTED=675
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
