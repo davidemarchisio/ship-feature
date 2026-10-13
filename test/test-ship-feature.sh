@@ -5038,6 +5038,20 @@ check "own hook H14: bin/ci passes but marks a file assume-unchanged and edits i
 git -C "$HK/repo" update-index --no-assume-unchanged f
 git -C "$HK/repo" checkout -q -- f
 : >"$HK/act"
+# An annotated tag pushes the tag object's id; the hook peels it to the commit, so a release tag at
+# HEAD goes through and a tag at any other commit is refused.
+git -C "$HK/repo" tag -a v1 -m v1
+hk_push refs/tags/v1
+check "own hook H15: an annotated tag at HEAD -> goes through, bin/ci ran" "$_hk_rc|$(hk_ran)|$(git -C "$HK/remote.git" rev-parse -q --verify 'refs/tags/v1^{commit}' || echo none)" "0|ran|$(git -C "$HK/repo" rev-parse HEAD)"
+git -C "$HK/repo" tag -a v0 -m v0 HEAD~1
+hk_push refs/tags/v0
+check "own hook H16: an annotated tag at another commit -> refused before bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(git -C "$HK/remote.git" rev-parse -q --verify refs/tags/v0 || echo none)|$(hk_said 'these refs are not your checked-out HEAD')" "nonzero|not-run|none|said"
+# A listing that fails must refuse, not read as "no marks". A corrupt index makes git ls-files fail.
+cp "$HK/repo/.git/index" "$HK/index.bak"
+printf 'not an index' >"$HK/repo/.git/index"
+hk_push HEAD:main
+check "own hook H17: git ls-files fails -> refused before bin/ci, with the hook's own reason" "$_hk_rc|$(hk_ran)|$(hk_remote)|$(hk_said 'git ls-files failed')" "nonzero|not-run|$_hk_h7|said"
+cp "$HK/index.bak" "$HK/repo/.git/index"
 
 # bin/ci, with stub tools first on PATH. Each stub logs EVERY call, --version included, answers
 # --version as the real tool does with the version the case sets, and otherwise exits with the code
@@ -5119,6 +5133,10 @@ _r="$(ci_repo nopin "$(printf '[tools]\nshellcheck = "%s"\n' "$_sc_pin")")"
 ci_commit "$_r"
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" ci_run "$_r/bin/ci"
 check "own bin/ci C6: mise.toml with no shfmt pin -> fails and names it, before any tool is called" "$_ci_rc|$(ci_said 'mise.toml must pin shfmt exactly once')|$(ci_calls shellcheck)|$(ci_calls shfmt)" "nonzero|said|0|0"
+_r="$(ci_repo duppin "$(printf '[tools]\nshellcheck = "%s"\nshfmt = "%s"\nshfmt = ""\n' "$_sc_pin" "$_fmt_pin")")"
+ci_commit "$_r"
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" ci_run "$_r/bin/ci"
+check "own bin/ci C6b: mise.toml with a second, empty shfmt pin -> fails and names it, before any tool is called" "$_ci_rc|$(ci_said 'mise.toml must pin shfmt exactly once')|$(ci_calls shellcheck)|$(ci_calls shfmt)" "nonzero|said|0|0"
 
 _r="$(ci_repo syntax "$(cat "$OWN/mise.toml")")"
 printf '#!/usr/bin/env bash\nif then\n' >"$_r/scripts/bad.sh"
@@ -5145,7 +5163,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=683
+EXPECTED=687
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

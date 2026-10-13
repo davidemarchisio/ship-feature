@@ -105,8 +105,13 @@ fi
 # bytes that are not the commit being pushed. Refuse while any file has such a mark, before the gate
 # and again after it.
 refuse_marked() { # refuse_marked <who>
-  local marked
-  marked="$(git ls-files -v | LC_ALL=C grep -E '^([a-z]|S) ' | cut -c3- || true)"
+  local listing marked
+  # A failed listing must refuse, not read as "no marks": then nothing at all could see such an edit.
+  listing="$(git ls-files -v)" || {
+    echo "pre-push: git ls-files failed — cannot check for files marked assume-unchanged or skip-worktree." >&2
+    exit 1
+  }
+  marked="$(printf '%s\n' "$listing" | LC_ALL=C awk '/^([a-z]|S) / { print substr($0, 3) }')"
   [ -z "$marked" ] && return 0
   echo "pre-push: $1 tracked files marked assume-unchanged or skip-worktree — git diff cannot see edits to them, so a passing gate would not prove the pushed code:" >&2
   printf '%s\n' "$marked" | sed 's/^/  /' >&2

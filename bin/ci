@@ -35,12 +35,16 @@ fail() {
 }
 
 # The pinned version of one tool: exactly one non-empty `<key> = "<version>"` line in mise.toml.
-# Basic regex only (no -E, \s or \+), so BSD sed on macOS reads it the same way.
+# Every line that sets the key counts, whatever its value: a second, empty pin is a duplicate key
+# that mise refuses, so it must not hide behind the valid one. Basic regex only (no -E, \s or \+),
+# so BSD grep and sed on macOS read it the same way.
 pin() {
   local key="$1" v n
+  n="$(grep -c "^${key}[[:space:]]*=" mise.toml || true)"
   v="$(sed -n "s/^${key}[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" mise.toml)"
-  n="$(printf '%s' "$v" | grep -c . || true)"
-  [ "$n" = 1 ] || fail tools "mise.toml must pin $key exactly once with a non-empty version (found $n)"
+  if [ "$n" != 1 ] || [ -z "$v" ]; then
+    fail tools "mise.toml must pin $key exactly once with a non-empty version (found $n lines that set it)"
+  fi
   printf '%s' "$v"
 }
 
