@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Every check this repo has, in one command. .githooks/pre-push runs it on each push, and the CI
+# workflow runs it on ubuntu and macOS.
+#
+# Stages, in order; the first failure stops the run and names its stage:
+#   tools      shellcheck and shfmt on PATH at exactly the versions pinned in mise.toml
+#   syntax     bash -n on every shell file (on macOS, that is the Bash 3.2 parse)
+#   lint       shellcheck -S warning on every shell file
+#   format     shfmt -i 2 -ci -d on every shell file
+#   leak scan  scripts/scan-generic.sh
+#   tests      test/test-ship-feature.sh
+#
+# Exact pins, because another shfmt can format differently and another shellcheck can report
+# differently, and the hook and CI must agree. `mise install` in the repo gets both; without mise,
+# install those exact versions. A missing or wrong tool is a refused push: install it, never skip
+# the hook.
+#
+# CI_MODE is accepted, not implemented. The hook passes CI_MODE=push, CI passes full, and a run by
+# hand passes nothing; all three run every stage. The suite is the only check of the code and takes
+# about 2 minutes, so a faster push mode would have to drop part of it.
+#
+# Shell files are found, not listed: every tracked file that ends in .sh or whose first line is a
+# sh/bash shebang. A new script is covered with no edit here.
+#
+# Bash 3.2-safe: macOS runs it with /bin/bash.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+stage() { printf '\n==> %s\n' "$1"; }
+fail() {
+  echo "✖ bin/ci [$1]: $2" >&2
+  exit 1
+}
+
+# The pinned version of one tool: exactly one non-empty `<key> = "<version>"` line in mise.toml.
+# Basic regex only (no -E, \s or \+), so BSD sed on macOS reads it the same way.
+pin() {
+  local key="$1" v n
+  v="$(sed -n "s/^${key}[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" mise.toml)"
+  n="$(printf '%s' "$v" | grep -c . || true)"
+  [ "$n" = 1 ] || fail tools "mise.toml must pin $key exactly once with a non-empty version (found $n)"
+  printf '%s' "$v"
+}
+
+stage tools
+[ -f mise.toml ] || fail tools "mise.toml is missing"
+# Both pins are read before any tool runs.
+want_sc="$(pin shellcheck)"
+want_fmt="$(pin shfmt)"
+hint="run 'mise install' in the repo, or install that exact version"
+command -v shellcheck >/dev/null 2>&1 || fail tools "shellcheck is not on PATH; need $want_sc — $hint"
+command -v shfmt >/dev/null 2>&1 || fail tools "shfmt is not on PATH; need $want_fmt — $hint"
+# 2>&1: the compare must not depend on which stream a build prints its version to.
+out="$(shellcheck --version 2>&1)" || true
+got_sc="$(printf '%s\n' "$out" | sed -n 's/^version: //p')"
+[ "$got_sc" = "$want_sc" ] || fail tools "shellcheck is ${got_sc:-unknown}, mise.toml pins $want_sc — $hint"
+out="$(shfmt --version 2>&1)" || true
+got_fmt="$(printf '%s\n' "$out" | head -n 1)"
+[ "$got_fmt" = "v$want_fmt" ] || fail tools "shfmt is ${got_fmt:-unknown}, mise.toml pins v$want_fmt — $hint"
+echo "  shellcheck $got_sc, shfmt $got_fmt"
+
+# The file list. A redirect, not a pipe, so the loop runs in this shell and keeps the list; the
+# loop ends at EOF through its while test, which set -e does not treat as a failure. Each path gets
+# a ./ prefix, so a file whose name starts with - cannot read as an option.
+tmpf="$(mktemp "${TMPDIR:-/tmp}/bin-ci.XXXXXX")"
+trap 'rm -f -- "$tmpf"' EXIT
+git ls-files -z >"$tmpf" || fail files "git ls-files failed"
+shebang='^#![[:space:]]*/[^[:space:]]*/(env[[:space:]]+)?(ba)?sh([[:space:]]|$)'
+files=()
+nfiles=0
+while IFS= read -r -d '' f; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    *.sh) ;;
+    *) if ! head -n 1 -- "$f" | grep -Eq "$shebang"; then continue; fi ;;
+  esac
+  files+=("./$f")
+  nfiles=$((nfiles + 1))
+done <"$tmpf"
+# Never expand an empty "${files[@]}" (Bash 3.2 with set -u aborts on it), and never run the tools
+# with no operands (they would read stdin).
+[ "$nfiles" -gt 0 ] || fail files "found no shell files"
+
+stage "syntax ($nfiles files)"
+for f in "${files[@]}"; do
+  bash -n "$f" || fail syntax "bash -n failed on $f"
+done
+
+stage lint
+shellcheck -S warning "${files[@]}" || fail lint "shellcheck -S warning reported the findings above"
+
+stage format
+shfmt -i 2 -ci -d "${files[@]}" || fail format "shfmt -i 2 -ci found the differences above; run it with -w instead of -d"
+
+stage "leak scan"
+bash scripts/scan-generic.sh || fail "leak scan" "scripts/scan-generic.sh found the leaks above"
+
+stage tests
+bash test/test-ship-feature.sh || fail tests "test/test-ship-feature.sh failed"
+
+printf '\n✔ bin/ci: every stage passed\n'
