@@ -435,8 +435,8 @@ cmd_preflight() {
   # directory literally named "worktrees" would trip.)
   git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
   common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
-  # `CDPATH=` disables CDPATH lookups and the `./` prefix stops a value like `-` being read as an option.
-  case "$common_dir" in /*) : ;; *) common_dir=$(CDPATH= cd "./$common_dir" 2>/dev/null && pwd) ;; esac
+  # `CDPATH=''` disables CDPATH lookups and the `./` prefix stops a value like `-` being read as an option.
+  case "$common_dir" in /*) : ;; *) common_dir=$(CDPATH='' cd "./$common_dir" 2>/dev/null && pwd) ;; esac
   if [ -n "$git_dir" ] && [ "$git_dir" != "$common_dir" ]; then
     ok "in a linked worktree"
   else
@@ -728,6 +728,7 @@ $SF_VERDICT_RULES"
   # kill_tree walks each backgrounded job's whole descendant tree (subshell → $() →
   # timeout → agent), which a group-kill can't reach because `timeout` re-groups its child.
   # `trap -` first, so a second ^C exits immediately.
+  # shellcheck disable=SC2154 # j is assigned by the for loop inside this same trap string
   trap 'trap - INT TERM; for j in $(jobs -p 2>/dev/null); do kill_tree "$j"; done; exit 130' INT TERM
   skey() { printf 'k_%s' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"; }
 
@@ -1832,7 +1833,7 @@ sf_gate_pr() {
 
 # Check 4: the verdict file of the HIGHEST round, for this repo and PR, on the current head.
 sf_gate_verdict() {
-  local pr="$1" vdir f n best=0 bestf="" cfg want have s conf author
+  local pr="$1" vdir f n best=0 bestf="" cfg want have s author
   vdir="$(sf_auto_state)/$(printf '%s' "$SF_G_REPO" | tr '/' '_')/pr-$pr"
   for f in "$vdir"/round-*.verdict; do
     [ -e "$f" ] || continue

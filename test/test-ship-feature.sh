@@ -161,6 +161,7 @@ printf '.claude/\n' >> "$MAIN/.git/info/exclude"
 # sf_isolate_git points core.hooksPath (environment config, key 2) at a directory that does not exist, so
 # no ambient hook runs in a fixture. A preflight that must find the gate overrides that one value for
 # that one call: `pf` is preflight with core.hooksPath=.githooks.
+# shellcheck disable=SC2120 # "$@" is the helper's interface; today every call passes none
 pf() { GIT_CONFIG_VALUE_2=.githooks bash "$CLI" preflight "$@"; }
 
 # preflight: correct worktree setup → pass
@@ -395,7 +396,7 @@ if printf '%s' "$out" | grep -q -- "--reviewers x,y" && ! printf '%s' "$out" | g
 # the --reviewers= form is rejected with a clear error (relay doesn't accept it)
 ( PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" bash "$CLI" relay --author claude --reviewers=x >/dev/null 2>&1 ); check "relay rejects the --reviewers= form" $? 1
 # an explicitly empty env value disables config injection (env-defined wins)
-out=$(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" SHIP_FEATURE_REVIEWERS= bash "$CLI" relay --author claude 2>/dev/null)
+out=$(PATH="$BIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/config" SHIP_FEATURE_REVIEWERS='' bash "$CLI" relay --author claude 2>/dev/null)
 if ! printf '%s' "$out" | grep -q -- "--reviewers"; then echo "  ok   [-] empty SHIP_FEATURE_REVIEWERS env disables injection"; PASS=$((PASS+1)); else echo "  FAIL empty env did not disable injection"; FAIL=$((FAIL+1)); fi
 
 # --- install.sh --copy produces a real WORKFLOW.md (not a symlink) ------------
@@ -703,7 +704,7 @@ if [ ! -e "$mkfail/used" ]; then : > "$mkfail/used"; exec /usr/bin/mktemp "\$@";
 exit 1
 STUB
 chmod +x "$mkfail/mktemp"
-fc_out=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$mkfail:$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>&1); fc_rc=$?
+fc_out=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$mkfail:$PBIN:$PATH" bash "$CLI" plan-review --reviewers glm 2>&1)
 if printf '%s' "$fc_out" | grep -q 'REVIEW-glm'; then
   echo "  FAIL the seat ran with no isolated cwd — in the checkout it was supposed to avoid"; FAIL=$((FAIL+1))
 else
@@ -785,7 +786,7 @@ printf '%s' "$sh1" | grep 'REVIEW-cursor' | grep -q -- "--model composer-9.9" \
 # "disable" — the SHIP_FEATURE_* keys use the other rule on purpose. With the wrong one,
 # CURSOR_REVIEW_MODEL= left ship-feature on its built-in default while pr-review-relay used the
 # shared value: same inputs, two different models.
-sh6=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared1" CURSOR_REVIEW_MODEL= bash "$CLI" plan-review --reviewers cursor 2>/dev/null)
+sh6=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared1" CURSOR_REVIEW_MODEL='' bash "$CLI" plan-review --reviewers cursor 2>/dev/null)
 printf '%s' "$sh6" | grep 'REVIEW-cursor' | grep -q -- "--model composer-9.9" \
   && { echo "  ok   [-] an empty environment pin does not block the shared file"; PASS=$((PASS+1)); } \
   || { echo "  FAIL an empty env pin blocked the shared config"; FAIL=$((FAIL+1)); }
@@ -829,7 +830,7 @@ printf '%s' "$sh11" | grep -q 'REVIEW-codex' && ! printf '%s' "$sh11" | grep -q 
   || { echo "  FAIL the shared panel overrode ship-feature's own"; FAIL=$((FAIL+1)); }
 # An explicitly EMPTY environment value still disables the injected quorum — that is what the
 # ${VAR+x} rule is for, and it must survive a value sitting in the shared file.
-sh12=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" SHIP_FEATURE_REVIEWERS= bash "$CLI" relay --author claude 2>/dev/null)
+sh12=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" SHIP_FEATURE_REVIEWERS='' bash "$CLI" relay --author claude 2>/dev/null)
 printf '%s' "$sh12" | grep -q -- "--reviewers" \
   && { echo "  FAIL an empty SHIP_FEATURE_REVIEWERS no longer disables the injected quorum"; FAIL=$((FAIL+1)); } \
   || { echo "  ok   [-] an empty environment quorum still disables injection"; PASS=$((PASS+1)); }
@@ -847,7 +848,7 @@ printf '%s' "$sh14" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9
   || { echo "  FAIL a repeated model pin kept the first value"; FAIL=$((FAIL+1)); }
 # The empty-environment contract, on the OTHER key. PLAN_REVIEWERS is its own line of code, so a
 # typo there would pass every test above.
-sh15=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" SHIP_FEATURE_PLAN_REVIEWERS= SHIP_FEATURE_REVIEWERS=codex bash "$CLI" plan-review 2>/dev/null)
+sh15=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared7" SHIP_FEATURE_PLAN_REVIEWERS='' SHIP_FEATURE_REVIEWERS=codex bash "$CLI" plan-review 2>/dev/null)
 printf '%s' "$sh15" | grep -q 'REVIEW-codex' && ! printf '%s' "$sh15" | grep -q 'REVIEW-glm' \
   && { echo "  ok   [-] an empty plan panel falls back to the quorum, not to the shared file"; PASS=$((PASS+1)); } \
   || { echo "  FAIL an empty SHIP_FEATURE_PLAN_REVIEWERS did not survive the shared file"; FAIL=$((FAIL+1)); }
@@ -903,7 +904,7 @@ printf '%s' "$pnd" | grep -q '→ grok reviewing… (model=grok-4.6, effort=medi
   && { echo "  ok   [-] the dispatch line shows grok, cursor, glm and gemini's resolved pins"; PASS=$((PASS+1)); } \
   || { echo "  FAIL a dispatch line is missing or wrong: $(printf '%s' "$pnd" | grep '→')"; FAIL=$((FAIL+1)); }
 # The environment beats the shared file, per key; an EMPTY environment value does not block it.
-pn1=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins" CODEX_REVIEW_MODEL=env-codex CLAUDE_REVIEW_EFFORT=low CODEX_REVIEW_EFFORT= bash "$CLI" plan-review --reviewers claude,codex 2>&1)
+pn1=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins" CODEX_REVIEW_MODEL=env-codex CLAUDE_REVIEW_EFFORT=low CODEX_REVIEW_EFFORT='' bash "$CLI" plan-review --reviewers claude,codex 2>&1)
 printf '%s' "$pn1" | grep 'REVIEW-codex' | grep -qF -- '-m env-codex -c model_reasoning_effort="medium" ' \
   && printf '%s' "$pn1" | grep 'REVIEW-claude' | grep -q -- "--model claude-pin-1 --effort low " \
   && { echo "  ok   [-] an environment pin beats the shared file, and an empty one does not block it"; PASS=$((PASS+1)); } \
@@ -941,7 +942,7 @@ STUB
 chmod +x "$BIN/pr-review-relay"
 printf 'MODEL_claude=c1\nEFFORT_claude=high\nMODEL_codex=file-m\nEFFORT_codex=medium\nMODEL_grok=g1\nEFFORT_grok=low\n' > "$CFGDIR/shared-pins-relay"
 rp=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" bash "$CLI" relay --author claude 2>/dev/null)
-rp2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" CODEX_REVIEW_MODEL= bash "$CLI" relay --author claude 2>/dev/null)
+rp2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" CODEX_REVIEW_MODEL='' bash "$CLI" relay --author claude 2>/dev/null)
 cp "$WORK/relay-stub-backup-pins" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
 [ "$(printf '%s\n' "$rp" | grep -c '=unset$')" = 6 ] \
   && { echo "  ok   [-] the shared pins are not pushed into the relay child"; PASS=$((PASS+1)); } \
@@ -1084,7 +1085,7 @@ printf '%s' "$dep7" | grep -qE 'KIMI3_REVIEW_MODEL|MODEL_kimi3' \
 # 7. An EXPORTED BUT EMPTY old key is still a dead name in a profile, and is still reported. This
 # inverts the convention every model pin uses (empty means "not configured"), so it gets its own
 # assertion — the check is ${VAR+x}, and a regression to ${VAR:-} would go unnoticed otherwise.
-depe=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null KIMI3_REVIEW_MODEL= bash "$CLI" plan-review --reviewers glm 2>&1)
+depe=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null KIMI3_REVIEW_MODEL='' bash "$CLI" plan-review --reviewers glm 2>&1)
 printf '%s' "$depe" | grep -q 'KIMI3_REVIEW_MODEL is set in the ENVIRONMENT' \
   && { echo "  ok   [-] an exported-but-empty old key is still reported"; PASS=$((PASS+1)); } \
   || { echo "  FAIL an exported-but-empty KIMI3_REVIEW_MODEL was silent"; FAIL=$((FAIL+1)); }
@@ -1238,7 +1239,7 @@ printf 'AGENT_TIMEOUT=470\n' > "$CFGDIR/shared-t5"
 printf '#!/usr/bin/env bash\necho "RELAYENV SF=${SHIP_FEATURE_PLAN_TIMEOUT:-unset} PR=${PR_RELAY_AGENT_TIMEOUT:-unset}"\nexit 0\n' > "$BIN/pr-review-relay.tmo"; chmod +x "$BIN/pr-review-relay.tmo"
 cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-tmo"; cp "$BIN/pr-review-relay.tmo" "$BIN/pr-review-relay"
 tmo1=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t5" SHIP_FEATURE_CONFIG=/dev/null bash "$CLI" relay --author claude 2>/dev/null)
-tmo2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t5" SHIP_FEATURE_CONFIG=/dev/null SHIP_FEATURE_PLAN_TIMEOUT= bash "$CLI" relay --author claude 2>/dev/null)
+tmo2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-t5" SHIP_FEATURE_CONFIG=/dev/null SHIP_FEATURE_PLAN_TIMEOUT='' bash "$CLI" relay --author claude 2>/dev/null)
 cp "$WORK/relay-stub-backup-tmo" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
 printf '%s' "$tmo1" | grep -q 'SF=unset PR=unset' \
   && { echo "  ok   [-] the mapped timeout is not exported into pr-review-relay"; PASS=$((PASS+1)); } \
@@ -1253,7 +1254,7 @@ printf '%s' "$tmo2" | grep -q 'SF=unset' \
 # config put SF=420 in the child's environment. Two assignments, two chances to leak, two tests.
 printf 'SHIP_FEATURE_PLAN_TIMEOUT=420\n' > "$CFGDIR/own-t2"
 cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-tmo3"; cp "$BIN/pr-review-relay.tmo" "$BIN/pr-review-relay"
-tmo3=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG=/dev/null SHIP_FEATURE_CONFIG="$CFGDIR/own-t2" SHIP_FEATURE_PLAN_TIMEOUT= bash "$CLI" relay --author claude 2>/dev/null)
+tmo3=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG=/dev/null SHIP_FEATURE_CONFIG="$CFGDIR/own-t2" SHIP_FEATURE_PLAN_TIMEOUT='' bash "$CLI" relay --author claude 2>/dev/null)
 cp "$WORK/relay-stub-backup-tmo3" "$BIN/pr-review-relay"; chmod +x "$BIN/pr-review-relay"
 printf '%s' "$tmo3" | grep -q 'SF=unset' \
   && { echo "  ok   [-] ship-feature's OWN config does not leak the timeout into the child either"; PASS=$((PASS+1)); } \
@@ -1657,7 +1658,7 @@ printf '%s' "$out" | grep -q 'REVIEW-grok' && { echo "  ok   [-] plan-review run
 ( printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers opencode >/dev/null 2>&1 ); check "plan-review with only relay-only agents → error (1)" $? 1
 
 # no panel at all (unset + none passed) → usage error (1)
-( printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS= bash "$CLI" plan-review >/dev/null 2>&1 ); check "plan-review with no panel → usage error (1)" $? 1
+( printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_REVIEWERS='' bash "$CLI" plan-review >/dev/null 2>&1 ); check "plan-review with no panel → usage error (1)" $? 1
 
 # an empty plan → error (1)
 ( printf '' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1 ); check "plan-review on an empty plan → error (1)" $? 1
@@ -2273,6 +2274,7 @@ sf_plan_tool_clause() {  # sf_plan_tool_clause <label> <extended-regex>
 # canonical, but nobody reads it first — so a rule that lives only there reaches
 # nobody, and the plan goes back to the scratchpad that a reboot wipes.
 for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md adapters/skill/SKILL.md; do
+  # shellcheck disable=SC2088 # a literal tilde: the adapter text holds the path as written
   if grep -qF '~/.config/ship-feature/plans/' "$HERE/../$adapter"; then
     echo "  ok   [-] $adapter names the durable plans directory"; PASS=$((PASS+1))
   else
@@ -2362,6 +2364,7 @@ MODE644_40="$(git -C "$GREPO" rev-parse HEAD)"
 SYML40="$(git -C "$GREPO" rev-parse HEAD)"
 git -C "$GREPO" checkout -q "$HEAD40"; mkdir -p "$GREPO/sub/dir"
 OTHER40=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+# shellcheck disable=SC2034 # used inside the single-quoted gate_case mutations that are eval'd (two Plan-Key lines; a wrong context_sha256)
 OTHER64=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 cat > "$ABIN/gh" <<'GHSTUB'
 #!/usr/bin/env bash
@@ -2472,6 +2475,7 @@ mk_world() {
   printf 'cccccccccccccccccccccccccccccccccccccccc\n' > "$GH/pr_mergeCommit"
   KILL="$AH/.config/ship-feature/AUTONOMOUS_OFF"
 }
+# shellcheck disable=SC2120 # "$@" is the helper's interface (run_gate [extra args]); today no call passes any
 run_gate() { # run_gate [extra args]; env: SHIP_FEATURE_AUTONOMOUS unless AUTO_ENV=0; runs in GATE_CWD, else $GREPO
   ( cd "${GATE_CWD:-$GREPO}" || exit 99; export HOME="$AH" SHIP_FEATURE_STATE_DIR="$AH/state" GHF="$GH" SHIP_FEATURE_MERGEABLE_SLEEP=0 PR_RELAY_CONFIG="$AH/relay.conf" SHIP_FEATURE_PLAN_REVIEWERS="${GATE_PANEL:-codex,grok}" PATH="$ABIN:$PATH"
     [ "${AUTO_ENV:-1}" = 1 ] && export SHIP_FEATURE_AUTONOMOUS=1
@@ -2599,6 +2603,7 @@ gate_case "a sensitive-paths file that cannot be read" 6 'printf "docs/*\n" > "$
 gate_case "an empty sensitive-paths file is refused, not read as allow-all" 6 ': > "$AH/.config/ship-feature/sensitive-paths"; printf ".github/workflows/ci.yml\n" > "$GH/diff"' 'no active pattern'
 gate_case "a sensitive-paths file of comments and blanks is refused" 6 'printf "# none\n\n   \n" > "$AH/.config/ship-feature/sensitive-paths"' 'no active pattern'
 mk_world; printf 'src/a$(touch %s/pwned1)`touch %s/pwned2`.js\n' "$AH" "$AH" > "$GH/diff"; printf 'x$(touch %s/pwned3)\n*$(touch*\n' "$AH" > "$AH/.config/ship-feature/sensitive-paths"; run_gate; rc=$?
+# shellcheck disable=SC2010 # $AH is a temp dir this test controls; the check counts names that contain pwned
 check "merge-gate: \$(...) and backticks in a path or a pattern are never run, and the path is matched as written" "$rc|$(ls "$AH" | grep -c pwned)|$(grep -c 'sensitive path' "$AH/gate.err")" "6|0|1"
 gate_case "a rename OUT of a protected path is caught by its old name" 6 'printf "src/a.js\ndocs/ci.yml\t.github/workflows/ci.yml\n" > "$GH/diff"' 'sensitive path \(\.github/workflows/ci\.yml'
 gate_case "a rename INTO a protected path is caught by its new name" 6 'printf "bin/mac-ios-build.sh\tsrc/build.sh\n" > "$GH/diff"' 'sensitive path \(bin/mac-ios-build\.sh'
