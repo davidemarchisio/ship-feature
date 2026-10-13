@@ -1,0 +1,6 @@
+# Commits that only reformat code. git blame can skip them:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub reads this file on its own.
+
+# shfmt -i 2 -ci on every shell file (shfmt v3.14.1, tool output only)
+485f9e022e8e211b3cd89d3a560a9d38c9af2ee3
