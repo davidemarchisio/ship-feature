@@ -325,12 +325,41 @@ which arrived in 2.31. On an older git it refuses to run rather than applying ha
 reporting green. That isolation is why the suite behaves the same whether or not your commit signing
 is on, and why running it from a git hook cannot write into the repository being tested.
 
+The suite is the last stage of the full gate, `bin/ci`:
+
+```bash
+bin/ci   # syntax (bash -n), shellcheck -S warning, shfmt -i 2 -ci -d, leak scan, the suite
+```
+
+It finds every tracked shell file by extension or shebang, and it needs `shellcheck` and `shfmt` at
+exactly the versions [`mise.toml`](mise.toml) pins: run `mise install` in the repo, or install those
+versions another way. CI runs the same script on ubuntu and macOS.
+
+**The pre-push hook.** `.githooks/pre-push` runs `bin/ci` on every push. Turn it on once per clone
+(every worktree of the clone shares it):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Then every agent or person who pushes from that clone needs the pinned tools on `PATH`; without them
+the push is refused with the install hint. The fix is to install them, never to skip the hook. The
+hook also refuses a push of anything but the checked-out `HEAD`, a dirty tree, and an untracked file
+that no ignore rule covers (`.gitignore`, `.git/info/exclude` or your global ignore file): commit
+it, delete it, or ignore it. A push takes about 2 minutes, most of it the suite.
+
+One commit only reformatted the shell code with shfmt, and
+[`.git-blame-ignore-revs`](.git-blame-ignore-revs) lists it. GitHub skips it in blame on its own; for
+a local `git blame`, run
+`git config blame.ignoreRevsFile .git-blame-ignore-revs` (on a branch without that file, `git blame`
+then fails, so set it only where you need it).
+
 ## Keeping it clean (privacy)
 
 This repo is generic — no private, project-specific data. Two guards:
 
-- **`scripts/scan-generic.sh`** (CI) — catches real emails and absolute home paths; needs no config, runs
-  on fork PRs.
+- **`scripts/scan-generic.sh`** (CI and the pre-push hook, through `bin/ci`) — catches real emails and
+  absolute home paths; needs no config, runs on fork PRs.
 - **`scripts/scan-personal-data.sh`** (local, pre-publication) — greps full history, commit metadata,
   filenames, and ref names against a **private** newline-delimited deny-list file (never `source`-d).
 
