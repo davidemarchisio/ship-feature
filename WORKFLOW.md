@@ -81,7 +81,16 @@ and `--agent plan`), `grok` (model and effort from `MODEL_grok` / `EFFORT_grok` 
 file — the same keys the relay's grok seat reads — or `$GROK_REVIEW_MODEL` / `$GROK_REVIEW_EFFORT`;
 defaults `grok-4.6` / `medium` — via `grok --prompt-file`, running in your
 checkout with a read-only tool allowlist `--tools read_file,list_dir,grep`, the MCP bridge removed
-(`--disallowed-tools search_tool,use_tool`), `--permission-mode plan`, `--sandbox read-only`), and `antigravity` (aliases `agy`, `gemini`) via the
+(`--disallowed-tools search_tool,use_tool`), `--permission-mode plan`, `--sandbox read-only`), `pi_glm` and
+`pi_grok` (the `pi` runner, one model each: `MODEL_pi_glm` / `EFFORT_pi_glm` and `MODEL_pi_grok` /
+`EFFORT_pi_grok` in the shared panel file — the same keys the relay's pi seats read — or
+`$PI_GLM_REVIEW_MODEL` / `$PI_GLM_REVIEW_EFFORT` / `$PI_GROK_REVIEW_MODEL` / `$PI_GROK_REVIEW_EFFORT`;
+defaults `zai/glm-5.3` / `low` and `xai/grok-4.7` / `low` — running in your checkout with a read-only tool
+allowlist `--tools read,grep,find,ls`, so there is no shell and no write tool, and with extensions, MCP,
+skills, prompt templates, themes, context files, the trust-gated project files (`--no-approve`), the saved
+session and the startup network calls all off. The effort must be one of `off minimal low medium high
+xhigh max`, and any other value stops the command: pi does not refuse a level it does not know, it runs
+at the level in your own pi settings. The seat needs `node` to read pi's json stream), and `antigravity` (aliases `agy`, `gemini`) via the
 `gemini` CLI. The gemini run is fail-closed: an isolated `GEMINI_CLI_HOME` **and** working dir with a
 locked `.gemini/settings.json` that **allowlists only the read-only tools** via `tools.core`, names
 today's write tools in `tools.exclude` as defence-in-depth, disables hooks, and declares no MCP — so
@@ -102,11 +111,12 @@ relay-only and skipped with a warning. `grok45high` is the old name of the `grok
 `claude` and `codex` take their pins from the same place: `MODEL_claude` / `EFFORT_claude` and
 `MODEL_codex` / `EFFORT_codex` in the shared panel file, or `$CLAUDE_REVIEW_MODEL`,
 `$CLAUDE_REVIEW_EFFORT`, `$CODEX_REVIEW_MODEL`, `$CODEX_REVIEW_EFFORT` in the environment (which
-wins). Unpinned, they get no extra argument and run whatever their CLI is configured for. These six
-pins are read from the shared file and the environment only — set in ship-feature's own config they
-are ignored, with a warning.
+wins). Unpinned, they get no extra argument and run whatever their CLI is configured for. These ten
+pins — claude's, codex's and grok's, and the four pi pins (`PI_GLM_REVIEW_MODEL`, `PI_GLM_REVIEW_EFFORT`,
+`PI_GROK_REVIEW_MODEL`, `PI_GROK_REVIEW_EFFORT`) — are read from the shared file and the environment
+only — set in ship-feature's own config they are ignored, with a warning.
 
-Reviewers that run in the checkout — `claude`, `codex`, `cursor`, `glm`, `grok` — can read the
+Reviewers that run in the checkout — `claude`, `codex`, `cursor`, `glm`, `grok`, `pi_glm`, `pi_grok` — can read the
 tree, so they check the plan against the code (a stale line number, a test the change would turn red).
 `glm` has three states, in this order: it runs in the checkout; it falls back to an isolated empty
 directory when the checkout carries its own opencode config (`opencode.json`, `opencode.jsonc`,
@@ -118,11 +128,17 @@ says so above its output.
 
 What "read-only" means here, precisely: each reviewer is pinned to its CLI's read-only mode and none of
 them is given a way to write your checkout or post anywhere. It is not a sandbox escape proof. Except for
-`claude --safe-mode`, an in-checkout reviewer loads that checkout's own agent config (`CLAUDE.md`,
+`claude --safe-mode` and the pi seats, an in-checkout reviewer loads that checkout's own agent config (`CLAUDE.md`,
 `AGENTS.md`, `.cursor`, `.grok`) and whatever hooks or plugins it declares — the same trust you already
-extend by opening the repo in that agent. `glm` is in that group too — it reads the checkout. The one
-seat that never does is `antigravity`/`gemini`, which is fully isolated and sees the plan text only, so
-review a plan for a repository you do not trust with that seat, or not at all.
+extend by opening the repo in that agent. `glm` is in that group too — it reads the checkout. The pi
+seats load none of it: `--no-context-files` skips `AGENTS.md` and `CLAUDE.md`, `--no-approve` ignores the
+trust-gated `.pi/` files, and no extension runs. Their `read` tool can still open those files as text,
+like any other file. Their tools are not confined to the checkout, though: `read`, `grep`, `find` and
+`ls` reach any file your user can read, and what they read goes to the model provider (z.ai or xAI), as
+a file the codex seat reads goes to OpenAI — `--sandbox read-only` restricts writes, not reads. The review
+is printed to your terminal only; nothing posts it. The one seat that never reads the checkout is
+`antigravity`/`gemini`, which is fully isolated and sees the plan text only, so review a plan for a
+repository you do not trust with that seat, or not at all.
 Exit `0` = every reviewer responded, `3` = a
 reviewer failed/timed out/returned empty (re-run — see the two-consecutive-failure rule below), `1` =
 usage error. The single-reviewer default still works too:

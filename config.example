@@ -1,8 +1,9 @@
 # ship-feature — example configuration.
 #
 # Copy to ~/.config/ship-feature/config and edit. The `ship-feature` CLI reads this file as plain
-# `KEY=value` lines and honors the keys below — the SHIP_FEATURE_* ones plus the four model pins,
-# which keep their vendor-shaped names because pr-review-relay reads them too. It is NEVER
+# `KEY=value` lines and honors the keys below — the SHIP_FEATURE_* ones plus three model pins
+# (GLM_REVIEW_MODEL, CURSOR_REVIEW_MODEL, PR_RELAY_OPENCODE_MODEL), which keep their vendor-shaped
+# names because pr-review-relay reads them too. It is NEVER
 # shell-`source`d, so nothing here is executed. Environment variables of the same name take precedence over this file.
 #
 # The values below are the built-in defaults. This example file is TRACKED and public; put your real
@@ -94,6 +95,12 @@ SHIP_FEATURE_DENYLIST=/path/to/your/denylist.txt
 # the seat for the plan review and the PR review alike. Set here, they are IGNORED with a warning:
 # a third place is how pins drift. Unpinned, claude and codex get no extra argument; grok defaults
 # to grok-4.6 at medium effort.
+#
+# The pi_glm and pi_grok seats follow the same rule: MODEL_pi_glm / EFFORT_pi_glm and
+# MODEL_pi_grok / EFFORT_pi_grok in pr-review-relay's config, or PI_GLM_REVIEW_MODEL,
+# PI_GLM_REVIEW_EFFORT, PI_GROK_REVIEW_MODEL, PI_GROK_REVIEW_EFFORT in the environment. Set here,
+# they are IGNORED with a warning. Defaults: zai/glm-5.3 and xai/grok-4.7, both at low effort. The
+# effort must be one of off, minimal, low, medium, high, xhigh, max.
 #
 # That last source is where a pin normally belongs: both tools drive the same seats on the same
 # accounts, so which model a seat runs is a property of the machine, not of whichever tool is

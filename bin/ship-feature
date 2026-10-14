@@ -189,11 +189,12 @@ load_config() {
       # The grok seat's old key. Recorded and DROPPED, like KIMI3_REVIEW_MODEL above: the seat is
       # `grok` now and takes MODEL_grok / EFFORT_grok from the shared panel config.
       GROK45HIGH_REVIEW_MODEL) sf_note_deprecated file:GROK45HIGH_REVIEW_MODEL ;;
-      # The claude, codex and grok pins are read from the SHARED panel config and the environment
-      # only — never from this file. They are the relay's own names, one global file is the point,
-      # and a third place is how they drifted in the first place. Recorded so the value is
-      # reported rather than dropped in silence (this loop has no `*)` arm).
-      CLAUDE_REVIEW_MODEL | CLAUDE_REVIEW_EFFORT | CODEX_REVIEW_MODEL | CODEX_REVIEW_EFFORT | GROK_REVIEW_MODEL | GROK_REVIEW_EFFORT)
+      # The claude, codex, grok, pi_glm and pi_grok pins are read from the SHARED panel config and
+      # the environment only — never from this file. They are the relay's own names, one global file
+      # is the point, and a third place is how they drifted in the first place. Recorded so the value
+      # is reported rather than dropped in silence (this loop has no `*)` arm).
+      CLAUDE_REVIEW_MODEL | CLAUDE_REVIEW_EFFORT | CODEX_REVIEW_MODEL | CODEX_REVIEW_EFFORT | GROK_REVIEW_MODEL | GROK_REVIEW_EFFORT | \
+        PI_GLM_REVIEW_MODEL | PI_GLM_REVIEW_EFFORT | PI_GROK_REVIEW_MODEL | PI_GROK_REVIEW_EFFORT)
         sf_note_deprecated "file:$key"
         ;;
       PR_RELAY_OPENCODE_MODEL) [ -n "${PR_RELAY_OPENCODE_MODEL:-}" ] || export PR_RELAY_OPENCODE_MODEL="$val" ;;
@@ -259,6 +260,7 @@ load_shared_panel_config() {
   local from_env_glm=1 from_env_cursor=1 from_env_rev=1 from_env_plan=1 from_env_timeout=1
   local from_env_gemini=1
   local from_env_claude_m=1 from_env_claude_e=1 from_env_codex_m=1 from_env_codex_e=1 from_env_grok_m=1 from_env_grok_e=1
+  local from_env_pi_glm_m=1 from_env_pi_glm_e=1 from_env_pi_grok_m=1 from_env_pi_grok_e=1
   # GLM_REVIEW_MODEL and nothing else. Arming this from the seat's OLD name would let a stale
   # KIMI3_REVIEW_MODEL left in a shell profile mark the pin as "already provided by a higher
   # source", so MODEL_glm in the shared file would be skipped — the silent drop this rename
@@ -275,6 +277,11 @@ load_shared_panel_config() {
   [ -n "${CODEX_REVIEW_EFFORT:-}" ] || from_env_codex_e=0
   [ -n "${GROK_REVIEW_MODEL:-}" ] || from_env_grok_m=0
   [ -n "${GROK_REVIEW_EFFORT:-}" ] || from_env_grok_e=0
+  # The pi seats' environment names are pr-review-relay's own (lib-pi.sh), for the same reason.
+  [ -n "${PI_GLM_REVIEW_MODEL:-}" ] || from_env_pi_glm_m=0
+  [ -n "${PI_GLM_REVIEW_EFFORT:-}" ] || from_env_pi_glm_e=0
+  [ -n "${PI_GROK_REVIEW_MODEL:-}" ] || from_env_pi_grok_m=0
+  [ -n "${PI_GROK_REVIEW_EFFORT:-}" ] || from_env_pi_grok_e=0
   [ -n "${SHIP_FEATURE_GEMINI_MODEL:-}" ] || from_env_gemini=0
   [ -n "${SHIP_FEATURE_REVIEWERS+x}" ] || from_env_rev=0
   [ -n "${SHIP_FEATURE_PLAN_REVIEWERS+x}" ] || from_env_plan=0
@@ -339,6 +346,25 @@ load_shared_panel_config() {
       EFFORT_grok) [ "$from_env_grok_e" = 1 ] || {
         export -n GROK_REVIEW_EFFORT 2>/dev/null || true
         GROK_REVIEW_EFFORT="$val"
+      } ;;
+      # The pi seats, exactly like grok above: NOT exported, and `export -n` first. Do not copy the
+      # MODEL_glm arm, which exports — a pi pin pushed into the `relay` child would sit on top of
+      # pr-review-relay's own reading of this same file.
+      MODEL_pi_glm) [ "$from_env_pi_glm_m" = 1 ] || {
+        export -n PI_GLM_REVIEW_MODEL 2>/dev/null || true
+        PI_GLM_REVIEW_MODEL="$val"
+      } ;;
+      EFFORT_pi_glm) [ "$from_env_pi_glm_e" = 1 ] || {
+        export -n PI_GLM_REVIEW_EFFORT 2>/dev/null || true
+        PI_GLM_REVIEW_EFFORT="$val"
+      } ;;
+      MODEL_pi_grok) [ "$from_env_pi_grok_m" = 1 ] || {
+        export -n PI_GROK_REVIEW_MODEL 2>/dev/null || true
+        PI_GROK_REVIEW_MODEL="$val"
+      } ;;
+      EFFORT_pi_grok) [ "$from_env_pi_grok_e" = 1 ] || {
+        export -n PI_GROK_REVIEW_EFFORT 2>/dev/null || true
+        PI_GROK_REVIEW_EFFORT="$val"
       } ;;
       # `MODEL_gemini`, not `MODEL_antigravity`. The relay already maps MODEL_antigravity onto its
       # own agy seat; this one is the `gemini` binary. One key for two binaries would mean one of
@@ -602,12 +628,66 @@ cmd_relay() {
 # whereas in `relay` `antigravity` maps to `agy`. TRADEOFF: because the run is fully isolated,
 # gemini reviews the PLAN TEXT ONLY and cannot read the checkout; deep codebase fact-checking is the
 # PR cross-review stage's job, not this cheap plan gate.
+# pi_glm and pi_grok run the `pi` binary (https://pi.dev), one model each, with the relay seats' names
+# and pins: in the checkout, with only pi's read-only built-in tools (`--tools read,grep,find,ls`) and
+# none of the checkout's own pi config, context files, extensions or MCP servers (see plan_review_with).
 # Bare `opencode` is RELAY-ONLY here — a bare `opencode run` uses the all-allow build agent — so if
 # listed it is skipped with a warning, never run. That keeps the "read-only, nothing is written"
 # guarantee true for the whole set that actually runs.
 plan_tool_for() { case "$1" in
   claude) echo claude ;; codex) echo codex ;; cursor) echo cursor-agent ;; glm) echo opencode ;;
-  grok) echo grok ;; antigravity) echo gemini ;; *) echo "" ;; esac }
+  grok) echo grok ;; antigravity) echo gemini ;; pi_glm | pi_grok) echo pi ;; *) echo "" ;; esac }
+
+# The levels pi accepts for --thinking, from its own "Invalid thinking level" warning (measured against
+# pi 1.1.0 and 1.2.0). The `case` in cmd_plan_review names the same words; a test pins the two together.
+SF_PI_EFFORT_LEVELS="off minimal low medium high xhigh max"
+
+# pi's --mode json event stream on stdin, read by node. A copy of PI_FINAL_TEXT_JS in pr-review-relay's
+# lib-pi.sh, taken at fd89591: copied rather than sourced, because plan-review runs without the relay
+# installed, and sourcing a file from another checkout would let that checkout change this seat. Diff
+# the two when either changes.
+#
+# Why a reader at all: pi's exit code does not say whether a review came back. In json mode an API
+# error exits 0, and a cut-off answer exits 0 (1.1.0) or 1 (1.2.0). The reader keeps the LAST
+# message_end whose message.role is "assistant" (each tool turn ends with one, stopReason "toolUse"):
+#   stop + non-blank text -> print the text, exit 0
+#   anything else         -> nothing on stdout, ONE reason line on stderr, exit 3
+# A line that is not JSON is skipped. A missing field never throws.
+# `|| true`: `read -d ''` returns 1 at the end of its input. Nothing here runs under errexit, and this
+# keeps it that way if errexit is ever turned on.
+IFS= read -r -d '' SF_PI_FINAL_TEXT_JS <<'JS' || true
+const rl = require("readline").createInterface({ input: process.stdin, crlfDelay: Infinity });
+let last = null;
+rl.on("line", (line) => {
+  let e;
+  try { e = JSON.parse(line); } catch (_) { return; }
+  if (e && e.type === "message_end" && e.message && e.message.role === "assistant") last = e.message;
+});
+rl.on("close", () => {
+  if (!last) {
+    process.stderr.write("pi: the event stream ended without a final assistant message\n");
+    process.exitCode = 3;
+    return;
+  }
+  const parts = Array.isArray(last.content) ? last.content : [];
+  const text = parts
+    .filter((p) => p && p.type === "text" && typeof p.text === "string")
+    .map((p) => p.text)
+    .join("\n");
+  const stop = typeof last.stopReason === "string" ? last.stopReason : "?";
+  if (stop === "stop" && text.trim() !== "") {
+    process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+    return;
+  }
+  const tokens = last.usage && last.usage.output != null ? String(last.usage.output) : "?";
+  let reason = `pi: no usable review (stopReason=${stop}, output tokens=${tokens}, text chars=${text.length})`;
+  if (typeof last.errorMessage === "string" && last.errorMessage !== "") {
+    reason += ": " + last.errorMessage.replace(/[\r\n]+/g, " ");
+  }
+  process.stderr.write(reason + "\n");
+  process.exitCode = 3;
+});
+JS
 # Named but deliberately not run in plan-review (available in `relay`). Note: `glm` IS a
 # supported plan reviewer (read-only plan agent) and runs through the same `opencode` binary;
 # only the bare `opencode` name is relay-only, because a bare `opencode run` uses the all-allow
@@ -731,7 +811,8 @@ cmd_plan_review() {
       shared:MODEL_grok45high) warn "MODEL_grok45high is set in the shared panel config. It is the old name of MODEL_grok and is IGNORED — the plan-review seat is now 'grok', and MODEL_grok / EFFORT_grok pin it in both tools. Delete it." ;;
       # Not deprecated names — right names in the wrong file. These pins are read from the shared
       # panel config and the environment only (see load_config).
-      file:CLAUDE_REVIEW_MODEL | file:CLAUDE_REVIEW_EFFORT | file:CODEX_REVIEW_MODEL | file:CODEX_REVIEW_EFFORT | file:GROK_REVIEW_MODEL | file:GROK_REVIEW_EFFORT)
+      file:CLAUDE_REVIEW_MODEL | file:CLAUDE_REVIEW_EFFORT | file:CODEX_REVIEW_MODEL | file:CODEX_REVIEW_EFFORT | file:GROK_REVIEW_MODEL | file:GROK_REVIEW_EFFORT | \
+        file:PI_GLM_REVIEW_MODEL | file:PI_GLM_REVIEW_EFFORT | file:PI_GROK_REVIEW_MODEL | file:PI_GROK_REVIEW_EFFORT)
         warn "${_dep#file:} is set in ship-feature's config and is IGNORED there. Set MODEL_<seat> / EFFORT_<seat> in the shared panel config (${PR_RELAY_CONFIG:-~/.config/pr-review-relay/config}), or export ${_dep#file:} in the environment."
         ;;
       # A recorded token with no arm above would be recorded and never reported — silence, which is
@@ -881,8 +962,10 @@ $SF_VERDICT_RULES"
   # a FLAG, not a value (the gemini check below says why that matters). An effort is a bare word:
   # codex's lands inside a TOML string (`model_reasoning_effort="…"`), where a quote would end it.
   # Only a value that will actually be passed is checked — an unpinned claude/codex effort is empty.
-  # No per-CLI list of accepted levels: the CLIs add them, and a stale list here would refuse a
-  # valid one. A level the CLI rejects fails that seat with the CLI's own error (exit 3, not clean).
+  # No per-CLI list of accepted levels for these three: their CLIs refuse a level they do not know,
+  # so a level the CLI rejects fails that seat with the CLI's own error (exit 3, not clean), and a
+  # stale list here would only refuse a valid one. The pi seats below are the exception, because pi
+  # does NOT refuse one.
   local _pin _pv
   for _pin in CLAUDE_REVIEW_MODEL CODEX_REVIEW_MODEL GROK_REVIEW_MODEL; do
     _pv="${!_pin}"
@@ -892,6 +975,49 @@ $SF_VERDICT_RULES"
     _pv="${!_pin}"
     [ -z "$_pv" ] && continue
     case "$_pv" in -* | *[!A-Za-z0-9_-]*) die "invalid $_pin: '$_pv' (want a bare word such as 'medium')." ;; esac
+  done
+
+  # Pin the pi seats' model and effort, the same ladder as grok's: environment (the relay's own names,
+  # PI_GLM_REVIEW_* / PI_GROK_REVIEW_*), then MODEL_pi_* / EFFORT_pi_* from the shared panel config,
+  # then pr-review-relay's own defaults, so an unpinned seat runs the same way in both tools.
+  local PI_GLM_REVIEW_MODEL="${PI_GLM_REVIEW_MODEL:-zai/glm-5.3}" PI_GLM_REVIEW_EFFORT="${PI_GLM_REVIEW_EFFORT:-low}"
+  local PI_GROK_REVIEW_MODEL="${PI_GROK_REVIEW_MODEL:-xai/grok-4.7}" PI_GROK_REVIEW_EFFORT="${PI_GROK_REVIEW_EFFORT:-low}"
+  # Checked AFTER the defaults above, so an unpinned seat is valid. And here, unlike the three seats
+  # above, against an EXACT list: pi does not refuse a --thinking level it does not know. It warns,
+  # runs at the level in the user's own pi settings, and exits 0, while the dispatch line prints the
+  # value it was given. So this check is the only one there is, and it refuses rather than warns: a
+  # warn-and-run seat would review at an unknown effort and report a clean run. pr-review-relay's
+  # lib-pi.sh refuses the same values, so the two tools agree on what a valid pin is.
+  #
+  # Exact `case` alternatives, never a match against the list: the value is config text, so as a
+  # pattern `low medium`, `*` or `l?w` would pass. Keep in step with SF_PI_EFFORT_LEVELS (a test
+  # pins it).
+  #
+  # Only for a pi seat that is ON THE PANEL: a pi pin that a later pi makes valid (a new level, before
+  # this list learns it) must not stop a review whose panel has no pi seat. The split is the dispatch
+  # loop's: `set -f`, comma IFS, whitespace stripped.
+  local _pi_seats="" _ps_r _ps_ifs="$IFS"
+  set -f
+  IFS=','
+  for _ps_r in $reviewers; do
+    _ps_r="$(printf '%s' "$_ps_r" | tr -d '[:space:]')"
+    case "$_ps_r" in pi_glm | pi_grok) _pi_seats="$_pi_seats $_ps_r" ;; esac
+  done
+  IFS="$_ps_ifs"
+  set +f
+  local _pi_m _pi_e
+  for _ps_r in $_pi_seats; do
+    case "$_ps_r" in
+      pi_glm) _pi_m=PI_GLM_REVIEW_MODEL _pi_e=PI_GLM_REVIEW_EFFORT ;;
+      pi_grok) _pi_m=PI_GROK_REVIEW_MODEL _pi_e=PI_GROK_REVIEW_EFFORT ;;
+    esac
+    _pv="${!_pi_m}"
+    case "$_pv" in -*) die "invalid $_pi_m: '$_pv' (must not start with '-')." ;; esac
+    _pv="${!_pi_e}"
+    case "$_pv" in
+      off | minimal | low | medium | high | xhigh | max) ;;
+      *) die "invalid $_pi_e: '$_pv' (EFFORT_$_ps_r in the shared panel config, or $_pi_e) — pi does not refuse an unknown level, so this does. Valid: $SF_PI_EFFORT_LEVELS" ;;
+    esac
   done
   # Arrays so an unset pin adds NO argument, not an empty one. Expanded with ${A[@]+"${A[@]}"}:
   # bash 3.2 under `set -u` treats an empty array as unbound.
@@ -910,6 +1036,8 @@ $SF_VERDICT_RULES"
       cursor) printf ' (model=%s)' "$CURSOR_REVIEW_MODEL" ;;
       glm) printf ' (model=%s)' "$GLM_REVIEW_MODEL" ;;
       antigravity) printf ' (model=%s)' "$GEMINI_MODEL" ;;
+      pi_glm) printf ' (model=%s, effort=%s)' "$PI_GLM_REVIEW_MODEL" "$PI_GLM_REVIEW_EFFORT" ;;
+      pi_grok) printf ' (model=%s, effort=%s)' "$PI_GROK_REVIEW_MODEL" "$PI_GROK_REVIEW_EFFORT" ;;
     esac
   }
 
@@ -1401,6 +1529,62 @@ $SF_VERDICT_RULES"
           # created fresh per reviewer under STATUS_DIR, so there is no stale content to inherit.
         fi
         ;;
+      pi_glm | pi_grok)
+        # One binary, two seats: `pi` with one model each. Runs in the CHECKOUT, like claude, codex,
+        # cursor, glm and grok, so it can check the plan against the code. (The relay's pi seats run
+        # with no tools in an empty directory, because their output is posted on a public PR; this
+        # output is printed to the terminal and posted nowhere.)
+        #
+        # Read-only by ALLOWLIST: `--tools read,grep,find,ls` replaces pi's default set (read, bash,
+        # edit, write), so there is no shell and no write tool — `pi --help` gives this exact list as
+        # its "read-only mode". The rest keep the checkout from configuring the reviewer: --no-approve
+        # ignores the trust-gated project files (.pi/settings.json, .pi/extensions, .pi/SYSTEM.md, …),
+        # --no-context-files skips AGENTS.md / CLAUDE.md, --no-extensions and --no-mcp (`--tools` alone
+        # keeps MCP tools), no skills, prompt templates or themes, no saved session, and no startup
+        # network calls. Each was checked against a hostile checkout, on pi 1.1.0 and 1.2.0.
+        #
+        # Residual, stated because no flag covers it: pi's tools are not confined to the cwd. The `read`
+        # tool can open any file this user can, and what it reads goes to the model provider. That is
+        # the read reach codex's `--sandbox read-only` has too.
+        #
+        # The plan is framed on both sides, as for grok, so its text cannot run on into instructions.
+        local pi_model pi_effort
+        if [ "$name" = pi_glm ]; then
+          pi_model="$PI_GLM_REVIEW_MODEL" pi_effort="$PI_GLM_REVIEW_EFFORT"
+        else
+          pi_model="$PI_GROK_REVIEW_MODEL" pi_effort="$PI_GROK_REVIEW_EFFORT"
+        fi
+        # node reads pi's stream. Without it there is no way to tell a review from a failure, so the
+        # model call never starts.
+        if ! command -v node >/dev/null 2>&1; then
+          printf "  ! %s: node not found — it reads pi's json stream; seat not run\n" "$name" >"$STATUS_DIR/diag_$key"
+          echo fail >"$STATUS_DIR/$key"
+          return 0
+        fi
+        # Truncated once, then APPENDED to by both stages: a truncating open and an appending open of
+        # one file at pipeline start would race, and pi's fd could write over the reader's reason line.
+        : >"$errf"
+        # One subshell runs the pipeline AND reads PIPESTATUS, whole, in the shell that ran it. There
+        # is no errexit here (set -uo pipefail), so the `_ps=` line is always reached. pi's own
+        # non-zero status wins — a timeout stays 124, so the tail below says "timed out" — otherwise
+        # the reader's: 0 with the review on stdout, or 3 with its reason line in $errf.
+        # `timeout` wraps pi alone, and kills pi's whole process group when it fires, so a tool child
+        # (rg, fd) holding the pipe dies with it and the reader sees end of input.
+        out=$(
+          (
+            printf '%s\n\n--- PLAN ---\n~~~~plan\n%s\n~~~~\n--- END PLAN ---\n' "$PROMPT" "$plan" |
+              run_reviewer pi -p --mode json --model "$pi_model" --thinking "$pi_effort" \
+                --tools read,grep,find,ls \
+                --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes \
+                --no-context-files --no-approve --no-session --offline 2>>"$errf" |
+              node -e "$SF_PI_FINAL_TEXT_JS" 2>>"$errf"
+            _ps=("${PIPESTATUS[@]}")
+            [ "${_ps[1]}" -ne 0 ] && exit "${_ps[1]}"
+            exit "${_ps[2]}"
+          )
+        )
+        rc=$?
+        ;;
     esac
     if [ -n "$sandbox_unenforced" ]; then
       {
@@ -1544,7 +1728,7 @@ $SF_VERDICT_RULES"
     fi
   done
   if [ "$ran" = 0 ]; then
-    die "no supported reviewers ran. plan-review supports: claude, codex, cursor, glm, grok, antigravity (aliases agy, gemini) — bare opencode is relay-only. Pass --reviewers with a supported agent."
+    die "no supported reviewers ran. plan-review supports: claude, codex, cursor, glm, grok, antigravity (aliases agy, gemini), pi_glm, pi_grok — bare opencode is relay-only. Pass --reviewers with a supported agent."
   fi
   if [ "$failed" -gt 0 ]; then
     if [ -z "${SF_VERDICT_DIR:-}" ]; then

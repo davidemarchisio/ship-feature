@@ -8,6 +8,19 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Added
 
+- **Plan-review seats `pi_glm` and `pi_grok`, on the `pi` runner.** One `pi` binary, one model each:
+  `zai/glm-5.3` and `xai/grok-4.7`, both at `low` effort by default. They are pinned by the relay's own
+  keys, `MODEL_pi_glm` / `EFFORT_pi_glm` and `MODEL_pi_grok` / `EFFORT_pi_grok` in
+  `~/.config/pr-review-relay/config` or `PI_GLM_REVIEW_*` / `PI_GROK_REVIEW_*` in the environment (never
+  ship-feature's own config, where they are reported and ignored). They run in the checkout, read-only by
+  the tool allowlist `--tools read,grep,find,ls`, with no extensions, MCP, skills, prompt templates,
+  themes, context files, trust-gated `.pi/` files, saved session or startup network calls. An effort
+  outside `off minimal low medium high xhigh max` stops the command, because pi runs an unknown level at
+  the user's own setting instead of refusing it. The seat needs `node` to read pi's json stream (a copy
+  of pr-review-relay's lib-pi.sh reader). Residual risk, in `WORKFLOW.md` §2: the tools can read any file
+  the user can, and what they read goes to the model provider. To switch the plan panel:
+  `PLAN_REVIEWERS=codex,pi_glm,pi_grok` in the shared file. Fizzy #1401.
+
 - **Autonomous mode (experimental, off by default).** Three opt-in commands close the loop without a
   human gate: `ship-feature plan-consensus <plan> --autonomous` (the full plan panel must all return
   `VERDICT: clean` in one round; 6 rounds, 9 attempts), `ship-feature relay --autonomous` (full-panel
