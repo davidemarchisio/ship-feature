@@ -2443,6 +2443,30 @@ check "pi: the dispatch line shows the pinned values" \
 pi_clear
 printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi" PI_GLM_REVIEW_MODEL=pin-glm-env bash "$CLI" plan-review --reviewers pi_glm >/dev/null 2>&1
 check "pi: PI_GLM_REVIEW_MODEL in the environment beats MODEL_pi_glm" "$(pi_arg pi_glm --model)" pin-glm-env
+# The flags are per pin. The file pins all four; each run sets ONE in the environment, so a flag
+# wired to the wrong pin shows as a default or a file value where the other value belongs.
+printf 'MODEL_pi_glm=pin-glm-f\nEFFORT_pi_glm=minimal\nMODEL_pi_grok=pin-grok-f\nEFFORT_pi_grok=high\n' >"$CFGDIR/shared-pi4"
+for _pin in PI_GLM_REVIEW_MODEL=pin-glm-e PI_GLM_REVIEW_EFFORT=medium PI_GROK_REVIEW_MODEL=pin-grok-e PI_GROK_REVIEW_EFFORT=xhigh; do
+  case "$_pin" in
+    PI_GLM_REVIEW_MODEL=*) _want="pin-glm-e minimal pin-grok-f high" ;;
+    PI_GLM_REVIEW_EFFORT=*) _want="pin-glm-f medium pin-grok-f high" ;;
+    PI_GROK_REVIEW_MODEL=*) _want="pin-glm-f minimal pin-grok-e high" ;;
+    PI_GROK_REVIEW_EFFORT=*) _want="pin-glm-f minimal pin-grok-f xhigh" ;;
+    *) _want="no expectation for $_pin" ;;
+  esac
+  pi_clear
+  prow=$(
+    export "${_pin?}"
+    printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi4" bash "$CLI" plan-review --reviewers pi_glm,pi_grok 2>&1
+  )
+  check "pi: ${_pin%%=*} in the environment beats the file; the other three pins come from the file" \
+    "$?|$(pi_arg pi_glm --model) $(pi_arg pi_glm --thinking) $(pi_arg pi_grok --model) $(pi_arg pi_grok --thinking)" "0|$_want"
+done
+# Exported EMPTY is not set: each arming line tests ${VAR:-}, not ${VAR+x}, so the file still wins.
+pi_clear
+prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi4" PI_GLM_REVIEW_MODEL='' PI_GLM_REVIEW_EFFORT='' PI_GROK_REVIEW_MODEL='' PI_GROK_REVIEW_EFFORT='' bash "$CLI" plan-review --reviewers pi_glm,pi_grok 2>&1)
+check "pi: the four pins exported EMPTY do not block the shared file" \
+  "$?|$(pi_arg pi_glm --model) $(pi_arg pi_glm --thinking) $(pi_arg pi_grok --model) $(pi_arg pi_grok --thinking)" "0|pin-glm-f minimal pin-grok-f high"
 printf 'PI_GROK_REVIEW_EFFORT=max\n' >"$CFGDIR/own-pi"
 pi_clear
 prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/own-pi" bash "$CLI" plan-review --reviewers pi_grok 2>&1)
@@ -5416,7 +5440,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=731
+EXPECTED=736
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
