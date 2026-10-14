@@ -27,6 +27,12 @@ each driver agent (Claude, Codex, Cursor) gets a thin adapter that points at it,
 
 ## 🆕 What's new
 
+**Unreleased** — **two plan-review seats on the `pi` runner: `pi_glm` (GLM 5.3) and `pi_grok`
+(Grok 4.7).** They are the relay's pi seats, pinned by the same keys (`MODEL_pi_*` / `EFFORT_pi_*` in
+the shared panel config), but they read your checkout with a read-only tool allowlist, so they can check
+a plan against the code. To use them, set `PLAN_REVIEWERS=codex,pi_glm,pi_grok` in
+`~/.config/pr-review-relay/config`. The `glm` and `grok` seats stay as they are.
+
 **v0.6.0** — **every plan-review seat is pinned from the one shared config, and the seat names stop
 lying.** `claude` and `codex` ran bare in plan-review, so `MODEL_claude`, `MODEL_codex` and
 `EFFORT_codex` in `~/.config/pr-review-relay/config` pinned the PR review and not the plan review —
@@ -187,6 +193,16 @@ ship-feature skill for any feature/fix.
   `--tools read_file,list_dir,grep`, with the MCP bridge removed explicitly
   (`--disallowed-tools search_tool,use_tool` — it survives the built-in allowlist), plus
   `--permission-mode plan` and `--sandbox read-only`),
+  `pi_glm` and `pi_grok` (the `pi` runner, one model each, pinned by `MODEL_pi_glm` / `EFFORT_pi_glm` and
+  `MODEL_pi_grok` / `EFFORT_pi_grok` in `~/.config/pr-review-relay/config` — the relay's pi seats read
+  the same keys — or `PI_GLM_REVIEW_*` / `PI_GROK_REVIEW_*` in the environment; defaults `zai/glm-5.3` /
+  `low` and `xai/grok-4.7` / `low`. They run in your checkout with the tool **allowlist**
+  `--tools read,grep,find,ls` — no shell, no write tool — and with extensions, MCP, skills, prompt
+  templates, themes, context files, the trust-gated `.pi/` files, the saved session and the startup
+  network calls off. An effort that is not one of `off minimal low medium high xhigh max` stops the
+  command, because pi itself does not refuse one. The seat needs `node` to read pi's json stream. Its
+  tools can read files outside the checkout too, and what they read goes to the model provider: see
+  `WORKFLOW.md` §2),
   and `antigravity` (aliases `agy`, `gemini`) via the `gemini` CLI, run **fail-closed**: an isolated
   `GEMINI_CLI_HOME` and working dir with a locked `.gemini/settings.json` that allowlists only the
   read-only tools via `tools.core`, names today's write tools in `tools.exclude` as defence-in-depth,
