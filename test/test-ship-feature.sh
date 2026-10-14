@@ -132,7 +132,7 @@ export PR_RELAY_CONFIG=/dev/null
 # come from the shared config. They are knobs people really do export, and an exported one would
 # satisfy the "no config at all -> the built-in default" assertion below: green on this machine,
 # red in CI, for a reason the assertion never mentions.
-unset SHIP_FEATURE_WORKTREE_ROOT SHIP_FEATURE_EXCLUDE_MARKER SHIP_FEATURE_DENYLIST SHIP_FEATURE_REVIEWERS SHIP_FEATURE_PLAN_REVIEWERS CURSOR_REVIEW_MODEL GLM_REVIEW_MODEL KIMI3_REVIEW_MODEL GROK45HIGH_REVIEW_MODEL CLAUDE_REVIEW_MODEL CLAUDE_REVIEW_EFFORT CODEX_REVIEW_MODEL CODEX_REVIEW_EFFORT GROK_REVIEW_MODEL GROK_REVIEW_EFFORT PR_RELAY_OPENCODE_MODEL SHIP_FEATURE_PLAN_TIMEOUT PR_RELAY_AGENT_TIMEOUT SHIP_FEATURE_GEMINI_MODEL SHIP_FEATURE_GEMINI_TESTED_VERSIONS
+unset SHIP_FEATURE_WORKTREE_ROOT SHIP_FEATURE_EXCLUDE_MARKER SHIP_FEATURE_DENYLIST SHIP_FEATURE_REVIEWERS SHIP_FEATURE_PLAN_REVIEWERS CURSOR_REVIEW_MODEL GLM_REVIEW_MODEL KIMI3_REVIEW_MODEL GROK45HIGH_REVIEW_MODEL CLAUDE_REVIEW_MODEL CLAUDE_REVIEW_EFFORT CODEX_REVIEW_MODEL CODEX_REVIEW_EFFORT GROK_REVIEW_MODEL GROK_REVIEW_EFFORT PI_GLM_REVIEW_MODEL PI_GLM_REVIEW_EFFORT PI_GROK_REVIEW_MODEL PI_GROK_REVIEW_EFFORT PR_RELAY_OPENCODE_MODEL SHIP_FEATURE_PLAN_TIMEOUT PR_RELAY_AGENT_TIMEOUT SHIP_FEATURE_GEMINI_MODEL SHIP_FEATURE_GEMINI_TESTED_VERSIONS
 # The gemini seat picks its auth method from the environment, and anyone who actually uses gemini
 # has one of these exported — a working machine is the normal case, not the exotic one. Leave them
 # in place and the seat takes the API-key path on this developer's box and the OAuth path in CI,
@@ -1473,24 +1473,24 @@ rc=$?
     echo "  FAIL a quoting effort reached a reviewer (rc=$rc)"
     FAIL=$((FAIL + 1))
   }
-# `ship-feature relay` is unchanged: the six pins are read for plan-review and NOT pushed into the
+# `ship-feature relay` is unchanged: the ten pins are read for plan-review and NOT pushed into the
 # relay child, which reads the same file itself. Includes the empty-export case: a plain
 # assignment keeps an inherited export attribute, so without `export -n` an exported EMPTY
 # CODEX_REVIEW_MODEL= would carry the file's value across.
 cp "$BIN/pr-review-relay" "$WORK/relay-stub-backup-pins"
 cat >"$BIN/pr-review-relay" <<'STUB'
 #!/usr/bin/env bash
-for v in CLAUDE_REVIEW_MODEL CLAUDE_REVIEW_EFFORT CODEX_REVIEW_MODEL CODEX_REVIEW_EFFORT GROK_REVIEW_MODEL GROK_REVIEW_EFFORT; do
+for v in CLAUDE_REVIEW_MODEL CLAUDE_REVIEW_EFFORT CODEX_REVIEW_MODEL CODEX_REVIEW_EFFORT GROK_REVIEW_MODEL GROK_REVIEW_EFFORT PI_GLM_REVIEW_MODEL PI_GLM_REVIEW_EFFORT PI_GROK_REVIEW_MODEL PI_GROK_REVIEW_EFFORT; do
   if [ -n "${!v+x}" ]; then echo "$v=[${!v}]"; else echo "$v=unset"; fi
 done
 STUB
 chmod +x "$BIN/pr-review-relay"
-printf 'MODEL_claude=c1\nEFFORT_claude=high\nMODEL_codex=file-m\nEFFORT_codex=medium\nMODEL_grok=g1\nEFFORT_grok=low\n' >"$CFGDIR/shared-pins-relay"
+printf 'MODEL_claude=c1\nEFFORT_claude=high\nMODEL_codex=file-m\nEFFORT_codex=medium\nMODEL_grok=g1\nEFFORT_grok=low\nMODEL_pi_glm=pg-m\nEFFORT_pi_glm=minimal\nMODEL_pi_grok=pk-m\nEFFORT_pi_grok=xhigh\n' >"$CFGDIR/shared-pins-relay"
 rp=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" bash "$CLI" relay --author claude 2>/dev/null)
-rp2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" CODEX_REVIEW_MODEL='' bash "$CLI" relay --author claude 2>/dev/null)
+rp2=$(PATH="$BIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pins-relay" CODEX_REVIEW_MODEL='' PI_GROK_REVIEW_EFFORT='' bash "$CLI" relay --author claude 2>/dev/null)
 cp "$WORK/relay-stub-backup-pins" "$BIN/pr-review-relay"
 chmod +x "$BIN/pr-review-relay"
-[ "$(printf '%s\n' "$rp" | grep -c '=unset$')" = 6 ] &&
+[ "$(printf '%s\n' "$rp" | grep -c '=unset$')" = 10 ] &&
   {
     echo "  ok   [-] the shared pins are not pushed into the relay child"
     PASS=$((PASS + 1))
@@ -1499,7 +1499,10 @@ chmod +x "$BIN/pr-review-relay"
     echo "  FAIL a shared pin reached the relay child's environment: $rp"
     FAIL=$((FAIL + 1))
   }
-! printf '%s' "$rp2" | grep -q 'file-m' &&
+# PI_GROK_REVIEW_EFFORT is the pi seats' copy of the same trap: an arm copied from MODEL_glm (which
+# exports, on purpose) would carry the file's xhigh into the relay, on top of the relay's own config.
+! printf '%s' "$rp2" | grep -q 'file-m' && ! printf '%s' "$rp2" | grep -q 'xhigh' &&
+  printf '%s\n' "$rp2" | grep -qx 'PI_GROK_REVIEW_EFFORT=unset' &&
   {
     echo "  ok   [-] an exported empty pin does not carry the file value into the relay child"
     PASS=$((PASS + 1))
@@ -2272,6 +2275,217 @@ done
 (printf 'plan\n' | PATH="$MPATH" bash "$CLI" plan-review --reviewers grok >/dev/null 2>&1)
 check "plan-review missing grok binary → fail (3)" $? 3
 make_reviewer grok 0 grok # restore
+
+# --- pi seats: pi_glm and pi_grok, one `pi` binary with a model each ---------------------------
+# The panel runs both seats in parallel, so the stub keeps its records PER SEAT, keyed from its
+# --model value: split on / and -, exactly one part must be `glm` or `grok`. Any other value prints
+# STUB-PI-AMBIGUOUS-MODEL and exits 9, so a test that picks a bad pin value fails loudly instead of
+# writing the other seat's record. Every model value below has exactly one of those parts.
+#
+# The json stream is built with node and JSON.stringify, so the text it carries is escaped. The
+# seat itself needs node to read the stream, so these cases need a real node too, and do not skip
+# without one: a runner with no node fails here, which is the loud outcome.
+PIREC="$WORK/pi-rec"
+mkdir -p "$PIREC"
+write_pi_stub() {
+  {
+    printf '#!/usr/bin/env bash\nREC=%q\n' "$PIREC"
+    cat <<'PISTUB'
+model="" prev=""
+for a in "$@"; do
+  [ "$prev" = "--model" ] && model="$a"
+  prev="$a"
+done
+seat="" n=0
+set -f
+for part in $(printf '%s' "$model" | tr '/-' '  '); do
+  case "$part" in glm) seat=pi_glm n=$((n + 1)) ;; grok) seat=pi_grok n=$((n + 1)) ;; esac
+done
+set +f
+if [ "$n" != 1 ]; then
+  echo "STUB-PI-AMBIGUOUS-MODEL model=[$model]"
+  exit 9
+fi
+echo run >>"$REC/$seat.ran"
+printf '%s\n' "$@" >"$REC/$seat.argv"
+printf '%s\n' "$PWD" >"$REC/$seat.cwd"
+cat >"$REC/$seat.stdin"
+mode="${STUB_PI_MODE:-ok}"
+if [ "$mode" = hang ]; then
+  # A child that inherits stdout holds the pipe open: only a kill of the whole process group
+  # lets the reader see the end of its input.
+  sleep 60 &
+  sleep 60
+  exit 0
+fi
+node -e '
+const [mode, model] = process.argv.slice(1);
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+const end = (stopReason, text, extra) =>
+  out({ type: "message_end", message: Object.assign({ role: "assistant", stopReason,
+    content: text === null ? [] : [{ type: "text", text }], usage: { output: 7 } }, extra || {}) });
+const ok = () => {
+  out({ type: "session", version: 3 });
+  end("toolUse", "THINKING-TEXT");
+  out({ type: "tool_execution_end", toolName: "read" });
+  end("stop", "REVIEW-pi-" + model + "\nThe plan is sound.");
+};
+switch (mode) {
+  case "garbage": process.stdout.write("not json\n{\"broken\n"); ok(); process.stdout.write("trailing text\n"); break;
+  case "length": case "length1": end("length", null); break;
+  case "error": end("error", null, { errorMessage: "quota exceeded\nfor test" }); break;
+  case "blank": end("stop", "  \n\t "); break;
+  case "none": out({ type: "session", version: 3 }); out({ type: "message_end", message: { role: "user", content: [] } }); break;
+  default: ok();
+}' "$mode" "$model"
+case "$mode" in length1) exit 1 ;; exit124) exit 124 ;; esac
+exit 0
+PISTUB
+  } >"$PBIN/pi"
+  chmod +x "$PBIN/pi"
+}
+write_pi_stub
+pi_clear() { rm -f "${PIREC:?}"/*; }
+# The word after <flag> in a seat's recorded argv (one word per line).
+pi_arg() { awk -v f="$2" 'p { print; exit } $0 == f { p = 1 }' "$PIREC/$1.argv" 2>/dev/null; }
+pi_ran() { [ -s "$PIREC/$1.ran" ] && echo yes || echo no; }
+
+# T.1-T.5: a clean panel of both seats, with nothing pinned.
+pi_clear
+printf 'Step 1: X\nMAGICPIPLANTOKEN\nStep 2: Y\n' >"$WORK/pi-plan.md"
+pout=$(PATH="$PBIN:$PATH" bash "$CLI" plan-review "$WORK/pi-plan.md" --reviewers pi_glm,pi_grok 2>&1)
+check "pi: a pi_glm,pi_grok panel exits 0" "$?" 0
+check "pi: both banners and both reviews are printed" \
+  "$(printf '%s' "$pout" | grep -c -e 'Pi_glm (plan review)' -e 'Pi_grok (plan review)' -e 'REVIEW-pi-zai/glm-5.3' -e 'REVIEW-pi-xai/grok-4.7')" 4
+# The reader prints only the FINAL assistant message: the text of a turn that ended in a tool call
+# is the model thinking aloud, not the review.
+check "pi: text from a tool-call turn is not printed" "$(printf '%s' "$pout" | grep -c 'THINKING-TEXT')" 0
+for s in pi_glm pi_grok; do
+  # Read-only by allowlist: the VALUE of --tools, not a substring, so no bash/edit/write rides along.
+  check "pi: $s runs -p --mode json --tools read,grep,find,ls" \
+    "$(grep -Fxc -- -p "$PIREC/$s.argv")|$(pi_arg $s --mode)|$(pi_arg $s --tools)" "1|json|read,grep,find,ls"
+  _miss=""
+  for f in --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve --no-session --offline; do
+    grep -Fxq -- "$f" "$PIREC/$s.argv" || _miss="$_miss $f"
+  done
+  check "pi: $s carries every --no-* flag and --offline${_miss:+ (missing:$_miss)}" "${_miss:-none}" none
+  # Whole-word match: --no-approve contains the same characters.
+  check "pi: $s never passes --approve" "$(grep -Fxc -- --approve "$PIREC/$s.argv")" 0
+  check "pi: $s runs in the checkout" "$(cat "$PIREC/$s.cwd" 2>/dev/null)" "$PWD"
+  # The plan is framed on both sides, so its text cannot run on into instructions.
+  check "pi: $s gets the prompt and the framed plan on stdin" "$(awk '
+    /^You are reviewing/ && !a { a = NR } $0 == "--- PLAN ---" && !b { b = NR } $0 == "~~~~plan" && !c { c = NR }
+    /MAGICPIPLANTOKEN/ && !d { d = NR } $0 == "--- END PLAN ---" { e = NR }
+    END { print (a && a < b && b < c && c < d && d < e) ? "framed" : "not framed" }' "$PIREC/$s.stdin")" framed
+done
+check "pi: the defaults are the relay's (glm-5.3 / grok-4.7, both at low)" \
+  "$(pi_arg pi_glm --model) $(pi_arg pi_glm --thinking) $(pi_arg pi_grok --model) $(pi_arg pi_grok --thinking)" \
+  "zai/glm-5.3 low xai/grok-4.7 low"
+check "pi: the dispatch line shows both seats' pins" \
+  "$(printf '%s' "$pout" | grep -c -e '→ pi_glm reviewing… (model=zai/glm-5.3, effort=low)' -e '→ pi_grok reviewing… (model=xai/grok-4.7, effort=low)')" 2
+
+# T.6: the reader, one row per stream shape. pi's own non-zero status wins over the reader's.
+pi_row() { # pi_row <mode> → "<rc>" and the combined output in $prow
+  pi_clear
+  prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_PI_MODE="$1" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
+}
+pi_row garbage
+check "pi reader: non-JSON lines around the stream are skipped" "$?|$(printf '%s' "$prow" | grep -c 'REVIEW-pi-zai/glm-5.3')" "0|1"
+pi_row length
+check "pi reader: a cut-off with pi exit 0 is no review, and says stopReason=length" "$?|$(printf '%s' "$prow" | grep -c 'stopReason=length')" "3|1"
+pi_row length1
+check "pi reader: a cut-off with pi exit 1 reports pi's code and the reader's reason" \
+  "$?|$(printf '%s' "$prow" | grep -c -e 'exited with code 1' -e 'stopReason=length')" "3|2"
+pi_row error
+check "pi reader: a provider error carries its message, on one line" "$?|$(printf '%s' "$prow" | grep -c 'stopReason=error.*quota exceeded for test')" "3|1"
+pi_row blank
+check "pi reader: a whitespace-only final text is no review" "$?|$(printf '%s' "$prow" | grep -c 'stopReason=stop')" "3|1"
+pi_row none
+check "pi reader: a stream with no final assistant message is no review" "$?|$(printf '%s' "$prow" | grep -c 'ended without a final assistant message')" "3|1"
+pi_row exit124
+check "pi reader: pi's 124 wins over a printed review, and reads as a timeout" "$?|$(printf '%s' "$prow" | grep -c 'pi_glm: timed out after')" "3|1"
+# A tool child that holds the pipe must not hold the round past the timeout. Needs a timeout binary:
+# without one no plan seat has a limit, and this seat follows that rule.
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  pi_clear
+  _t0=$(date +%s)
+  prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" STUB_PI_MODE=hang SHIP_FEATURE_PLAN_TIMEOUT=3 bash "$CLI" plan-review --reviewers pi_glm 2>&1)
+  _rc=$?
+  _el=$(($(date +%s) - _t0))
+  check "pi: a pipe held by a tool child ends at the timeout (rc|diag|under 15 s)" \
+    "$_rc|$(printf '%s' "$prow" | grep -c 'timed out after 3s')|$([ "$_el" -lt 15 ] && echo fast || echo "slow ${_el}s")" "3|1|fast"
+else
+  echo "  ok   [-] pi hang test skipped (no timeout or gtimeout)"
+  PASS=$((PASS + 1))
+fi
+
+# T.7: no node → the seat refuses before pi starts. $PBIN alone is the curated PATH of the
+# missing-grok test above: the tools the CLI needs, the stubs, and no node.
+pi_clear
+prow=$(printf 'plan\n' | PATH="$PBIN" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
+check "pi: no node → exit 3, says so, and pi never starts" \
+  "$?|$(printf '%s' "$prow" | grep -c "pi_glm: node not found")|$(pi_ran pi_glm)" "3|1|no"
+# T.7b: no pi → the quorum rule fails the round, as for every seat.
+rm -f "$PBIN/pi"
+prow=$(printf 'plan\n' | PATH="$PBIN" bash "$CLI" plan-review --reviewers pi_grok 2>&1)
+check "pi: no pi binary → exit 3 (pi not installed)" "$?|$(printf '%s' "$prow" | grep -c 'pi not installed (required by the panel)')" "3|1"
+write_pi_stub # restore
+
+# T.8: the pins. The shared file pins one value per seat; the other value keeps its default.
+printf 'MODEL_pi_glm=pin-glm-m1\nEFFORT_pi_grok=high\n' >"$CFGDIR/shared-pi"
+pi_clear
+prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi" bash "$CLI" plan-review --reviewers pi_glm,pi_grok 2>&1)
+check "pi: MODEL_pi_glm / EFFORT_pi_grok in the shared file reach each seat's argv" \
+  "$(pi_arg pi_glm --model) $(pi_arg pi_glm --thinking) $(pi_arg pi_grok --model) $(pi_arg pi_grok --thinking)" \
+  "pin-glm-m1 low xai/grok-4.7 high"
+check "pi: the dispatch line shows the pinned values" \
+  "$(printf '%s' "$prow" | grep -c -e '→ pi_glm reviewing… (model=pin-glm-m1, effort=low)' -e '→ pi_grok reviewing… (model=xai/grok-4.7, effort=high)')" 2
+pi_clear
+printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi" PI_GLM_REVIEW_MODEL=pin-glm-env bash "$CLI" plan-review --reviewers pi_glm >/dev/null 2>&1
+check "pi: PI_GLM_REVIEW_MODEL in the environment beats MODEL_pi_glm" "$(pi_arg pi_glm --model)" pin-glm-env
+printf 'PI_GROK_REVIEW_EFFORT=max\n' >"$CFGDIR/own-pi"
+pi_clear
+prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG="$CFGDIR/own-pi" bash "$CLI" plan-review --reviewers pi_grok 2>&1)
+check "pi: PI_GROK_REVIEW_EFFORT in ship-feature's own config is reported and ignored" \
+  "$(printf '%s' "$prow" | grep -c "PI_GROK_REVIEW_EFFORT is set in ship-feature's config and is IGNORED there")|$(pi_arg pi_grok --thinking)" "1|low"
+
+# T.9: the effort check is an exact list. pi does not refuse a level it does not know, so a value
+# that passed as a PATTERN here would run at some other effort and report a clean review.
+for v in 'low medium' 'medium high' '*' 'l?w' '?high' '[lm]ow' 'LOW'; do
+  pi_clear
+  prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" PI_GLM_REVIEW_EFFORT="$v" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
+  check "pi: effort '$v' is refused before any seat starts" \
+    "$?|$(printf '%s' "$prow" | grep -c 'Valid: off minimal low medium high xhigh max')|$(pi_ran pi_glm)" "1|1|no"
+done
+_levels=$(sed -n 's/^SF_PI_EFFORT_LEVELS="\(.*\)"$/\1/p' "$CLI")
+_bad=""
+for v in $_levels; do
+  pi_clear
+  printf 'plan\n' | PATH="$PBIN:$PATH" PI_GROK_REVIEW_EFFORT="$v" bash "$CLI" plan-review --reviewers pi_grok >/dev/null 2>&1 || _bad="$_bad $v(rc)"
+  [ "$(pi_arg pi_grok --thinking)" = "$v" ] || _bad="$_bad $v(argv)"
+done
+check "pi: every level in SF_PI_EFFORT_LEVELS is accepted and reaches --thinking${_bad:+ (failed:$_bad)}" "${_levels:-empty}|${_bad:-none}" "off minimal low medium high xhigh max|none"
+# The case arms and the list in the message must name the same words.
+_arms=$(awk '/_pv="\$\{!_pi_e\}"/ { f = 1 } f && /\) ;;$/ { sub(/\) ;;$/, ""); gsub(/ \| /, " "); sub(/^ +/, ""); print; exit }' "$CLI")
+check "pi: the effort case arms match SF_PI_EFFORT_LEVELS" "$_arms" "$_levels"
+# T.10: a model that would be parsed as a flag.
+prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" PI_GROK_REVIEW_MODEL=-x bash "$CLI" plan-review --reviewers pi_grok 2>&1)
+check "pi: a model starting with '-' is refused" "$?|$(printf '%s' "$prow" | grep -c "invalid PI_GROK_REVIEW_MODEL: '-x'")" "1|1"
+# T.11: the de-dupe.
+pi_clear
+printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers pi_glm,pi_glm >/dev/null 2>&1
+check "pi: pi_glm,pi_glm runs the seat once" "$?|$(wc -l <"$PIREC/pi_glm.ran" | tr -d '[:space:]')" "0|1"
+
+# T.12b: only a pi seat ON THE PANEL has its pins checked, so a pin that a later pi makes valid
+# cannot stop a review with no pi seat. The spaced panel proves the pre-pass trims like dispatch.
+# (The unpinned case, which must resolve to `low` before the check, is the defaults check above.)
+printf 'EFFORT_pi_grok=bogus\n' >"$CFGDIR/shared-pi-bogus"
+(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi-bogus" bash "$CLI" plan-review --reviewers codex >/dev/null 2>&1)
+check "pi: a bad pi pin does not stop a panel with no pi seat" $? 0
+(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi-bogus" bash "$CLI" plan-review --reviewers pi_grok >/dev/null 2>&1)
+check "pi: a bad pi pin stops a panel with that seat" $? 1
+(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-pi-bogus" bash "$CLI" plan-review --reviewers 'codex, pi_grok' >/dev/null 2>&1)
+check "pi: a bad pi pin stops a spaced panel with that seat" $? 1
 
 # antigravity/gemini runs the `gemini` CLI in DEFAULT non-interactive mode (already excludes
 # shell/edit/write_file/web_fetch) with `-e none` to disable extensions. It must NOT pass
@@ -3892,6 +4106,36 @@ printf 'review body from $_b\nVERDICT: clean\n'
 STUB
   chmod +x "$ABIN/$_b"
 done
+# The pi seats (pi_glm, pi_grok) share the `pi` binary, so this fake picks the seat from its --model
+# value (whole parts split on / and -). No test may override MODEL_pi_* or PI_*_REVIEW_MODEL while
+# using it. Like codex and grok above, the verdict comes from STUB_LAST_<seat> (unset: clean; empty:
+# none). It is ONE text field of a final assistant message, built with JSON.stringify: raw lines pasted
+# into JSON would not parse, the reader would exit 3, and the check would read a dead seat.
+cat >"$ABIN/pi" <<'PISTUB'
+#!/usr/bin/env bash
+model="" prev=""
+for a in "$@"; do
+  [ "$prev" = "--model" ] && model="$a"
+  prev="$a"
+done
+seat=""
+set -f
+for part in $(printf '%s' "$model" | tr '/-' '  '); do
+  case "$part" in glm) seat=pi_glm ;; grok) seat=pi_grok ;; esac
+done
+set +f
+[ -n "$seat" ] || { echo "fake pi: no seat in --model '$model'" >&2; exit 9; }
+printf '%s\n' "$*" >>"$STUB_LOG.$seat"
+cat >/dev/null
+last_var="STUB_LAST_$seat"
+if [ -n "${!last_var+x}" ]; then last="${!last_var}"; else last="VERDICT: clean"; fi
+node -e '
+const [seat, last] = process.argv.slice(1);
+const text = "review body from " + seat + (last ? "\n" + last : "");
+process.stdout.write(JSON.stringify({ type: "message_end",
+  message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } }) + "\n");' "$seat" "$last"
+PISTUB
+chmod +x "$ABIN/pi"
 # Fake pr-review-relay: record argv; write a verdict file when asked; exit with STUB_RELAY_RC.
 cat >"$ABIN/pr-review-relay" <<'RSTUB'
 #!/usr/bin/env bash
@@ -4649,11 +4893,20 @@ SHIP_FEATURE_FORCE_SANDBOX_PROBE=ok run_pc
 rc=$?
 check "plan-consensus: the antigravity seat (named agy) is always recorded as degraded" "$rc|$(awk -F= '$1=="degraded"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)|$(awk -F= '$1=="plan_panel"{print $2}' "$AH/state/autonomous/consensus/plan-$PKEY.consensus" 2>/dev/null)" "0|antigravity|antigravity,codex"
 mk_plan_world
-sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=claude,codex,cursor,glm,grok,antigravity/' "$AH/relay.conf"
+sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=claude,codex,cursor,glm,grok,antigravity,pi_glm,pi_grok/' "$AH/relay.conf"
 run_pc
 rc=$?
 _c="$AH/state/autonomous/consensus/plan-$PKEY.consensus"
-check "plan-consensus: every supported plan seat's verdict is read back by name (claude, codex, cursor, glm, grok, antigravity)" "$rc|$(for _s in claude codex cursor glm grok antigravity; do awk -F= -v k="seat.$_s" '$1==k{printf "%s ", $2}' "$_c" 2>/dev/null; done)" "0|clean clean clean clean clean clean "
+check "plan-consensus: every supported plan seat's verdict is read back by name (claude, codex, cursor, glm, grok, antigravity, pi_glm, pi_grok)" "$rc|$(for _s in claude codex cursor glm grok antigravity pi_glm pi_grok; do awk -F= -v k="seat.$_s" '$1==k{printf "%s ", $2}' "$_c" 2>/dev/null; done)" "0|clean clean clean clean clean clean clean clean "
+# A pi seat's findings line, read out of pi's json stream, sends the plan back for revision. The panel
+# must hold pi_grok: on the default codex,grok panel STUB_LAST_pi_grok would be unused and this exits 0.
+mk_plan_world
+sed -i.bak 's/^PLAN_REVIEWERS=.*/PLAN_REVIEWERS=codex,pi_grok/' "$AH/relay.conf"
+export STUB_LAST_pi_grok="$FINDINGS"
+run_pc
+rc=$?
+unset STUB_LAST_pi_grok
+check "plan-consensus: pi_grok with findings → exit 2 (revise)" "$rc|$([ -s "$SL.pi_grok" ] && echo ran || echo not-run)" "2|ran"
 mk_plan_world
 export STUB_TOUCH_PLAN="$AH/plan.md"
 run_pc
@@ -5163,7 +5416,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=687
+EXPECTED=731
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
