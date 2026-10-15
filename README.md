@@ -178,6 +178,11 @@ Gemini CLI, OpenCode, Pi, Qwen and Grok read it there. Claude and Cursor get a l
 directory when the tool is installed (`~/.gemini/config/skills/`, `~/.junie/skills/`). The directory is
 the link, not the file: Codex does not load a `SKILL.md` that is a symlink to a file.
 
+The Codex block and the Cursor rule are always loaded, so they are short pointers to the skill file,
+not copies of the lanes. They keep one rule, because missing it loses money: a human merges every
+careful-lane change. The lane rules live in the skill and in `WORKFLOW.md`, and the suite checks them
+there.
+
 ## The CLI
 
 - `ship-feature review [args…]` — the light lane's review: a pass-through to `review-local` (in
