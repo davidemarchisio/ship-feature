@@ -8,6 +8,21 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Added
 
+- **Two lanes; the light lane is the default.** A change that is not risky skips the plan, the plan
+  review, the PR and the human merge: one review round by one reviewer on the branch diff
+  (`review-local`), then `ship-feature land`. The careful lane (payments, consent, auth, migrations,
+  security, store policy) keeps the gated pipeline with low caps: one plan-review round, at most two
+  cross-review rounds, no narrow rounds, and the open findings go to Gate 2 instead of another cycle.
+  The adapters now summarise the lanes and point at `WORKFLOW.md` for the details, and the suite checks
+  those details in `WORKFLOW.md` only. Why: with caps of six rounds the loop did not converge, and one
+  fix could take days.
+
+- **`ship-feature land [-m <message>]...`.** The light lane's merge, with no PR: from inside the
+  feature worktree it merges the branch (`--no-ff`) onto a freshly fetched default branch, checks that
+  merge out and pushes it, so the pre-push hook tests the exact tree that lands. Every failure (a
+  conflict, a refused hook, a moved default branch) leaves the remote as it was and returns to the
+  branch.
+
 - **Plan-review seats `pi_glm` and `pi_grok`, on the `pi` runner.** One `pi` binary, one model each:
   `zai/glm-5.3` and `xai/grok-4.7`, both at `low` effort by default. They are pinned by the relay's own
   keys, `MODEL_pi_glm` / `EFFORT_pi_glm` and `MODEL_pi_grok` / `EFFORT_pi_grok` in

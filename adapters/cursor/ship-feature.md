@@ -1,81 +1,51 @@
 ---
-description: Gated workflow for shipping any repository change (plan → review → implement → cross-review → merge → verify). Apply when the user asks to implement/build/add/fix/ship a change to a repo.
+description: Workflow for shipping any repository change, in two lanes — light by default (worktree → one review → ship-feature land), careful for risky changes (plan → PR → human merge). Apply when the user asks to implement/build/add/fix/ship a change to a repo.
 alwaysApply: false
 ---
 
 # ship-feature workflow
 
 When asked to **implement / build / add / fix / ship a change to this repository** (not a read-only task
-like diagnosis, review, or a question), follow the ship-feature workflow rather than editing straight
-away. The canonical process is `~/.config/ship-feature/WORKFLOW.md` — read it and follow it.
+like diagnosis, review, or a question), follow the ship-feature workflow. The canonical process is
+`~/.config/ship-feature/WORKFLOW.md`: read it before your first change in a session.
 
-Non-negotiable points:
-- Keep the plan in `~/.config/ship-feature/plans/<repo>-<slug>.md` — `mkdir -p` it if missing —
-  **never** in the repo and **never** in a session
-  scratchpad (`/tmp` is tmpfs on many setups: a reboot destroys it, and the plan has to outlive
-  every review round).
-- Plan first; have the plan reviewed; then **stop for explicit human approval before writing to the
-  source repo**.
-- **Plan-review has its own 6-round cap** (distinct from the PR cross-review loop below — its
-  **plan-qualifying** term is not the same as, and must not be conflated with, the "qualifying
-  Should-fix" used in cross-review). A round is
-  one `plan-review` call where every reviewer responded — exit `3` does not count as a round, and if
-  the same reviewer hits exit `3` on **two consecutive attempts** at the same round, stop retrying it,
-  drop that reviewer for the round, and **tell the human about the reduced panel before Gate 1** rather
-  than silently substituting (if that leaves zero reviewers, it isn't a completed round — take the
-  failure itself to Gate 1). Iterate only for a Blocker or a **plan-qualifying** Should-fix (the plan
-  is wrong about the tree, unsafe, or materially incomplete — a missing edge case, failure mode, or
-  verification gap — not a style/approach preference). Change the plan only for a Blocker or a
-  plan-qualifying Should-fix: every change needs one more round, so a Nit is recorded at Gate 1, not
-  applied. A clean round 1 skips straight to Gate 1. After a round with a plan-qualifying finding,
-  revise the plan and **run the next round at once**, against **the same full panel — never narrowed**;
-  **never ask the human for one more round**, because **an unreviewed plan revision never reaches Gate
-  1**. If round 6 still has an open plan-qualifying finding, **stop — do not run a round 7 on your
-  own**; bring the plan plus a disagreement summary (objection, your classification, reason) to Gate 1,
-  where the human can accept it as classified, authorize one more round with explicit reasoning, or drop
-  the change. A human-authorized extra round is not an agent-initiated round: it either resolves
-  cleanly, or produces an updated disagreement summary and returns to Gate 1 again.
-- Implement in a **git worktree**, stage explicit paths, open a PR. Run `ship-feature preflight` first:
-  it refuses a repo without a committed `.githooks/pre-push` that git runs on push. The pre-push hook
-  must run the tests, a linter and a formatter check; read it and the script it calls, and name those
-  checks in the PR's implementation notes. A repo without a hook adds it in its own PR first.
-- Cross-review with `ship-feature relay --author cursor --context-file ~/.config/ship-feature/plans/<repo>-<slug>.md`
-  — **no `--reviewers`**: `relay` injects your configured quorum, `SHIP_FEATURE_REVIEWERS` (set in
-  ship-feature's config, else `REVIEWERS` in `~/.config/pr-review-relay/config`), and a typed list
-  can only be staler than that file. An **exported** `SHIP_FEATURE_REVIEWERS` beats both configs,
-  so check your shell profile when a round comes back the wrong size.
-  Pass the flag only for the narrow rounds below.
-  **Read each round's startup lines and say which reviewers actually ran**: a benched
-  (out-of-quota) seat is dropped and the run still exits `0`. **Always pass the plan** with
-  `--context-file`: a reviewer that cannot see the intent can find bugs but not "this is not what we
-  agreed to build". The **plan file is the source** the PR body is generated from, and is **immutable once approved** —
-  write and revise it freely before Gate 1, never after; for later rounds point `--context-file` at a
-  derived copy (plan + dispositions), which is generated, never hand-edited.
-- Iterate only for a **Blocker** or a **qualifying** Should-fix — a material problem of correctness,
-  safety, deployability, or verification. Round 1 is the full quorum (**every configured reviewer except the author** — the relay skips the
-  author, so leaving it in your config costs nothing); rounds 2+ are **narrow** (only
-  reviewers with a stake in an open finding, plus any whose finding you downgraded — this is where
-  `--reviewers` is passed on purpose); the **closing**
-  round is the full quorum again, on the SHA that will merge — **unless round 1 was already clean**,
-  in which case it IS the closing round and a second full panel is waste. The relay's exit `0` means
-  every DISPATCHED reviewer ran, not that everyone ran and not that the reviews are clean: a
-  **benched** (out-of-quota) reviewer is dropped and still exits `0`, so check the startup lines — a
-  benched seat in an initial or closing round is the human's call before the round.
-- **Non-qualifying findings are recorded and left unfixed** until a follow-up PR. Fixing one creates a
-  commit after the reviewed SHA, and then the merged code is not the code anyone reviewed.
-- **If the closing round raises a new qualifying finding it becomes the INITIAL round of another
-  cycle** — full, then narrow, then a full quorum again on the new candidate. Not fix-narrow-stop:
-  that merges a SHA no full panel ever saw.
-- **Never `gh pr edit` the derived context file.** The PR body is generated from the plan and only
-  the plan; a Dispositions section that grows each round would bury the plan under the argument
-  about the plan.
-- **Exit `4` is the round cap: stop and escalate to the human.** Never a reason to merge, never a
-  reason to pass `--reset`.
-- **The author classifies each finding in writing**, naming it and the reason.
-- **Post dispositions before re-running** — the relay deletes each reviewer's previous comment, so an
-  unposted finding and its classification are lost. Do **not** put the relay's marker text
-  (`<Name> review (automated cross-review)`) in that comment, or it gets deleted too.
-- Disputed classifications do not block the stop; they go to **Gate 2** with both positions.
-  Still two gates, never three.
-- **The human merges** — never self-merge.
-- **Autonomous mode (experimental, off by default):** only with `SHIP_FEATURE_AUTONOMOUS=1` set by the human AND `--autonomous` on `plan-consensus`, `relay` and `merge-gate`. See the "Autonomous mode" section of `WORKFLOW.md` for the rules, the kill switch and the stop-and-notify duty. `plan-consensus` runs up to 6 rounds: exit 2 means revise the plan and run `plan-consensus` again. Without that variable, never self-merge.
+### Pick the lane first
+
+**The careful lane** is only for: payments and subscriptions; ad consent and ad-revenue paths;
+authentication and account deletion; database migrations and data deletion; security fixes;
+store-policy changes (permissions, SDKs that collect data); and any change the human puts there.
+
+**Everything else is the light lane.** Say which lane you picked, and why, in one line.
+
+### The light lane (default)
+
+1. Work in a **git worktree** off the default branch (never the main tree). Stage explicit paths.
+2. Implement, with tests at the level you touched. Commit.
+3. Review once, with one reviewer, on the branch diff:
+   `review-local --author <self> --base origin/<default> --reviewers <one seat>`.
+4. Fix only what breaks the change for a real user, loses money, or leaks data. Record the other
+   findings in the merge message (`-m "Not fixed: …"`). No second round, unless the fix was large.
+5. `ship-feature land [-m <message>]...` from inside the worktree. The pre-push hook runs on the exact
+   merged tree. If it refuses, nothing landed: fix what it reported, or run `land` again.
+6. Ship it if the change needs a release or a deploy. **Done means live**: report the version or the
+   deployed commit, not "merged".
+
+No plan, no plan review, no PR, no human merge gate.
+
+### The careful lane
+
+1. Write a short plan in `~/.config/ship-feature/plans/<repo>-<slug>.md` (`mkdir -p` it if missing;
+   never the repo, never `/tmp`, which a reboot can wipe).
+2. `ship-feature plan-review <that file>` — **one round**, no `--reviewers` (the config is the panel).
+   Read the startup lines and say which reviewers actually ran: a benched seat is dropped and the run
+   still exits `0`. Fix the blockers in the plan.
+3. 🚦 **Stop for the human to approve the plan.**
+4. `ship-feature preflight`, implement in a worktree, open a PR.
+5. `ship-feature relay --author <self> --context-file <plan> --max-rounds 2` — **two rounds at most**:
+   round 1 the full panel; round 2, only if round 1 raised a qualifying finding, the full panel on the
+   SHA that will merge. Post dispositions before round 2. Whatever is still open after round 2 goes to
+   the merge gate as an open item, not into a round 3.
+6. 🚦 **Stop for the human to merge.** Never self-merge in this lane.
+7. Verify the tests on the merge commit.
+
+Read `WORKFLOW.md` for the details of each step.

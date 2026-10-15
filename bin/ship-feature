@@ -30,6 +30,13 @@
 #   ship-feature merge-gate <pr> --autonomous [--merge]
 #                            EXPERIMENTAL. Gate 2 without a human: eight checks, then one pinned
 #                            `gh pr merge --merge --match-head-commit`. Exit 6 stop, 7 refused, 8 audit not posted.
+#   ship-feature land [-m <message>]...
+#                            The light lane's merge, with no PR: from inside the feature worktree, merge
+#                            this branch (--no-ff) onto a fresh origin/<default> and push that merge
+#                            straight to the default branch. The merge is checked out for the push, so
+#                            the pre-push hook tests the exact tree that lands. Each -m adds a paragraph
+#                            to the merge message. Any failure leaves the remote as it was and returns to
+#                            the branch. Exit 0 landed, 1 refused or failed.
 #   ship-feature help        This message.
 #
 # The workflow itself lives in WORKFLOW.md; this tool does not drive it. State/resume is intentionally
@@ -600,7 +607,7 @@ cmd_relay() {
     # UNDISPUTED, without which it would push agents into re-rounds on findings the rule sends to Gate 2.
     0) echo "  → relay: every DISPATCHED reviewer ran (exit 0) — check the startup lines for a benched seat. NOT approval: READ the verdicts, resolve every Blocker and every UNDISPUTED qualifying Should-fix (correctness / safety / deployability / verification) — a disputed classification does not block the loop, it goes to Gate 2." >&2 ;;
     3) echo "  → relay: round not clean (exit 3) — do not trust these reviews, re-run." >&2 ;;
-    4) echo "  → relay: round cap reached (exit 4) — stop and escalate to a human." >&2 ;;
+    4) echo "  → relay: round cap reached (exit 4) — stop and take the open findings to Gate 2." >&2 ;;
   esac
   return $rc
 }
@@ -1739,7 +1746,7 @@ $SF_VERDICT_RULES"
     return 3
   fi
   if [ -z "${SF_VERDICT_DIR:-}" ]; then
-    echo "✔ Plan review done — $ran/$ran reviewer(s) responded (cap: 6 rounds, same full panel every time). READ the findings: no Blocker/plan-qualifying Should-fix → straight to Gate 1. A Blocker or plan-qualifying Should-fix → revise the plan and run the next round at once; never ask the human for one more round; an unreviewed plan revision never reaches Gate 1. Round 6 with a plan-qualifying finding still open → do not run a round 7 on your own — write a disagreement summary (objection, classification, reason) and take it to Gate 1 instead." >&2
+    echo "✔ Plan review done — $ran/$ran reviewer(s) responded (cap: 1 round). READ the findings: fix each Blocker and plan-qualifying Should-fix in the plan, then go straight to Gate 1 with the revision and what changed. Do not run a second round on your own: the human may ask for one there." >&2
   else
     echo "✔ Plan review done — $ran/$ran reviewer(s) responded." >&2
   fi
@@ -2945,6 +2952,50 @@ sf_gate_merge() {
   return 0
 }
 
+# The light lane's merge (WORKFLOW.md, "The light lane"). No PR: the reviewed branch is merged onto the
+# freshly fetched default branch and pushed to it. The merge is CHECKED OUT (detached) before the push
+# because the pre-push hook tests the working tree: pushing a merge built off to the side would let the
+# hook test the branch alone, and a change on the default branch that the branch never saw would land
+# untested. Every failure path returns to the branch, and the remote moves only on a successful push.
+cmd_land() {
+  local msgs=() def cur top merged
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -m | --message)
+        [ $# -ge 2 ] || die "land: $1 needs a value."
+        msgs+=(-m "$2")
+        shift 2
+        ;;
+      *) die "land: unknown argument '$1' (usage: ship-feature land [-m <message>]...)" ;;
+    esac
+  done
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not inside a git working tree."
+  def=$(default_branch) || die "cannot resolve origin/HEAD (the default branch). Run: git remote set-head origin -a"
+  cur=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || die "cannot read current branch."
+  [ "$cur" != "HEAD" ] || die "detached HEAD — run land from the feature branch you want to land."
+  [ "$cur" != "$def" ] || die "you are on the default branch '$def' — land runs from a feature branch."
+  git diff --quiet && git diff --cached --quiet || die "uncommitted changes — commit them first: land ships commits only."
+  git fetch -q origin "$def" || die "git fetch origin $def failed."
+  [ "$(git rev-list --count "origin/$def..$cur")" -gt 0 ] || die "nothing to land: $cur has no commit that origin/$def lacks."
+  git checkout -q --detach "origin/$def" || die "cannot check out origin/$def for the merge."
+  # ${msgs[@]+...}: an empty array under set -u aborts Bash 3.2.
+  if ! git merge -q --no-ff --no-edit -m "Merge branch '$cur'" ${msgs[@]+"${msgs[@]}"} "$cur" >/dev/null; then
+    git merge --abort >/dev/null 2>&1
+    git checkout -q "$cur"
+    die "merge conflict with origin/$def — merge origin/$def into $cur, resolve, commit, then run land again."
+  fi
+  merged=$(git rev-parse HEAD)
+  if ! git push -q origin "HEAD:refs/heads/$def"; then
+    git checkout -q "$cur"
+    die "push refused: the pre-push hook failed, or $def moved since the fetch. Nothing landed. Fix what the hook reported, or run land again."
+  fi
+  git checkout -q "$cur"
+  top=$(git rev-parse --show-toplevel 2>/dev/null)
+  ok "landed $cur on $def as $merged"
+  echo "  next: release or deploy if the change needs it, then remove the worktree:"
+  echo "    git worktree remove '$top' && git branch -d '$cur'"
+}
+
 main() {
   local sub="${1:-help}"
   [ $# -gt 0 ] && shift
@@ -2954,6 +3005,7 @@ main() {
     plan-review) cmd_plan_review "$@" ;;
     plan-consensus) cmd_plan_consensus "$@" ;;
     merge-gate) cmd_merge_gate "$@" ;;
+    land) cmd_land "$@" ;;
     # Print the whole header comment block — from line 2 to the first line that is not a
     # comment. A hardcoded end line silently truncates help the moment anyone documents a new
     # flag up there, which is exactly how this broke once; the shebang is the only line skipped.
