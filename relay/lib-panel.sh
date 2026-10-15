@@ -271,11 +271,15 @@ review_looks_like_a_review() { # <text>   0 = a review, 1 = no verdict, 2 = verd
   # Should-fix and Blocker — so an agent that reflects its instructions back would
   # otherwise pass this gate trivially, which is the very failure class it exists
   # to catch.
+  # The last expression is PR_RELAY_VERDICT_RULES, which --verdict-file appends to every
+  # prompt and which names Blockers, Should-fix and Nit too. test-panel-config.sh echoes
+  # the text it reads from pr-review-relay, so a reworded rule fails there, not here.
   _rlr_norm=$(printf '%s' "$_rlr_norm" | sed \
     -e 's/report missing tests as should-fix, unless the untested path is itself a blocker\.//g' \
     -e 's/group findings by severity: blocker \/ should-fix \/ nit\.//g' \
     -e 's/blocker \/ should-fix \/ nit//g' \
-    -e 's/if it looks good, say so in one line\.//g')
+    -e 's/if it looks good, say so in one line\.//g' \
+    -e 's|end the review with exactly one final line, with nothing after it: verdict: clean (zero blockers and zero should-fix) or verdict: findings blockers=<n> should_fix=<m>\. a should-fix is only a material problem of correctness, safety, deployability or verification; report every style, wording or preference item as a nit, which never blocks\. start a line with verdict: only for that final line\.||g')
 
   # A verdict, named. Plurals are in the pattern, not bolted on as extra approval
   # phrases: "## Blockers" and "Nits:" are ordinary review headings, and rejecting a
@@ -287,11 +291,13 @@ review_looks_like_a_review() { # <text>   0 = a review, 1 = no verdict, 2 = verd
   # it was accepted — and a raw transcript is exactly what a broken agent emits (one
   # of the recovered failures is a leaked tool-call fragment).
   # `should[- ]fix(es)?` and not `fixe?s?`, which also matched `should-fixs`.
+  # `verdict: clean` is the approval a --verdict-file review ends with, and it may be the
+  # only one: "No issues. VERDICT: clean" names no severity and never says "looks good".
   printf '%s' "$_rlr_norm" \
     | grep -E '(^|[^a-z0-9_])(blockers?|nits?|should[- ]fix(es)?)([^a-z0-9_]|$)' >/dev/null \
     && _rlr_marker=1
   printf '%s' "$_rlr_norm" \
-    | grep -E '(^|[^a-z0-9_])(lgtm|looks good|no findings|nothing to flag|none found)([^a-z0-9_]|$)' >/dev/null \
+    | grep -E '(^|[^a-z0-9_])(lgtm|looks good|no findings|nothing to flag|none found|verdict: clean)([^a-z0-9_]|$)' >/dev/null \
     && _rlr_marker=1
 
   [ -n "$_rlr_marker" ] || return 1   # nothing that claims a verdict
@@ -381,7 +387,7 @@ review_looks_like_a_review() { # <text>   0 = a review, 1 = no verdict, 2 = verd
   _rlr_after=$(printf '%s' "$_rlr_tail" | sed -E \
     "s/.*(reading the rest|reading the remainder|let me read|i need the rest|before concluding|before reviewing|i('ll| will) read the remaining)//")
   printf '%s' "$_rlr_after" | grep -E \
-    '(^|[^a-z0-9_])(blockers?|nits?|should[- ]fix(es)?|lgtm|looks good|no findings|nothing to flag|none found)([^a-z0-9_]|$)' \
+    '(^|[^a-z0-9_])(blockers?|nits?|should[- ]fix(es)?|lgtm|looks good|no findings|nothing to flag|none found|verdict: clean)([^a-z0-9_]|$)' \
     >/dev/null && return 0
 
   return 2   # claims a verdict, then says it is still working
