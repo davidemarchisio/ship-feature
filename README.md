@@ -173,10 +173,10 @@ workflow skill to `~/.agents/skills/`, a Cursor rule, and a marked block in `~/.
 ship-feature skill for any feature/fix.
 
 The skill is one directory, `adapters/skill/`, linked as `~/.agents/skills/ship-feature`. Codex,
-Gemini CLI, OpenCode, Pi, Qwen and Grok read it there. Claude gets a link in `~/.claude/skills/`, and
-Antigravity, Cursor and Junie get one in their own skills directory when the tool is installed
-(`~/.gemini/antigravity-cli/`, `~/.cursor/`, `~/.junie/`). The directory is the link, not the file:
-Codex does not load a `SKILL.md` that is a symlink to a file.
+Gemini CLI, OpenCode, Pi, Qwen and Grok read it there. Claude and Cursor get a link in
+`~/.claude/skills/` and `~/.cursor/skills/`. Antigravity and Junie get one in their own skills
+directory when the tool is installed (`~/.gemini/antigravity-cli/`, `~/.junie/`). The directory is
+the link, not the file: Codex does not load a `SKILL.md` that is a symlink to a file.
 
 ## The CLI
 

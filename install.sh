@@ -6,8 +6,8 @@
 #   - symlinks bin/ship-feature and the relay's commands (relay/: review-local, pr-review-relay and
 #     their helpers) into ~/.local/bin,
 #   - installs the workflow skill to ~/.agents/skills/ship-feature (read by Codex, Gemini CLI,
-#     OpenCode, Pi, Qwen and Grok) and links it for Claude, and for Antigravity, Cursor and Junie
-#     when they are installed,
+#     OpenCode, Pi, Qwen and Grok) and links it for Claude and Cursor, and for Antigravity and
+#     Junie when they are installed,
 #   - installs the Cursor rule,
 #   - inserts a marked block into ~/.codex/AGENTS.md (atomic; backs the file up first),
 #   - seeds ~/.config/ship-feature/config from config.example only if absent,
@@ -60,7 +60,7 @@ link() {
 # on and report success with a directory missing — the worst outcome here, since
 # the thing that then goes wrong is a plan silently written somewhere volatile.
 for dir in "$CFG" "$CFG/plans" "$BIN" "$AGENTS_SKILLS" \
-  "$HOME/.claude/skills" "$HOME/.cursor/rules"; do
+  "$HOME/.claude/skills" "$HOME/.cursor/rules" "$HOME/.cursor/skills"; do
   mkdir -p "$dir" || {
     echo "  ! could not create $dir" >&2
     fails=$((fails + 1))
@@ -128,12 +128,15 @@ if [ -d "$_old_skill" ] && [ ! -L "$_old_skill" ] && [ -L "$_old_skill/SKILL.md"
   rm -f "$_old_skill/SKILL.md" && rmdir "$_old_skill" && say "removed old skill layout $_old_skill"
 fi
 link "$REPO/adapters/skill" "$AGENTS_SKILLS/ship-feature"
-# ~/.agents/skills is read by Codex, Gemini CLI, OpenCode, Pi, Qwen and Grok. These read only their
-# own directory (Antigravity measured with `agy -p`; Cursor and Junie are where their own installers
-# put skills), so they get a link to the same place. One whose home directory is missing is not
-# installed here, and gets nothing: the installer does not create config for a tool you do not use.
+# ~/.agents/skills is read by Codex, Gemini CLI, OpenCode, Pi, Qwen and Grok. Claude, Cursor,
+# Antigravity and Junie read only their own directory (Antigravity measured with `agy -p`; Cursor
+# and Junie are where their own installers put skills), so they get a link to the same place.
+# Cursor always gets it, as it always gets the Cursor rule (step 4). Antigravity and Junie get it
+# only when their home directory exists: the installer does not create config for a tool you do
+# not use.
 link "$AGENTS_SKILLS/ship-feature" "$HOME/.claude/skills/ship-feature"
-SKILL_HOMES=(.gemini/antigravity-cli .cursor .junie)
+link "$AGENTS_SKILLS/ship-feature" "$HOME/.cursor/skills/ship-feature"
+SKILL_HOMES=(.gemini/antigravity-cli .junie)
 for _h in "${SKILL_HOMES[@]}"; do
   [ -d "$HOME/$_h" ] || continue
   if mkdir -p "$HOME/$_h/skills"; then link "$AGENTS_SKILLS/ship-feature" "$HOME/$_h/skills/ship-feature"; else
@@ -222,6 +225,7 @@ smoke '[ -d "$CFG/plans" ]' "plans directory resolves at $CFG/plans"
 smoke '[ -L "$AGENTS_SKILLS/ship-feature" ] && [ -f "$AGENTS_SKILLS/ship-feature/SKILL.md" ] && [ ! -L "$AGENTS_SKILLS/ship-feature/SKILL.md" ]' \
   "skill resolves at $AGENTS_SKILLS/ship-feature (a linked directory, as Codex needs)"
 smoke '[ -f "$HOME/.claude/skills/ship-feature/SKILL.md" ]' "Claude skill resolves"
+smoke '[ -f "$HOME/.cursor/skills/ship-feature/SKILL.md" ]' "Cursor skill resolves"
 for _h in "${SKILL_HOMES[@]}"; do
   [ -d "$HOME/$_h" ] || continue
   smoke '[ -f "$HOME/$_h/skills/ship-feature/SKILL.md" ]' "skill resolves at ~/$_h/skills"
