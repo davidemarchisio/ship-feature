@@ -5,7 +5,9 @@
 #   - installs WORKFLOW.md to ~/.config/ship-feature/WORKFLOW.md (symlink; --copy for a detached copy),
 #   - symlinks bin/ship-feature and the relay's commands (relay/: review-local, pr-review-relay and
 #     their helpers) into ~/.local/bin,
-#   - installs the workflow skill to ~/.agents/skills/ship-feature and links it for Claude,
+#   - installs the workflow skill to ~/.agents/skills/ship-feature (read by Codex, Gemini CLI,
+#     OpenCode, Pi, Qwen and Grok) and links it for Claude and Cursor, and for Antigravity and
+#     Junie when they are installed,
 #   - installs the Cursor rule,
 #   - inserts a marked block into ~/.codex/AGENTS.md (atomic; backs the file up first),
 #   - seeds ~/.config/ship-feature/config from config.example only if absent,
@@ -57,8 +59,8 @@ link() {
 # path exists as a FILE, and a single combined call would let the installer walk
 # on and report success with a directory missing — the worst outcome here, since
 # the thing that then goes wrong is a plan silently written somewhere volatile.
-for dir in "$CFG" "$CFG/plans" "$BIN" "$AGENTS_SKILLS/ship-feature" \
-  "$HOME/.claude/skills" "$HOME/.cursor/rules"; do
+for dir in "$CFG" "$CFG/plans" "$BIN" "$AGENTS_SKILLS" \
+  "$HOME/.claude/skills" "$HOME/.cursor/rules" "$HOME/.cursor/skills"; do
   mkdir -p "$dir" || {
     echo "  ! could not create $dir" >&2
     fails=$((fails + 1))
@@ -112,9 +114,36 @@ for cmd in pr-review-relay review-local pr-review-fetch pr-review-distill pr-rev
   link "$REPO/relay/$cmd" "$BIN/$cmd"
 done
 
-# 3) The one workflow skill (cross-tool), + Claude's link to it.
-link "$REPO/adapters/skill/SKILL.md" "$AGENTS_SKILLS/ship-feature/SKILL.md"
+# 3) The one workflow skill, for every harness.
+# The skill DIRECTORY is the link, not SKILL.md: Codex skips a SKILL.md that is a symlink to a file.
+# Measured 2026-10-15 with `codex exec`: the same file loaded as a regular file and did not load as a
+# file symlink, so Codex never saw this skill while every other harness did.
+# Up to that date the installer made ~/.agents/skills/ship-feature a real directory holding only that
+# symlink. It goes WITHOUT a backup: a backup would sit next to it in the skills directory, and every
+# harness would load it as a second "ship-feature". Only that exact shape is removed; anything else in
+# the way is left to link(), which backs it up.
+_old_skill="$AGENTS_SKILLS/ship-feature"
+if [ -d "$_old_skill" ] && [ ! -L "$_old_skill" ] && [ -L "$_old_skill/SKILL.md" ] &&
+  [ "$(ls -A "$_old_skill")" = "SKILL.md" ]; then
+  rm -f "$_old_skill/SKILL.md" && rmdir "$_old_skill" && say "removed old skill layout $_old_skill"
+fi
+link "$REPO/adapters/skill" "$AGENTS_SKILLS/ship-feature"
+# ~/.agents/skills is read by Codex, Gemini CLI, OpenCode, Pi, Qwen and Grok. Claude, Cursor,
+# Antigravity and Junie read only their own directory (Antigravity measured with `agy -p`; Cursor
+# and Junie are where their own installers put skills), so they get a link to the same place.
+# Cursor always gets it, as it always gets the Cursor rule (step 4). Antigravity and Junie get it
+# only when their home directory exists: the installer does not create config for a tool you do
+# not use.
 link "$AGENTS_SKILLS/ship-feature" "$HOME/.claude/skills/ship-feature"
+link "$AGENTS_SKILLS/ship-feature" "$HOME/.cursor/skills/ship-feature"
+SKILL_HOMES=(.gemini/antigravity-cli .junie)
+for _h in "${SKILL_HOMES[@]}"; do
+  [ -d "$HOME/$_h" ] || continue
+  if mkdir -p "$HOME/$_h/skills"; then link "$AGENTS_SKILLS/ship-feature" "$HOME/$_h/skills/ship-feature"; else
+    echo "  ! could not create $HOME/$_h/skills" >&2
+    fails=$((fails + 1))
+  fi
+done
 
 # 4) Cursor rule.
 link "$REPO/adapters/cursor/ship-feature.md" "$HOME/.cursor/rules/ship-feature.md"
@@ -193,7 +222,14 @@ smoke '"$BIN/review-local" --help >/dev/null 2>&1' "review-local runs"
 smoke '"$BIN/pr-review-relay" --help >/dev/null 2>&1' "pr-review-relay runs"
 smoke '[ -f "$CFG/WORKFLOW.md" ]' "WORKFLOW.md resolves at $CFG/WORKFLOW.md"
 smoke '[ -d "$CFG/plans" ]' "plans directory resolves at $CFG/plans"
+smoke '[ -L "$AGENTS_SKILLS/ship-feature" ] && [ -f "$AGENTS_SKILLS/ship-feature/SKILL.md" ] && [ ! -L "$AGENTS_SKILLS/ship-feature/SKILL.md" ]' \
+  "skill resolves at $AGENTS_SKILLS/ship-feature (a linked directory, as Codex needs)"
 smoke '[ -f "$HOME/.claude/skills/ship-feature/SKILL.md" ]' "Claude skill resolves"
+smoke '[ -f "$HOME/.cursor/skills/ship-feature/SKILL.md" ]' "Cursor skill resolves"
+for _h in "${SKILL_HOMES[@]}"; do
+  [ -d "$HOME/$_h" ] || continue
+  smoke '[ -f "$HOME/$_h/skills/ship-feature/SKILL.md" ]' "skill resolves at ~/$_h/skills"
+done
 smoke '[ -f "$HOME/.cursor/rules/ship-feature.md" ]' "Cursor rule resolves"
 smoke 'grep -qF "# >>> ship-feature >>>" "$AGENTS" 2>/dev/null' "Codex AGENTS.md block present"
 

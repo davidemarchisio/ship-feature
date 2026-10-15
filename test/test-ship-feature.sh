@@ -491,6 +491,38 @@ check "install.sh leaves a symlinked plans target alone" "$(dir_mode "$WORK/shar
 n=$(grep -cF '# >>> ship-feature >>>' "$FAKEHOME/.codex/AGENTS.md" 2>/dev/null)
 [ -n "$n" ] || n=0
 check "install.sh is idempotent (exactly one Codex block)" "$n" 1
+# The skill is a linked DIRECTORY. Codex skips a SKILL.md that is a symlink to a file, so the old
+# layout (a real directory holding a SKILL.md link) hid the skill from Codex alone.
+_sk="$FAKEHOME/.agents/skills/ship-feature"
+check "the skill is a linked directory with a regular SKILL.md (Codex skips a linked file)" \
+  "$([ -L "$_sk" ] && [ -f "$_sk/SKILL.md" ] && [ ! -L "$_sk/SKILL.md" ] && echo yes || echo no)" yes
+# FAKEHOME has had three installs by now: a reinstall replaces the link, and leaves no backup that
+# every harness would load as a second "ship-feature".
+check "reinstalls leave exactly one ship-feature in the skills directory" \
+  "$(ls -A "$FAKEHOME/.agents/skills" | tr '\n' ' ')" "ship-feature "
+# Cursor always gets the skill, as it always gets the Cursor rule.
+check "install.sh links the skill for Cursor" \
+  "$([ -f "$FAKEHOME/.cursor/skills/ship-feature/SKILL.md" ] && echo yes || echo no)" yes
+# Antigravity and Junie get a link where they are installed, and nothing where they are not: the
+# installer must not create config for a tool nobody uses.
+FAKEHOME5="$WORK/home5"
+mkdir -p "$FAKEHOME5/.gemini/antigravity-cli" "$FAKEHOME5/.junie"
+(cd "$HERE/.." && HOME="$FAKEHOME5" bash install.sh >/dev/null 2>&1)
+check "install.sh links the skill for Antigravity and Junie when they are installed" \
+  "$(for _h in .gemini/antigravity-cli .junie; do [ -f "$FAKEHOME5/$_h/skills/ship-feature/SKILL.md" ] && printf y || printf n; done)" yy
+check "install.sh creates no skill home for a harness that is not installed" \
+  "$({ [ -e "$FAKEHOME/.junie" ] || [ -e "$FAKEHOME/.gemini" ]; } && echo created || echo none)" none
+# Migration from the old layout, WITHOUT a backup: a backup would sit in the skills directory, and
+# every harness would load it as a second "ship-feature".
+FAKEHOME6="$WORK/home6"
+mkdir -p "$FAKEHOME6/.agents/skills/ship-feature"
+ln -s "$(cd "$HERE/.." && pwd)/adapters/skill/SKILL.md" "$FAKEHOME6/.agents/skills/ship-feature/SKILL.md"
+(cd "$HERE/.." && HOME="$FAKEHOME6" bash install.sh >/dev/null 2>&1)
+_sk="$FAKEHOME6/.agents/skills/ship-feature"
+check "install.sh moves the old skill layout to a linked directory" \
+  "$([ -L "$_sk" ] && [ -f "$_sk/SKILL.md" ] && [ ! -L "$_sk/SKILL.md" ] && echo yes || echo no)" yes
+check "the move leaves no second ship-feature in the skills directory" \
+  "$(ls -A "$FAKEHOME6/.agents/skills" | tr '\n' ' ')" "ship-feature "
 
 # The two messages that steer a user away from the volatile path — run for real
 # against a stubbed reviewer, not grepped out of the source. A source match can
@@ -4416,7 +4448,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=492
+EXPECTED=499
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
