@@ -547,6 +547,17 @@ check "generic scan passes a clean file" $? 0
 printf 'contact us at hello@example.com\n' >"$WORK/dummy.txt"
 bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy.txt" >/dev/null 2>&1
 check "generic scan ignores reserved example.com email" $? 0
+printf 'a URL with userinfo: https://user:pass@ghe.example.com/owner/repo\n' >"$WORK/dummy-sub.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy-sub.txt" >/dev/null 2>&1
+check "generic scan ignores a reserved subdomain of example.com" $? 0
+# The look-alikes are built at run time ('@' passed through %s), so the repo-wide scan of this
+# file does not flag them.
+printf 'pass%sghe.example.com.evil.io\n' @ >"$WORK/dummy-near.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy-near.txt" >/dev/null 2>&1
+check "generic scan flags a domain that only starts like a subdomain of example.com" $? 1
+printf 'real.person%snotexample.com\n' @ >"$WORK/dummy-near2.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy-near2.txt" >/dev/null 2>&1
+check "generic scan flags a domain that only ends in example.com" $? 1
 
 # --- cmd_relay injects SHIP_FEATURE_REVIEWERS from config (and honors explicit override) ------
 printf '#!/usr/bin/env bash\necho "ARGS: $*"\nexit 0\n' >"$BIN/pr-review-relay"
@@ -4381,7 +4392,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=482
+EXPECTED=485
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
