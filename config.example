@@ -172,17 +172,3 @@ SHIP_FEATURE_DENYLIST=/path/to/your/denylist.txt
 # DIFFERENT TOOL and a different code path, so the two are set independently — and they are worth
 # setting differently when the relay reviews code while plan-review reads prose.
 # e.g. PR_RELAY_OPENCODE_MODEL=openrouter/z-ai/glm-5.2
-
-# --- Autonomous mode (experimental, off by default) --------------------------------------------------
-# Not settings in THIS file. They are files next to it and one environment variable:
-#   SHIP_FEATURE_AUTONOMOUS=1            set in the ENVIRONMENT of a session you start on purpose; the
-#                                        --autonomous flag alone is refused
-#   ~/.config/ship-feature/AUTONOMOUS_OFF   if this file exists every autonomous command refuses
-#   ~/.config/ship-feature/sensitive-paths  one bash `case` pattern per line (`*` also matches `/`);
-#                                        a PR touching a match is never merged automatically. Replaces
-#                                        the built-in defaults (workflows, hooks, deploy/release scripts,
-#                                        keys, env files, *secret*, *credential*) when present; the gate's
-#                                        entry points .githooks/*, bin/ci and config/ci.rb are always added
-#   ~/.config/ship-feature/allow-no-ci   one `owner/repo` per line: repos allowed to merge with no CI
-#   SHIP_FEATURE_STATE_DIR               where round counters, verdict files and consensus results live
-#                                        (default ~/.local/state/ship-feature)

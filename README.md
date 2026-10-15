@@ -149,14 +149,6 @@ several models almost always finds one more thing, so the loop did not converge,
 take days. The light lane trades a few small bugs that reach users for changes that ship the same day;
 the careful lane keeps the full gates where a bug costs money, data or trust.
 
-## Autonomous mode (experimental)
-
-Opt-in, off by default: `plan-consensus`, `relay --autonomous` and `merge-gate` replace the two human
-gates with machine-checked ones (panel unanimity on the exact SHA, the pre-push hook on both sides of
-the merge, CI, a sensitive-file stop, a kill switch, an audit comment). It needs both `--autonomous`
-and `SHIP_FEATURE_AUTONOMOUS=1`. It is a guard against accidents, **not** a security boundary against
-the agent. Read the "Autonomous mode" section of [`WORKFLOW.md`](WORKFLOW.md) first.
-
 ## Install
 
 Requires [**`pr-review-relay`**](https://github.com/hamen/pr-review-relay) on your `PATH` — it powers the
