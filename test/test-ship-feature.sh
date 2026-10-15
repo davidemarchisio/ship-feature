@@ -4059,7 +4059,28 @@ for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md;
     echo "  ok   [-] $adapter is a pointer, not a copy of the lane steps"
     PASS=$((PASS + 1))
   fi
+  # shellcheck disable=SC2088 # a literal tilde: the adapter text holds the path as written
+  if grep -qF '~/.config/ship-feature/WORKFLOW.md' "$HERE/../$adapter"; then
+    echo "  ok   [-] $adapter names WORKFLOW.md"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $adapter does not name ~/.config/ship-feature/WORKFLOW.md"
+    FAIL=$((FAIL + 1))
+  fi
+  # The one rule a pointer keeps: missed, an agent that skipped the skill lands a payment, consent
+  # or auth change itself.
+  if tr '\n' ' ' <"$HERE/../$adapter" | tr -s ' ' | grep -Eqi 'careful lane.{0,60}human.{0,60}merges.{0,10}never merge those yourself'; then
+    echo "  ok   [-] $adapter keeps the careful lane's human merge"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $adapter lost the careful lane's human merge"
+    FAIL=$((FAIL + 1))
+  fi
 done
+# A Cursor rule that is not always applied is applied on request, like a skill: the pointer would
+# then do nothing that the skill does not already do.
+check "the Cursor rule is always applied" \
+  "$(grep -cx 'alwaysApply: true' "$HERE/../adapters/cursor/ship-feature.md")" 1
 
 sf_plan_tool_clause "clean round goes straight to Gate 1" 'straight to gate 1'
 sf_plan_tool_clause "cap is 1 round" 'cap: 1 round'
@@ -4474,7 +4495,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=498
+EXPECTED=503
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
