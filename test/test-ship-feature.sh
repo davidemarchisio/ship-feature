@@ -3712,7 +3712,10 @@ echo "adapter consistency:"
 # hold — leaves agents on mixed rules just as effectively, and a suite watching one direction says
 # nothing about the other. (It was first appended AFTER the clause calls, where it did nothing at
 # all: reverting WORKFLOW.md produced zero failures. Order matters; the list must exist first.)
-SF_ADAPTERS="adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md adapters/skill/SKILL.md WORKFLOW.md"
+# Since 2026-10-15 the Codex block and the Cursor rule are POINTERS to the skill, not copies, so the
+# rules live in two files: the skill, which is what an agent loads, and WORKFLOW.md. The pointers are
+# checked below as pointers ("the Codex block and the Cursor rule stay pointers").
+SF_ADAPTERS="adapters/skill/SKILL.md WORKFLOW.md"
 # Whitespace is NORMALISED before matching. Without it this test is really a test of line wrapping:
 # the first run of it failed on "the plan file is / the source" and "Still two / gates, never three",
 # both correct sentences that happened to break across a line. That would have taught the next person
@@ -3834,9 +3837,9 @@ sf_wf_clause "never publish the derived context file" '(never|not) .{0,20}(gh pr
 sf_wf_clause "exit 4 = escalate, never --reset" 'exit .?4.?.{0,120}(escalat|stop)'
 # The pattern matches "no --reviewers" / "do not pass --reviewers" and NOT the old advice, which
 # read "name the reviewers you have — the quorum". `sf_clause` requires EVERY file in SF_ADAPTERS to
-# match — the three adapters AND `WORKFLOW.md`, which is the source they compress — so one file
-# reverting fails the suite; verified by reverting the phrasing in each adapter in turn and watching
-# this clause fail on each. A grep run once at PR time does not survive the next edit; this does.
+# match — the skill AND `WORKFLOW.md`, which is the source it compresses — so one file reverting
+# fails the suite; verified by reverting the phrasing in each adapter in turn and watching this
+# clause fail on each. A grep run once at PR time does not survive the next edit; this does.
 # (Two reviewers read the old wording here as "adapters only" and filed WORKFLOW.md as unguarded.
 # It is guarded; the wording was not.)
 #
@@ -4008,33 +4011,52 @@ sf_plan_tool_clause() { # sf_plan_tool_clause <label> <extended-regex>
       FAIL=$((FAIL + 1))
     }
 }
-# Every adapter must name the durable plans directory, and none may still suggest a
-# bare `plan.md`. The adapters are what an agent actually loads — WORKFLOW.md is
-# canonical, but nobody reads it first — so a rule that lives only there reaches
-# nobody, and the plan goes back to the scratchpad that a reboot wipes.
-for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md adapters/skill/SKILL.md; do
+# The skill must name the durable plans directory, and must not suggest a bare `plan.md`. The skill
+# is what an agent actually loads — WORKFLOW.md is canonical, but nobody reads it first — so a rule
+# that lives only there reaches nobody, and the plan goes back to the scratchpad that a reboot wipes.
+adapter=adapters/skill/SKILL.md
+# shellcheck disable=SC2088 # a literal tilde: the adapter text holds the path as written
+if grep -qF '~/.config/ship-feature/plans/' "$HERE/../$adapter"; then
+  echo "  ok   [-] $adapter names the durable plans directory"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL $adapter does not name ~/.config/ship-feature/plans/"
+  FAIL=$((FAIL + 1))
+fi
+# Say so, because no CLI path can run before it: the agent writes the plan
+# first, and an install updated by `git pull` alone never re-runs install.sh.
+if grep -qF 'mkdir -p' "$HERE/../$adapter"; then
+  echo "  ok   [-] $adapter tells the agent to create the directory"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL $adapter does not say to create the plans directory"
+  FAIL=$((FAIL + 1))
+fi
+if grep -qE '<plan\.md>|`plan\.md`|\./plan\.md' "$HERE/../$adapter"; then
+  echo "  FAIL $adapter still suggests a bare plan.md"
+  FAIL=$((FAIL + 1))
+else
+  echo "  ok   [-] $adapter no longer suggests a bare plan.md"
+  PASS=$((PASS + 1))
+fi
+# The Codex block and the Cursor rule stay pointers. Both are always loaded, and while they were
+# copies of the lanes every rule change had to be made in four files. A pointer must name the skill
+# file, so an agent whose harness did not load the skill can still open it; and it must not grow the
+# lane steps back, because a copy that is always loaded wins over a skill that is loaded on request.
+for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md; do
   # shellcheck disable=SC2088 # a literal tilde: the adapter text holds the path as written
-  if grep -qF '~/.config/ship-feature/plans/' "$HERE/../$adapter"; then
-    echo "  ok   [-] $adapter names the durable plans directory"
+  if grep -qF '~/.agents/skills/ship-feature/SKILL.md' "$HERE/../$adapter"; then
+    echo "  ok   [-] $adapter points at the skill file"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL $adapter does not name ~/.config/ship-feature/plans/"
+    echo "  FAIL $adapter does not name ~/.agents/skills/ship-feature/SKILL.md"
     FAIL=$((FAIL + 1))
   fi
-  # Say so, because no CLI path can run before it: the agent writes the plan
-  # first, and an install updated by `git pull` alone never re-runs install.sh.
-  if grep -qF 'mkdir -p' "$HERE/../$adapter"; then
-    echo "  ok   [-] $adapter tells the agent to create the directory"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL $adapter does not say to create the plans directory"
-    FAIL=$((FAIL + 1))
-  fi
-  if grep -qE '<plan\.md>|`plan\.md`|\./plan\.md' "$HERE/../$adapter"; then
-    echo "  FAIL $adapter still suggests a bare plan.md"
+  if grep -qE 'ship-feature (review|land|plan-review|relay|preflight)' "$HERE/../$adapter"; then
+    echo "  FAIL $adapter restates lane steps: it must stay a pointer to the skill"
     FAIL=$((FAIL + 1))
   else
-    echo "  ok   [-] $adapter no longer suggests a bare plan.md"
+    echo "  ok   [-] $adapter is a pointer, not a copy of the lane steps"
     PASS=$((PASS + 1))
   fi
 done
@@ -4452,7 +4474,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=500
+EXPECTED=498
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

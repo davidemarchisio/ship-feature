@@ -59,6 +59,13 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Changed
 
+- **The Codex block and the Cursor rule are pointers to the skill.** Both were full copies of the
+  lanes, so every rule change had to be made in four files, and the copy that is always loaded could
+  drift from the skill. Now they name `~/.agents/skills/ship-feature/SKILL.md` and stop; the Cursor
+  rule is `alwaysApply: true`, since a pointer costs nothing to load. The lane rules are checked in
+  the skill and `WORKFLOW.md`, and two new checks per pointer keep it a pointer: it names the skill
+  file, and it does not restate the lane steps.
+
 - **Every repo needs a committed `.githooks/pre-push`, and the tool checks it.** `preflight` refuses a
   worktree whose `.githooks/pre-push` is missing, not committed with mode `100755`, not executable,
   changed on disk or in the index, or not the file git runs on push (`core.hooksPath` must resolve to
