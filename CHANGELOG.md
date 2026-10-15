@@ -74,6 +74,20 @@ All notable changes to **ship-feature** are documented here. This project follow
   with a message that names the change. Leftover state in `~/.local/state/ship-feature/autonomous` is
   no longer read and can be deleted.
 
+### Fixed
+
+- **A reviewer that did not review could still count as a review.** `pr-review-relay` and
+  `review-local` failed closed only on an EMPTY answer, so any text at all was that seat's verdict
+  and the round exited `0`. Measured on 2026-09-01: four answers of 156–246 bytes ("Reading the rest
+  of the diff before reviewing.", a leaked tool-call fragment), all exit `0`, all posted, none a
+  review. With one reviewer in the light lane, such an answer means the change landed unreviewed.
+  An answer must now name a severity (Blocker / Should-fix / Nit) or say it looks good, and its
+  closing sentence must not announce work still to come. A rejected answer is not posted, is printed
+  in full on stderr, and fails the round with `3`. `relay/README.md` ("What counts as a review") has
+  the rules and the known limits. Ported from the open pr-review-relay PR #38, which went through
+  eight review rounds; `VERDICT: clean` also counts as an approval, and an echo of the
+  `--verdict-file` rules does not count as a verdict.
+
 ## [0.6.0] — 2026-09-25
 
 ### Changed
