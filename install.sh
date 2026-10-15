@@ -3,7 +3,8 @@
 #
 # It:
 #   - installs WORKFLOW.md to ~/.config/ship-feature/WORKFLOW.md (symlink; --copy for a detached copy),
-#   - symlinks bin/ship-feature into ~/.local/bin,
+#   - symlinks bin/ship-feature and the relay's commands (relay/: review-local, pr-review-relay and
+#     their helpers) into ~/.local/bin,
 #   - installs the workflow skill to ~/.agents/skills/ship-feature and links it for Claude,
 #   - installs the Cursor rule,
 #   - inserts a marked block into ~/.codex/AGENTS.md (atomic; backs the file up first),
@@ -102,8 +103,14 @@ else
   link "$REPO/WORKFLOW.md" "$CFG/WORKFLOW.md"
 fi
 
-# 2) CLI on PATH.
+# 2) CLI on PATH, and the relay's commands. Each relay script finds its lib-*.sh next to its REAL
+# path (it resolves its own symlink), so only the entry points are linked. The .mjs is linked too:
+# the scripts that post comments expect it next to themselves on PATH as well.
 link "$REPO/bin/ship-feature" "$BIN/ship-feature"
+for cmd in pr-review-relay review-local pr-review-fetch pr-review-distill pr-review-collapse-comments \
+  pr-review-consensus wrap-collapsed-pr-comment.mjs; do
+  link "$REPO/relay/$cmd" "$BIN/$cmd"
+done
 
 # 3) The one workflow skill (cross-tool), + Claude's link to it.
 link "$REPO/adapters/skill/SKILL.md" "$AGENTS_SKILLS/ship-feature/SKILL.md"
@@ -176,13 +183,14 @@ else echo "  = kept existing $CFG/config"; fi
 
 # 7) PATH check + dependency check + smoke test.
 case ":$PATH:" in *":$BIN:"*) : ;; *) echo "  ! $BIN is not on your PATH — add it so 'ship-feature' is found." >&2 ;; esac
-command -v pr-review-relay >/dev/null 2>&1 || echo "  ! note: pr-review-relay is not on PATH — install the dependency so 'ship-feature relay' works: https://github.com/hamen/pr-review-relay" >&2
 echo "--- smoke test ---"
 smoke() { if eval "$1"; then echo "  ✓ $2"; else
   echo "  ! $2 — FAILED" >&2
   fails=$((fails + 1))
 fi; }
 smoke '"$BIN/ship-feature" help >/dev/null 2>&1' "ship-feature runs"
+smoke '"$BIN/review-local" --help >/dev/null 2>&1' "review-local runs"
+smoke '"$BIN/pr-review-relay" --help >/dev/null 2>&1' "pr-review-relay runs"
 smoke '[ -f "$CFG/WORKFLOW.md" ]' "WORKFLOW.md resolves at $CFG/WORKFLOW.md"
 smoke '[ -d "$CFG/plans" ]' "plans directory resolves at $CFG/plans"
 smoke '[ -f "$HOME/.claude/skills/ship-feature/SKILL.md" ]' "Claude skill resolves"

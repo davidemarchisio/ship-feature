@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# bin/ci — the gate for this repository. Run it before pushing; the pre-push hook runs it for you.
-#
-# This repo has no GitHub Actions CI: the workflow was disabled on 2026-08-01 and its file removed
-# here. That makes this script the ONLY thing standing between a change and `main`, which is why it
-# is versioned, why the hook that calls it is versioned, and why nothing in it is optional.
+# relay/bin/ci — the relay's checks. ship-feature's bin/ci runs it as its "relay" stage, so the
+# repository's pre-push hook and CI run it on every push. It also runs on its own.
 #
 # It runs three things, and each is here because leaving it out let something through before:
 #
@@ -56,9 +53,7 @@ for f in \
   lib-panel.sh \
   lib-argv.sh \
   bin/ci \
-  .githooks/pre-push \
   test/lib-hermetic.sh \
-  test/test-gate.sh \
   test/test-fail-closed.sh \
   test/test-distill.sh \
   test/test-panel-config.sh \
@@ -104,7 +99,6 @@ run_suite() { # <label> <script>
     failed=1
   fi
 }
-run_suite "test-gate.sh"        "test/test-gate.sh"
 run_suite "test-fail-closed.sh" "test/test-fail-closed.sh"
 run_suite "test-distill.sh"     "test/test-distill.sh"
 run_suite "test-panel-config.sh" "test/test-panel-config.sh"
