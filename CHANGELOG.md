@@ -36,15 +36,6 @@ All notable changes to **ship-feature** are documented here. This project follow
   the user can, and what they read goes to the model provider. To switch the plan panel:
   `PLAN_REVIEWERS=codex,pi_glm,pi_grok` in the shared file. Fizzy #1401.
 
-- **Autonomous mode (experimental, off by default).** Three opt-in commands close the loop without a
-  human gate: `ship-feature plan-consensus <plan> --autonomous` (the full plan panel must all return
-  `VERDICT: clean` in one round; 6 rounds, 9 attempts), `ship-feature relay --autonomous` (full-panel
-  rounds only, a computed verdict-file path, one round counter per PR, cap 6) and
-  `ship-feature merge-gate <pr> --autonomous [--merge]` (eight fail-closed checks, then one
-  `gh pr merge --merge --match-head-commit`, then an audit comment). It needs BOTH the flag and
-  `SHIP_FEATURE_AUTONOMOUS=1`; `~/.config/ship-feature/AUTONOMOUS_OFF` stops it; `sensitive-paths` and
-  `allow-no-ci` live next to it. It is a guard against accidents, not a security boundary against the
-  agent (see `WORKFLOW.md`). Needs a `pr-review-relay` with `--verdict-file`. Defaults are unchanged.
 - **ship-feature has its own pre-push hook and `bin/ci`.** `.githooks/pre-push` (the app-tools
   portfolio template, plus a refusal of tracked files marked assume-unchanged or skip-worktree, which
   `git diff` cannot see) runs `bin/ci` on every push: `bash -n`, `shellcheck -S warning`, `shfmt -i 2 -ci
@@ -61,31 +52,15 @@ All notable changes to **ship-feature** are documented here. This project follow
   changed on disk or in the index, or not the file git runs on push (`core.hooksPath` must resolve to
   it; the fix is `git config core.hooksPath .githooks`). No flag or variable skips it. WORKFLOW step 4:
   the hook runs the tests, a linter and a formatter check; the agent reads it and names those checks in
-  the PR's implementation notes. `merge-gate --autonomous` check 6 needs a `100755` `.githooks/pre-push`
-  in the PR head and in the base tip for every PR, read from a checkout that has both commits (so the
-  gate now needs a checkout of the repository); check 7 always treats `.githooks/*`, `bin/ci` and
-  `config/ci.rb` as sensitive, also with a custom `sensitive-paths` file. Fizzy #1370.
-- **Plan review iterates to consensus, up to 6 rounds, without asking.** After a round with a Blocker or
-  a plan-qualifying Should-fix the agent revises the plan and runs the next round at once, with the same
-  full panel; it never asks the human for one more round, and an unreviewed plan revision never reaches
-  Gate 1. Only a Blocker or a plan-qualifying Should-fix changes the plan; a Nit is recorded at Gate 1.
-  Round 6 with a finding still open stops: the plan and a disagreement summary go to Gate 1. Was a
-  2-round cap. `plan-consensus --autonomous` gets the same cap (6 rounds, 9 attempts); an attempt is now
-  counted only when the panel is dispatched, the last attempt stops (exit 5) instead of asking for
-  another run, and before the last attempt the "no usable verdict" line says to run again. Fizzy #1351.
+  the PR's implementation notes. Fizzy #1370.
 
-### Fixed
+### Removed
 
-- **Autonomous locks cannot be held twice.** A lock is now a symlink whose target is the owner's pid,
-  made in one step, and every acquisition runs inside `<lock>.guard`. Before, an owner that stalled more
-  than a minute between creating the lock directory and writing its pid lost the lock to a takeover and
-  then wrote its pid into the new owner's lock; and a waiter could remove a lock that a third process had
-  just taken. Age no longer frees a lock. An old-format lock directory is never taken over: a human
-  removes it (see Locks in `WORKFLOW.md`). Fizzy #1361.
-- **merge-gate: a PR whose every round was clean can merge.** Check 5 required a disposition comment, and
-  no round with findings ever asked for one, so a PR clean in round 1 stopped with exit 6. Check 5 now
-  needs no disposition when every counted round of the PR was `all_clean` and the author disputed
-  nothing. Fizzy #1361.
+- **Autonomous mode** (`plan-consensus`, `relay --autonomous`, `merge-gate`), added earlier in this
+  cycle and never in a release. The light lane replaces it: one review round, then `ship-feature land`
+  for the agent's own work, and the careful lane keeps a human at the merge. The three commands now stop
+  with a message that names the change. Leftover state in `~/.local/state/ship-feature/autonomous` is
+  no longer read and can be deleted.
 
 ## [0.6.0] — 2026-09-25
 
