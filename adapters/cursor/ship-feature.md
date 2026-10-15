@@ -23,8 +23,10 @@ store-policy changes (permissions, SDKs that collect data); and any change the h
 2. Implement, with tests at the level you touched. Commit.
 3. Review once, with the configured panel, on the branch diff:
    `ship-feature review --author <self> --base origin/<default>`. No `--reviewers`: the panel is
-   `REVIEWERS` in `~/.config/pr-review-relay/config`, and its seats run in parallel. Say which seats
-   ran: a benched seat is dropped and the run still exits `0`.
+   `REVIEWERS` in `~/.config/pr-review-relay/config`, and its seats run in parallel. Name the seats
+   that ran: a seat whose CLI is not installed is skipped and the round still exits `0`; a seat that
+   fails (timeout, quota, no usable review), or a round where no seat ran, exits `3`. If the same seat
+   fails twice, run the other seats with `--reviewers` and say which seat you dropped.
 4. Fix only what breaks the change for a real user, loses money, or leaks data. Record the other
    findings in the merge message (`-m "Not fixed: …"`). No second round, unless the fix was large.
 5. `ship-feature land [-m <message>]...` from inside the worktree. The pre-push hook runs on the exact

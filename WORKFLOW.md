@@ -14,8 +14,8 @@ Why the light lane is the default: the gated pipeline, run on every change with 
 one fix into days of rounds. A panel of several models almost always finds one more thing, so a loop
 that iterates until the panel is silent does not converge, and a fix that waits in round 8 helps no
 user. Caps that are low by design, and a default lane with one review round, trade a few small bugs
-that reach users for changes that ship the same day. The careful lane keeps the full gates where a bug costs
-money, data or trust.
+that reach users for changes that ship the same day. The careful lane keeps the full gates where a bug
+costs money, data or trust.
 
 ---
 
@@ -30,9 +30,12 @@ Use it for every change that is not on the careful-lane list.
    `ship-feature review --author <self> --base origin/<default>`
    (a pass-through to `review-local`, which ships in `relay/`). Do not pass `--reviewers`: the panel
    is `REVIEWERS` in `~/.config/pr-review-relay/config`, and its seats run in parallel, so a round
-   takes as long as the slowest seat. Read the startup lines and say which seats ran: a benched seat is
-   dropped and the run still exits `0`. One round, however many seats: more seats find more, and the
-   rule in step 4 decides what gets fixed.
+   takes as long as the slowest seat. Read the startup lines and name the seats that ran: a seat whose
+   CLI is not installed is skipped, and the round still exits `0` with the others. A seat that fails
+   (timeout, quota, no usable review) makes the round exit `3`, and so does a round where no seat ran.
+   If the same seat fails twice, run the remaining seats with `--reviewers` and tell the human which
+   seat was dropped. One round, however many seats: more seats find more, and the rule in step 4
+   decides what gets fixed.
 4. **Fix only what breaks the change for a real user**, loses money, or leaks data. Record every other
    finding in the merge message (`-m "Not fixed: …"`) and move on. No second round, unless the fix was
    large.
