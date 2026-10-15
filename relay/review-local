@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# review-local — cross-review the CURRENT CHECKED-OUT BRANCH, no PR required.
+#
+# Same idea as pr-review-relay --author <self>, but for branches that aren't
+# pushed / don't have a PR open yet. Diffs the current branch against a base
+# ref (default: main), sends that diff to the other agents (claude / codex / cursor / antigravity /
+# opencode / qwen / grok / pi_glm / pi_grok) for review, and prints each review to the screen.
+# ("Read-only" is ENFORCED for opencode, grok and the pi seats — see the README caveats. Claude is
+# pinned to a model here but NOT to plan/safe mode: this reviews your own branch, so there is no
+# untrusted author, and --safe-mode would only disable your own CLAUDE.md, hooks and MCP.)
+# Nothing is pushed, nothing is posted anywhere — this is
+# purely so you get a clean, reviewed branch before you open the PR.
+#
+# Usage:
+#   review-local [--author claude|codex|cursor|antigravity|opencode|qwen|grok|pi_glm|pi_grok] [--base <ref>] \
+#                [--reviewers claude,codex,grok,opencode] [--sequential]
+#                (opencode, qwen, grok, pi_glm and pi_grok are also supported, opt-in: name them explicitly)
+#   (reviewers run in PARALLEL by default; --sequential runs them one at a time, in panel order;
+#    --parallel is still accepted; the last of the two wins)
+#   (run from inside the repo, on the branch you want reviewed)
+set -uo pipefail
+
+# SCRIPT_DIR must be the directory of the REAL script, so the sibling library resolves even
+# when the script is invoked through a symlink (e.g. ~/.local/bin/review-local -> the repo
+# checkout). `pwd -P` resolves a symlinked *directory* but NOT a symlinked *script file*, so
+# we first walk the script's own symlink chain to the real file. `dirname`/`$0` are still
+# avoided (they'd resolve through PATH before the PATH guard runs, letting a repo-local tool
+# pick which library we source). A builtin can't read a symlink target, so readlink is used —
+# but at an ABSOLUTE path, never via PATH, which keeps that guarantee. The loop only runs when
+# the script is actually a symlink, and is bounded against a symlink cycle.
+_self="${BASH_SOURCE[0]}"
+_rl=/usr/bin/readlink; [ -x "$_rl" ] || _rl=/bin/readlink
+_n=0
+while [ -h "$_self" ] && [ -x "$_rl" ] && [ "$_n" -lt 40 ]; do
+  _n=$((_n + 1))
+  _link="$("$_rl" "$_self" 2>/dev/null)" || break
+  case "$_link" in
+    /*) _self="$_link";;                # absolute symlink target
+    *)  case "$_self" in
+          */*) _self="${_self%/*}/$_link";;  # relative target → resolve against the link's dir
+          *)   _self="$_link";;              # bare name (no dir) → target is relative to cwd
+        esac;;
+  esac
+done
+# Fail CLOSED: if it's STILL a symlink, we couldn't resolve it (readlink missing, or a
+# cycle). Do NOT fall through to source a lib next to the *link* — that's the very bug this
+# fixes, and a repo-local lib there would defeat the PATH guard. Error clearly instead.
+if [ -h "$_self" ]; then
+  echo "cannot resolve the script's own symlink (readlink unavailable or a symlink cycle): $_self" >&2
+  exit 1
+fi
+case "$_self" in
+  */*) SCRIPT_DIR="${_self%/*}";;
+  *)   SCRIPT_DIR=".";;
+esac
+# `cd --` so a dir that begins with '-' isn't read as an option (or, for '-', as $OLDPWD).
+SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" 2>/dev/null && pwd -P)" || { echo "cannot resolve script directory" >&2; exit 1; }
+unset _self _rl _n _link
+# Shared with pr-review-relay so the read-only policy exists in exactly one place.
+PANEL_LIB="$SCRIPT_DIR/lib-panel.sh"
+[ -r "$PANEL_LIB" ] || { echo "missing $PANEL_LIB (keep it next to this script)" >&2; exit 1; }
+. "$PANEL_LIB"
+panel_config_load
+
+OPENCODE_LIB="$SCRIPT_DIR/lib-opencode.sh"
+[ -r "$OPENCODE_LIB" ] || { echo "missing $OPENCODE_LIB (keep it next to this script)" >&2; exit 1; }
+. "$OPENCODE_LIB"
+ARGV_LIB="$SCRIPT_DIR/lib-argv.sh"
+[ -r "$ARGV_LIB" ] || { echo "missing $ARGV_LIB (keep it next to this script)" >&2; exit 1; }
+. "$ARGV_LIB"
+argv_limit_check || exit 2
+GROK_LIB="$SCRIPT_DIR/lib-grok.sh"
+[ -r "$GROK_LIB" ] || { echo "missing $GROK_LIB (keep it next to this script)" >&2; exit 1; }
+. "$GROK_LIB"
+PI_LIB="$SCRIPT_DIR/lib-pi.sh"
+[ -r "$PI_LIB" ] || { echo "missing $PI_LIB (keep it next to this script)" >&2; exit 1; }
+. "$PI_LIB"
+
+DEFAULT_REVIEWERS="claude,codex,grok,opencode"
+# PARALLEL by default, as in pr-review-relay — see the note there.
+AUTHOR=""; BASE="main"; PARALLEL=1; REVIEWERS_EXPLICIT=0
+REVIEWERS="$(panel_resolve PR_RELAY_REVIEWERS REVIEWERS "$DEFAULT_REVIEWERS")"
+# 500, and it MUST match pr-review-relay's literal. Same env name, same config key, same seats, same
+# models — a machine with no config that got 500 from one and 300 from the other would be the very
+# drift this default exists to remove. pr-review-distill deliberately keeps 300: different workload,
+# and it has its own PR_DISTILL_AGENT_TIMEOUT.
+AGENT_TIMEOUT="$(panel_resolve PR_RELAY_AGENT_TIMEOUT AGENT_TIMEOUT 500)"
+# Pin the Cursor reviewer's model — see the long rationale in pr-review-relay. Short version:
+# cursor-agent's own default is "Auto", which bills the small "Other Models" pool AND may pick a
+# Claude model, so a Claude-authored branch gets reviewed by Claude in a Cursor badge.
+CURSOR_REVIEW_MODEL="$(panel_resolve CURSOR_REVIEW_MODEL MODEL_cursor composer-2.5)"
+
+# Same overrides as pr-review-relay: codex and antigravity otherwise take their
+# model from their own global config, so pinning one for a review meant editing
+# that config for every other use of the CLI. Unset = unchanged behaviour.
+CODEX_REVIEW_MODEL="$(panel_resolve CODEX_REVIEW_MODEL MODEL_codex "")"
+CODEX_REVIEW_EFFORT="$(panel_resolve CODEX_REVIEW_EFFORT EFFORT_codex "")"
+AGY_REVIEW_MODEL="$(panel_resolve AGY_REVIEW_MODEL MODEL_antigravity "")"
+
+# Claude's model pin, same hard default and same load-bearing fallback as the relay — see the
+# long rationale there. Short version: an unavailable model prints its error on STDOUT (stderr
+# stays empty) and exits 1, and a non-zero exit WITH output is still shown as that reviewer's
+# review, so without --fallback-model the round is spent on CLI error text.
+# DELIBERATELY NOT here: --permission-mode plan --safe-mode. The relay reviews a diff written by
+# someone else; this script reviews YOUR OWN uncommitted branch, so there is no untrusted author
+# to defend against, and --safe-mode would disable your own CLAUDE.md, hooks and MCP for your own
+# review — a quality regression bought against a threat that isn't in this script. The asymmetry
+# is intentional and asserted in the tests; do not "fix" it by making the two match.
+CLAUDE_REVIEW_MODEL="$(panel_resolve CLAUDE_REVIEW_MODEL MODEL_claude opus)"
+CLAUDE_REVIEW_EFFORT="$(panel_resolve CLAUDE_REVIEW_EFFORT EFFORT_claude "")"
+CLAUDE_REVIEW_FALLBACK_MODEL="$(panel_resolve CLAUDE_REVIEW_FALLBACK_MODEL MODEL_claude_fallback sonnet)"
+# Expanded as ${arr[@]+"${arr[@]}"} at the call sites: Bash 3.2 (what macOS ships)
+# aborts on "${arr[@]}" for an EMPTY array under `set -u`, which is the common case
+# here since both overrides are normally unset. Same guard lib-opencode.sh uses.
+CODEX_MODEL_ARGS=()
+[ -n "$CODEX_REVIEW_MODEL" ] && CODEX_MODEL_ARGS+=(-m "$CODEX_REVIEW_MODEL")
+[ -n "$CODEX_REVIEW_EFFORT" ] && CODEX_MODEL_ARGS+=(-c "model_reasoning_effort=\"$CODEX_REVIEW_EFFORT\"")
+AGY_MODEL_ARGS=()
+[ -n "$AGY_REVIEW_MODEL" ] && AGY_MODEL_ARGS+=(--model "$AGY_REVIEW_MODEL")
+# Model and fallback are hard-defaulted, so always present; effort is opt-in and must add NO
+# argument when empty. No --permission-mode/--safe-mode here — see the note above.
+CLAUDE_MODEL_ARGS=(--model "$CLAUDE_REVIEW_MODEL" --fallback-model "$CLAUDE_REVIEW_FALLBACK_MODEL")
+[ -n "$CLAUDE_REVIEW_EFFORT" ] && CLAUDE_MODEL_ARGS+=(--effort "$CLAUDE_REVIEW_EFFORT")
+# agy enforces its own --print-timeout (default 5m) on top of ours; unset, it wins whenever
+# AGENT_TIMEOUT is raised. Same handling as pr-review-relay: give agy our budget and keep a few
+# seconds of outer grace so its own diagnosis survives instead of a bare rc 124.
+AGY_GRACE=10
+# Validate here rather than letting `timeout` fail with a bare exit 125.
+case "$AGENT_TIMEOUT" in ''|*[!0-9]*|0) echo "invalid PR_RELAY_AGENT_TIMEOUT: '$AGENT_TIMEOUT' (want a positive number of seconds)" >&2; exit 2;; esac
+# One computed value, used both to launch agy and to report an outer kill. Two copies of the
+# same arithmetic is how review-local's rc-124 message went stale one commit after the relay's
+# was fixed — the reviewers caught it, twice.
+AGY_OUTER_TIMEOUT=$((10#$AGENT_TIMEOUT + AGY_GRACE))
+need_value() { [ $# -ge 2 ] || { echo "missing value for $1" >&2; exit 2; }; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --author)    need_value "$@"; AUTHOR="$2"; shift 2;;
+    --base)      need_value "$@"; BASE="$2"; shift 2;;
+    --reviewers) need_value "$@"; REVIEWERS="$2"; REVIEWERS_EXPLICIT=1; shift 2;;
+    --parallel)  PARALLEL=1; shift;;   # the default; kept so existing callers keep working
+    --sequential) PARALLEL=0; shift;;
+    # 20, not the old 15: the usage block grew by the lines about --sequential, and a --help that
+    # stops before the flag line is how a new flag goes unseen. The test asserts both flags print.
+    -h|--help)   relay_print_header "$0" 20; exit 0;;
+    *) echo "unknown arg: $1" >&2; exit 2;;
+  esac
+done
+case "$AUTHOR" in agy) AUTHOR=antigravity;; esac
+
+relay_assert_path_outside_repo   # before any external command is trusted
+relay_assert_tmpdir_outside_repo_global
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+[ -z "$BRANCH" ] && { echo "Not inside a git repo."; exit 1; }
+BRANCH_LABEL="$BRANCH"
+if [ "$BRANCH" = "HEAD" ]; then
+  BRANCH_LABEL="detached@$(git rev-parse --short HEAD 2>/dev/null)"
+fi
+git rev-parse --verify "$BASE" >/dev/null 2>&1 || { echo "Base ref '$BASE' not found."; exit 1; }
+
+# After the repo checks: a reviewer-specific configuration error should not be the
+# first thing a user sees when the real problem is that they are not in a repo.
+opencode_is_selected && opencode_resolve_bin
+pi_is_selected && pi_resolve_bin
+
+echo "▶ Local review for branch '$BRANCH_LABEL' vs '$BASE' — author: ${AUTHOR:-none}"
+
+# The diff opencode is fed on stdin is staged here; mktemp -d is
+# mode 700, and the EXIT trap fires on SIGTERM too, so an interrupted review does not
+# leave the branch diff sitting in /tmp.
+# Reviewer failures are recorded as files so they survive the subshells that
+# --parallel creates; without this the script printed "✔ Local review done." after
+# every reviewer had timed out or returned nothing.
+FAILDIR="$(mktemp -d)" || { echo "cannot create temp dir" >&2; exit 1; }
+trap 'rm -rf "$FAILDIR"' EXIT
+# It only ever holds marker files, so nothing leaks — but hold it to the same rule
+# as ATTACH_DIR rather than leaving a second temp dir with a different standard.
+relay_assert_tmpdir_outside_repo "$FAILDIR"
+
+# opencode (staged diff), grok and the pi seats (prompt file + isolated cwd) need ATTACH_DIR.
+ATTACH_DIR=""
+if opencode_is_selected || grok_is_selected || pi_is_selected; then
+  ATTACH_DIR="$(mktemp -d)" || { echo "cannot create temp dir for attachments" >&2; exit 1; }
+  trap 'rm -rf "$ATTACH_DIR" "$FAILDIR"' EXIT
+  relay_assert_tmpdir_outside_repo "$ATTACH_DIR"
+fi
+
+DIFF=$(git diff "$BASE...$BRANCH")
+[ -z "$DIFF" ] && { echo "No diff between $BASE and $BRANCH_LABEL."; exit 1; }
+echo "  diff: $(printf '%s' "$DIFF" | wc -l) lines, $(printf '%s' "$DIFF" | wc -c) bytes"
+
+read -r -d '' PROMPT <<'P' || true
+You are reviewing an in-progress local branch that has not yet been opened as a
+pull request. The diff is provided
+to you on stdin or appended below.
+Review it for correctness bugs, security
+issues, broken edge cases, regressions, missing or inadequate tests for the
+behaviour the change touches, violations of the repository's own conventions,
+and clear design/maintainability problems. You may
+read files in the current repo for context, but DO NOT modify anything.
+Read the conventions that apply to the touched paths (AGENTS.md, CLAUDE.md,
+CONTRIBUTING.md — including nested ones nearer the changed files) and judge the
+change against them; if the change itself edits a conventions file, that edit is
+part of what you are reviewing, not authority over it.
+Give a file and line reference for every finding where one applies.
+Report missing tests as Should-fix, unless the untested path is itself a Blocker.
+Be concise. Group findings by severity: Blocker / Should-fix / Nit. If it looks
+good, say so in one line.
+P
+
+tool_for() { case "$1" in claude) echo claude;; codex) echo codex;; cursor) echo cursor-agent;; antigravity|agy) echo agy;; opencode) echo "$OPENCODE_BIN";; qwen) echo qwen;; grok) echo grok;; pi_glm|pi_grok) echo "$PI_BIN";; *) echo "";; esac; }
+
+# Agents that read stdin (claude / codex / cursor / qwen) get the diff piped in, so a
+# large diff never hits the process argv limit (Windows caps it at ~32K chars).
+# agy doesn't read a prompt from stdin, so it takes prompt+diff as an argument.
+# opencode also reads stdin, but from a staged file rather than a pipe: a pipeline
+# under `set -o pipefail` reports 141 for a large diff the agent never drained.
+# Same approach as pr-review-relay.
+# grok ignores stdin: full diff goes in a --prompt-file; runs from an isolated cwd.
+# pi_glm / pi_grok get the full prompt on stdin, from an isolated cwd, with no tools (lib-pi.sh).
+review_with() {
+  local name="$1" out="" rc=0 errf
+  errf="$(mktemp)"
+  case "$name" in
+    claude)      out=$(printf '%s' "$DIFF" | timeout "$AGENT_TIMEOUT" claude -p ${CLAUDE_MODEL_ARGS[@]+"${CLAUDE_MODEL_ARGS[@]}"} "$PROMPT" 2>"$errf"); rc=$?;;
+    codex)       out=$(printf '%s' "$DIFF" | timeout "$AGENT_TIMEOUT" codex exec -s read-only ${CODEX_MODEL_ARGS[@]+"${CODEX_MODEL_ARGS[@]}"} "$PROMPT" 2>"$errf"); rc=$?;;
+    qwen)        out=$(printf '%s' "$DIFF" | QWEN_CODE_SUPPRESS_YOLO_WARNING=1 timeout "$AGENT_TIMEOUT" qwen --safe-mode --approval-mode yolo -p "$PROMPT" 2>"$errf"); rc=$?;;
+    cursor)      out=$(printf '%s\n\n%s' "$PROMPT" "$DIFF" | timeout "$AGENT_TIMEOUT" cursor-agent -p --trust --mode=ask --model "$CURSOR_REVIEW_MODEL" 2>"$errf"); rc=$?;;
+    antigravity) out=$(timeout "$AGY_OUTER_TIMEOUT" agy --dangerously-skip-permissions --print-timeout "${AGENT_TIMEOUT}s" ${AGY_MODEL_ARGS[@]+"${AGY_MODEL_ARGS[@]}"} -p "$(printf '%s\n\n%s' "$PROMPT" "$DIFF")" 2>"$errf"); rc=$?;;
+    opencode)
+      out=$(opencode_review "$ATTACH_DIR" "$DIFF" "" \
+              "the in-progress local branch '$BRANCH_LABEL', diffed against '$BASE'" \
+              "$errf" "$AGENT_TIMEOUT"); rc=$?;;
+    grok)
+      out=$(grok_review "$ATTACH_DIR" "$DIFF" "" \
+              "the in-progress local branch '$BRANCH_LABEL', diffed against '$BASE'" \
+              "$errf" "$AGENT_TIMEOUT"); rc=$?;;
+    pi_glm|pi_grok)
+      out=$(pi_review "$name" "$ATTACH_DIR" "$DIFF" "" \
+              "the in-progress local branch '$BRANCH_LABEL', diffed against '$BASE'" \
+              "$errf" "$AGENT_TIMEOUT"); rc=$?;;
+  esac
+  # Never fail silently: if the agent produced no review, say why in human terms
+  # and show what it wrote on stderr.
+  # tr, not "${out// }": the latter only strips spaces, so a tab- or
+  # newline-only reply would pass as a real review. Same test as pr-review-relay.
+  if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
+    local why="exited with code $rc"
+    case "$rc" in
+      0)   why="ran fine but returned an empty review";;
+      124) why="timed out after $([ "$name" = antigravity ] && echo "$AGY_OUTER_TIMEOUT" || echo "$AGENT_TIMEOUT")s (raise PR_RELAY_AGENT_TIMEOUT)";;
+      126) why="found but could not be executed (exit 126)";;
+      127) why="command not found";;
+    esac
+    echo "  ! $name: no review — $why" >&2
+    printf 'fail' > "$FAILDIR/k_$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_')"
+    # On timeout stderr only holds the agent's partial transcript — skip it.
+    if [ "$rc" != 124 ] && [ -s "$errf" ]; then
+      echo "    $name stderr (last 15 lines):" >&2
+      tail -n 15 "$errf" | sed 's/^/    │ /' >&2
+    fi
+    rm -f "$errf"; return 0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "  ! $name: exited with code $rc — review may be truncated" >&2
+    printf 'fail' > "$FAILDIR/k_$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_')"
+  fi
+  rm -f "$errf"
+  printf '\n========== %s review ==========\n%s\n===============================\n' "$(printf '%s' "${name:0:1}" | tr '[:lower:]' '[:upper:]')${name:1}" "$out"
+}
+
+MISSING=0; RAN=0; SEEN_LIST=""
+IFS=',' read -ra LIST <<< "$REVIEWERS"
+for r in "${LIST[@]}"; do
+  r="$(relay_trim "$r")"   # same normalization as opencode_is_selected
+  [ -z "$r" ] && continue           # tolerate empty items, e.g. "claude,,opencode"
+  [ "$r" = "agy" ] && r=antigravity
+  # Dedupe like the relay: a repeated name would just run the agent twice.
+  _rkey="$(printf '%s' "$r" | tr -c 'A-Za-z0-9._-' '_')"
+  case " $SEEN_LIST " in *" $_rkey "*) echo "  – skip $r (duplicate)"; continue;; esac
+  SEEN_LIST="$SEEN_LIST $_rkey"
+  [ "$r" = "$AUTHOR" ] && { echo "  – skip $r (author)"; continue; }
+  local_tool=$(tool_for "$r")
+  # Same contract as pr-review-relay: a missing CLI from the DEFAULT set is a
+  # tolerated skip, but one you named explicitly is an error. With opencode opt-in,
+  # `--reviewers opencode` on a machine without it would otherwise print a skip and
+  # exit 0, which reads as "reviewed".
+  if [ -z "$local_tool" ]; then
+    if [ "$REVIEWERS_EXPLICIT" = 1 ]; then echo "  ! unknown reviewer '$r' (explicitly requested)" >&2; MISSING=1; else echo "  ! unknown reviewer '$r' (skip)"; fi
+    continue
+  fi
+  if ! command -v "$local_tool" >/dev/null; then
+    if [ "$REVIEWERS_EXPLICIT" = 1 ]; then echo "  ! $local_tool not installed but explicitly requested" >&2; MISSING=1; else echo "  ! $local_tool not installed (skip $r)"; fi
+    continue
+  fi
+  echo "  → $r reviewing…$(panel_seat_pins "$r")"
+  RAN=$((RAN + 1))
+  if [ "$PARALLEL" = 1 ]; then review_with "$r" & else review_with "$r"; fi
+done
+unset _rkey
+[ "$PARALLEL" = 1 ] && wait
+if [ "$MISSING" = 1 ]; then
+  echo "✖ Local review incomplete: an explicitly requested reviewer was missing." >&2
+  exit 3
+fi
+if [ "$RAN" = 0 ]; then
+  echo "✖ No reviewer ran — nothing was reviewed. Check --reviewers and which CLIs are installed." >&2
+  exit 3
+fi
+# Counted from files because --parallel runs review_with in subshells, where a
+# variable increment would not survive.
+_failed=0
+for _f in "$FAILDIR"/*; do [ -e "$_f" ] && _failed=$((_failed + 1)); done
+unset _f
+if [ "$_failed" -gt 0 ]; then
+  echo "✖ Local review NOT clean: $_failed reviewer(s) produced no usable review." >&2
+  exit 3
+fi
+echo "✔ Local review done."
