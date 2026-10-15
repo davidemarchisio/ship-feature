@@ -1,5 +1,11 @@
 # pr-review-relay
 
+> **pr-review-relay is now part of [ship-feature](https://github.com/hamen/ship-feature)**, in its
+> `relay/` directory. The history before the move stays in
+> [hamen/pr-review-relay](https://github.com/hamen/pr-review-relay). One install gets everything:
+> clone ship-feature and run its `install.sh`, which links every command on this page into
+> `~/.local/bin`. The commands, flags, exit codes and `~/.config/pr-review-relay/config` are unchanged.
+
 ![header](assets/header.png)
 
 <div align="center">
@@ -158,7 +164,7 @@ You only need the agents you actually want as reviewers.
 ```bash
 BIN=~/.local/bin
 mkdir -p "$BIN"
-REPO=https://raw.githubusercontent.com/hamen/pr-review-relay/main
+REPO=https://raw.githubusercontent.com/hamen/ship-feature/main/relay
 curl -fsSL "$REPO/pr-review-relay" -o "$BIN/pr-review-relay"
 curl -fsSL "$REPO/review-local" -o "$BIN/review-local"
 curl -fsSL "$REPO/pr-review-fetch" -o "$BIN/pr-review-fetch"
@@ -957,45 +963,15 @@ picked a `bash` through `PATH` before the first line runs. Nothing a script does
 - **Antigravity** needs `agy` on PATH; invoke `agy -p` from zsh/bash (not inside the agy TUI). In some sandboxes it may hang — run relay from your Mac terminal if needed.
 - Runs on your machine, so it works when your machine is on. It's a local relay, not a hosted bot.
 
-## 🧰 Developing this repo
+## 🧰 Developing the relay
 
-This section is for working **on** pr-review-relay. If you only want to *use* it, the
-[Install](#-install) section above is all you need — it downloads the scripts, no clone involved.
-
-```bash
-git clone https://github.com/hamen/pr-review-relay
-cd pr-review-relay
-git config core.hooksPath .githooks   # once per clone — see below
-bin/ci                                # the gate; run it before pushing
-```
-
-**There is no CI.** The GitHub Actions workflow was disabled on 2026-08-01 and its file removed, so
-`bin/ci` is the only thing between a change and `main`. It runs a syntax check over every shell file
-the repo ships — including the libraries that are *sourced* at runtime, whose errors would otherwise
-surface only when a user selects that reviewer — a capability probe for `jq --raw-output0`, and the three
-test suites.
-
-`.githooks/pre-push` runs `bin/ci` for you and refuses the push if it fails. Its own behaviour is
-covered by `test/test-gate.sh`, which `bin/ci` runs — twelve cases against a throwaway remote. It also refuses in
-cases where a passing gate would be a lie: pushing a ref that is not your checked-out `HEAD` (the
-gate tests the working tree, so `git push origin HEAD~3:main` would ship something nobody tested), a
-dirty or untracked-file tree, and a gate run that modified tracked files or moved `HEAD` while
-running. Annotated tags pointing at `HEAD` and delete-only pushes are allowed through.
-
-**`core.hooksPath` is repo-local config, so a fresh clone has no gate until you run that command.**
-Versioning the hook makes the gate possible everywhere; git deliberately does not activate
-repository-controlled hooks on clone, so it cannot be made automatic from inside the repo. If you
-have an old `.git/hooks/pre-push` from before this change, delete it — once `core.hooksPath` is set
-it is never consulted, so it will only confuse the next person who reads it.
+The relay is developed inside ship-feature. Its checks are `relay/bin/ci`: a syntax check over every
+shell file it ships (the sourced libraries too, whose errors would otherwise surface only when a user
+selects that reviewer), a capability probe for `jq --raw-output0` and `node`, and the test suites.
+ship-feature's `bin/ci` runs it as its `relay` stage, so ship-feature's pre-push hook and its CI run
+it on every push.
 
 Do not reach for `--no-verify`. A failing gate is a finding.
-
-### Pull requests from outside
-
-With no CI, nothing on GitHub's side tests an external PR. The maintainer runs `bin/ci` against the
-PR head before merging, and re-checks that the head SHA has not moved between the run and the merge —
-a contributor can push again in between, and a gate run against a superseded commit proves nothing.
-Please say in the PR whether `bin/ci` passes locally for you; it saves a round trip.
 
 ## 📄 License
 

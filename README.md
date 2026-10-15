@@ -11,7 +11,6 @@
 [![Works with Codex](https://img.shields.io/badge/works%20with-Codex%20CLI-green?logo=openai&logoColor=white)](https://github.com/openai/codex)
 [![Works with Cursor](https://img.shields.io/badge/works%20with-Cursor-0098FF?logo=cursor&logoColor=white)](https://cursor.com)
 [![Works with Antigravity](https://img.shields.io/badge/works%20with-Antigravity-orange)](https://antigravity.dev)
-[![Powered by pr-review-relay](https://img.shields.io/badge/powered%20by-pr--review--relay-8b5cf6)](https://github.com/hamen/pr-review-relay)
 
 **One gated workflow for shipping any repository change — followed by whichever AI agent you drive.**
 
@@ -22,10 +21,17 @@
 Plan → review → implement → cross-review → merge → verify, with **two human approval gates** and the
 agent **never merging its own work**. The process lives in one place — [`WORKFLOW.md`](WORKFLOW.md) — and
 each driver agent (Claude, Codex, Cursor) gets a thin adapter that points at it, so you stop re-explaining
-"how we ship" every session. Antigravity joins the **cross-review** step through
-[`pr-review-relay`](https://github.com/hamen/pr-review-relay).
+"how we ship" every session. Antigravity joins the **cross-review** step through the review relay in
+[`relay/`](relay/README.md).
 
 ## 🆕 What's new
+
+**Unreleased** — **pr-review-relay is now part of ship-feature**, in [`relay/`](relay/README.md)
+(the older history stays in [hamen/pr-review-relay](https://github.com/hamen/pr-review-relay)). One
+clone and one `install.sh` give you everything: `install.sh` now also links
+`review-local`, `pr-review-relay` and their helpers into `~/.local/bin`. `ship-feature review` is the
+light lane's review step (a pass-through to `review-local`). The commands, flags, exit codes and
+`~/.config/pr-review-relay/config` do not change. Autonomous mode is gone: the light lane replaced it.
 
 **Unreleased** — **two lanes, and the light lane is the default.** A change that is not risky now
 skips the plan, the PR and the human merge: one review round by one reviewer, then
@@ -126,7 +132,7 @@ The authoritative version is [`WORKFLOW.md`](WORKFLOW.md). It has **two lanes**.
 | Step | What happens |
 |:----:|--------------|
 | 1 | **Implement** in a worktree, with tests |
-| 2 | **One review round by one reviewer** on the branch diff (`review-local`), no PR |
+| 2 | **One review round by one reviewer** on the branch diff (`ship-feature review`), no PR |
 | 3 | Fix only what breaks the change for a real user; record the rest |
 | 4 | **`ship-feature land`**: merge onto the default branch and push — the pre-push hook tests the exact merged tree |
 | 5 | **Ship it**: a change is done when it is live, not when it is merged |
@@ -151,8 +157,8 @@ the careful lane keeps the full gates where a bug costs money, data or trust.
 
 ## Install
 
-Requires [**`pr-review-relay`**](https://github.com/hamen/pr-review-relay) on your `PATH` — it powers the
-cross-review step (step 5). Then:
+The review seats need their agent CLIs (`codex`, `claude`, …) and the PR relay needs `gh`; see
+[`relay/README.md`](relay/README.md) for the list. Then:
 
 ```bash
 git clone https://github.com/hamen/ship-feature
@@ -160,13 +166,18 @@ cd ship-feature
 ./install.sh          # or ./install.sh --copy to detach WORKFLOW.md from the clone
 ```
 
-`install.sh` is idempotent: it symlinks the CLI, installs `WORKFLOW.md` to `~/.config/ship-feature/`, the
+`install.sh` is idempotent: it symlinks the CLI and the relay's commands (`review-local`,
+`pr-review-relay` and their helpers, from `relay/`), installs `WORKFLOW.md` to `~/.config/ship-feature/`, the
 workflow skill to `~/.agents/skills/`, a Cursor rule, and a marked block in `~/.codex/AGENTS.md`
 (backing up anything it changes). Add a line to your global agent instructions telling it to follow the
 ship-feature skill for any feature/fix.
 
 ## The CLI
 
+- `ship-feature review [args…]` — the light lane's review: a pass-through to `review-local` (in
+  `relay/`) with its arguments, stdout and exact exit code. It diffs the current branch against
+  `--base` and prints each reviewer's review; nothing is pushed or posted. Typical:
+  `ship-feature review --author claude --base origin/main --reviewers codex`.
 - `ship-feature preflight` — assert you're in a feature worktree branched off the default branch, with
   the worktree marker git-excluded and a committed `.githooks/pre-push` that git runs on push — the
   pre-push hook every repo needs, running the tests, a linter and a formatter check (run before you
@@ -242,7 +253,7 @@ ship-feature skill for any feature/fix.
   environment, then **`AGENT_TIMEOUT` in `~/.config/pr-review-relay/config`** — the one place to set
   it for this tool and `pr-review-relay` at once — then `500`s. Lets you say "review this plan with codex and glm" as one command.
 - `ship-feature relay [args…]` — a **transparent** wrapper over
-  [`pr-review-relay`](https://github.com/hamen/pr-review-relay) that preserves its stdout and exact exit
+  [`pr-review-relay`](relay/README.md) (in `relay/`) that preserves its stdout and exact exit
   code, and reminds you what each code means: `0` = every **dispatched** reviewer ran — not that
   everyone ran, since a benched (out-of-quota) seat is dropped and still exits `0` — and not "clean";
   `3` = re-run; `4` = take the open findings to Gate 2. It injects your configured reviewer quorum when you omit
@@ -281,7 +292,7 @@ Override with `CURSOR_REVIEW_MODEL`; `cursor-agent --list-models` shows what you
 your panel, all collapse two nominally independent seats onto one model family — the override
 exists for retired model ids, not for going back to Auto.
 The variable has no `SHIP_FEATURE_` prefix on purpose: it describes your Cursor account rather than
-this tool, [`pr-review-relay`](https://github.com/hamen/pr-review-relay) reads the same one, and a
+this tool, [`pr-review-relay`](relay/README.md) reads the same one, and a
 single setting should configure both. It **is** read from config (and exported when read, so the
 relay child process sees it). Three sources, highest first: the environment,
 `~/.config/ship-feature/config`, and finally `pr-review-relay`'s own config as `MODEL_cursor`.
@@ -344,15 +355,17 @@ which arrived in 2.31. On an older git it refuses to run rather than applying ha
 reporting green. That isolation is why the suite behaves the same whether or not your commit signing
 is on, and why running it from a git hook cannot write into the repository being tested.
 
-The suite is the last stage of the full gate, `bin/ci`:
+The suite is a stage of the full gate, `bin/ci`, and the relay's own gate runs after it:
 
 ```bash
-bin/ci   # syntax (bash -n), shellcheck -S warning, shfmt -i 2 -ci -d, leak scan, the suite
+bin/ci   # syntax (bash -n), shellcheck -S warning, shfmt -i 2 -ci -d, leak scan, the suite, relay/bin/ci
 ```
 
 It finds every tracked shell file by extension or shebang, and it needs `shellcheck` and `shfmt` at
 exactly the versions [`mise.toml`](mise.toml) pins: run `mise install` in the repo, or install those
-versions another way. CI runs the same script on ubuntu and macOS.
+versions another way. shellcheck and shfmt skip `relay/` until a commit of pure tool output brings it
+to the same bar; `relay/bin/ci` checks the relay's syntax and runs its suites, and needs `jq` 1.7+
+and `node`. CI runs the same script on ubuntu and macOS.
 
 **The pre-push hook.** `.githooks/pre-push` runs `bin/ci` on every push. Turn it on once per clone
 (every worktree of the clone shares it):
