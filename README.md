@@ -34,7 +34,7 @@ light lane's review step (a pass-through to `review-local`). The commands, flags
 `~/.config/pr-review-relay/config` do not change. Autonomous mode is gone: the light lane replaced it.
 
 **Unreleased** — **two lanes, and the light lane is the default.** A change that is not risky now
-skips the plan, the PR and the human merge: one review round by one reviewer, then
+skips the plan, the PR and the human merge: one review round by the configured panel, then
 `ship-feature land`, which merges onto the default branch and pushes with the pre-push hook on the
 exact merged tree. Risky changes keep the gated pipeline, with one plan-review round and at most two
 cross-review rounds.
@@ -132,7 +132,7 @@ The authoritative version is [`WORKFLOW.md`](WORKFLOW.md). It has **two lanes**.
 | Step | What happens |
 |:----:|--------------|
 | 1 | **Implement** in a worktree, with tests |
-| 2 | **One review round by one reviewer** on the branch diff (`ship-feature review`), no PR |
+| 2 | **One review round by the configured panel**, seats in parallel, on the branch diff (`ship-feature review`), no PR |
 | 3 | Fix only what breaks the change for a real user; record the rest |
 | 4 | **`ship-feature land`**: merge onto the default branch and push — the pre-push hook tests the exact merged tree |
 | 5 | **Ship it**: a change is done when it is live, not when it is merged |
@@ -177,7 +177,8 @@ ship-feature skill for any feature/fix.
 - `ship-feature review [args…]` — the light lane's review: a pass-through to `review-local` (in
   `relay/`) with its arguments, stdout and exact exit code. It diffs the current branch against
   `--base` and prints each reviewer's review; nothing is pushed or posted. Typical:
-  `ship-feature review --author claude --base origin/main --reviewers codex`.
+  `ship-feature review --author claude --base origin/main` — no `--reviewers`, so the panel is
+  `REVIEWERS` in `~/.config/pr-review-relay/config`.
 - `ship-feature preflight` — assert you're in a feature worktree branched off the default branch, with
   the worktree marker git-excluded and a committed `.githooks/pre-push` that git runs on push — the
   pre-push hook every repo needs, running the tests, a linter and a formatter check (run before you

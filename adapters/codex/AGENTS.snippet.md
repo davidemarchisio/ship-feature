@@ -22,8 +22,10 @@ store-policy changes (permissions, SDKs that collect data); and any change the h
 
 1. Work in a **git worktree** off the default branch (never the main tree). Stage explicit paths.
 2. Implement, with tests at the level you touched. Commit.
-3. Review once, with one reviewer, on the branch diff:
-   `ship-feature review --author <self> --base origin/<default> --reviewers <one seat>`.
+3. Review once, with the configured panel, on the branch diff:
+   `ship-feature review --author <self> --base origin/<default>`. No `--reviewers`: the panel is
+   `REVIEWERS` in `~/.config/pr-review-relay/config`, and its seats run in parallel. Say which seats
+   ran: a benched seat is dropped and the run still exits `0`.
 4. Fix only what breaks the change for a real user, loses money, or leaks data. Record the other
    findings in the merge message (`-m "Not fixed: …"`). No second round, unless the fix was large.
 5. `ship-feature land [-m <message>]...` from inside the worktree. The pre-push hook runs on the exact

@@ -5,16 +5,16 @@ Codex, Cursor) points here.
 
 There are **two lanes**:
 
-- **The light lane — the default.** No plan, one review round by one reviewer, and the agent lands its
-  own work with `ship-feature land`. No PR.
+- **The light lane — the default.** No plan, one review round by the configured panel, and the agent
+  lands its own work with `ship-feature land`. No PR.
 - **The careful lane — only for real risk.** The gated pipeline below: a plan, one plan-review round, a
   PR, at most two cross-review rounds, and a human who merges.
 
 Why the light lane is the default: the gated pipeline, run on every change with high round caps, turned
 one fix into days of rounds. A panel of several models almost always finds one more thing, so a loop
 that iterates until the panel is silent does not converge, and a fix that waits in round 8 helps no
-user. Caps that are low by design, and a default lane with one reviewer, trade a few small bugs that
-reach users for changes that ship the same day. The careful lane keeps the full gates where a bug costs
+user. Caps that are low by design, and a default lane with one review round, trade a few small bugs
+that reach users for changes that ship the same day. The careful lane keeps the full gates where a bug costs
 money, data or trust.
 
 ---
@@ -26,9 +26,13 @@ Use it for every change that is not on the careful-lane list.
 1. **Worktree and branch** off the default branch (`origin/HEAD`), as in step 4 below. Stage explicit
    paths. The repository's pre-push hook runs the tests, a linter and a formatter check.
 2. **Implement**, with tests at the level you touched. Commit.
-3. **Review once**, with one reviewer, on the branch diff — no PR needed:
-   `ship-feature review --author <self> --base origin/<default> --reviewers <one seat>`
-   (a pass-through to `review-local`, which ships in `relay/`).
+3. **Review once**, with the configured panel, on the branch diff — no PR needed:
+   `ship-feature review --author <self> --base origin/<default>`
+   (a pass-through to `review-local`, which ships in `relay/`). Do not pass `--reviewers`: the panel
+   is `REVIEWERS` in `~/.config/pr-review-relay/config`, and its seats run in parallel, so a round
+   takes as long as the slowest seat. Read the startup lines and say which seats ran: a benched seat is
+   dropped and the run still exits `0`. One round, however many seats: more seats find more, and the
+   rule in step 4 decides what gets fixed.
 4. **Fix only what breaks the change for a real user**, loses money, or leaks data. Record every other
    finding in the merge message (`-m "Not fixed: …"`) and move on. No second round, unless the fix was
    large.

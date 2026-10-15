@@ -21,7 +21,7 @@ All notable changes to **ship-feature** are documented here. This project follow
   codes and `~/.config/pr-review-relay/config` do not change.
 
 - **Two lanes; the light lane is the default.** A change that is not risky skips the plan, the plan
-  review, the PR and the human merge: one review round by one reviewer on the branch diff
+  review, the PR and the human merge: one review round by the configured panel on the branch diff
   (`review-local`), then `ship-feature land`. The careful lane (payments, consent, auth, migrations,
   security, store policy) keeps the gated pipeline with low caps: one plan-review round, at most two
   cross-review rounds, no narrow rounds, and the open findings go to Gate 2 instead of another cycle.
