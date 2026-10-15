@@ -3658,14 +3658,14 @@ SF_ADAPTERS="adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md ad
 # macOS only, while GNU grep on Linux passes it. That is the worst shape a test failure can take:
 # it names the wrong cause, and it is invisible on the machine most of this gets written on. To span
 # a longer distance, concatenate intervals — `.{0,200}.{0,200}` — rather than raising one.
-sf_clause() { # sf_clause <label> <extended-regex>
-  local label="$1" re="$2" f miss=""
-  for f in $SF_ADAPTERS; do
+sf_clause() { # sf_clause <label> <extended-regex> [files]
+  local label="$1" re="$2" files="${3:-$SF_ADAPTERS}" f miss=""
+  for f in $files; do
     tr '\n' ' ' <"$HERE/../$f" | tr -s ' ' | grep -Eqi -- "$re" || miss="$miss $f"
   done
   [ -z "$miss" ] &&
     {
-      echo "  ok   [-] every adapter states: $label"
+      echo "  ok   [-] every listed doc states: $label"
       PASS=$((PASS + 1))
     } ||
     {
@@ -3673,6 +3673,10 @@ sf_clause() { # sf_clause <label> <extended-regex>
       FAIL=$((FAIL + 1))
     }
 }
+# The careful lane's step-by-step rules live in WORKFLOW.md only since the two lanes: the adapters
+# summarise the lanes and point at it. Restating every rule in four files is what made the rules
+# expensive to change, so the details are checked where they live.
+sf_wf_clause() { sf_clause "$1" "$2" WORKFLOW.md; }
 # THE CAP IS ENFORCED, not merely documented. This suite is written and run on Linux, where GNU grep
 # accepts any interval, so a clause with `.{0,300}` looks perfectly healthy here and fails only on
 # the macOS job — reporting the phrase as missing from every adapter, which sends the next reader
@@ -3756,14 +3760,12 @@ sf_cap_comment=$(sf_intervals_over_cap "$sf_capdir/comment")
 # `qualifying`, `narrow`, `benched`, `dispositions` — words that survive having the rule around them
 # deleted or REVERSED, so the test would stay green while the adapter said the opposite. Two reviewers
 # caught it independently. Each pattern below has to match a phrase that only the correct rule makes.
-sf_clause "always pass the plan with --context-file" 'always pass the plan.{0,40}context-file|context-file.{0,80}always pass the plan'
-sf_clause "the plan file is the source of the PR body" 'plan file is the source'
-sf_clause "iterate ONLY for a Blocker or qualifying" 'iterate only for a .{0,20}blocker.{0,60}qualifying'
-sf_clause "narrow panel = stake + downgraded" 'narrow.{0,200}(stake|open finding).{0,120}downgraded'
-sf_clause "the closing round is the full quorum" 'closing.{0,140}full quorum|full quorum again.{0,160}(candidate|merge)'
-sf_clause "a new closing finding restarts the cycle" '(closing|final).{0,120}(new qualifying|raises).{0,140}initial|initial round of another cycle'
-sf_clause "never publish the derived context file" '(never|not) .{0,20}(gh pr edit|re-publish).{0,120}derived|derived file to the pr body'
-sf_clause "exit 4 = escalate, never --reset" 'exit .?4.?.{0,120}(escalat|stop)'
+sf_wf_clause "always pass the plan with --context-file" 'always pass the plan.{0,40}context-file|context-file.{0,80}always pass the plan'
+sf_wf_clause "the plan file is the source of the PR body" 'plan file is the source'
+sf_wf_clause "iterate ONLY for a Blocker or qualifying" 'iterate only for a .{0,20}blocker.{0,60}qualifying'
+sf_wf_clause "the closing round is the full quorum" 'closing.{0,140}full quorum|full quorum again.{0,160}(candidate|merge)'
+sf_wf_clause "never publish the derived context file" '(never|not) .{0,20}(gh pr edit|re-publish).{0,120}derived|derived file to the pr body'
+sf_wf_clause "exit 4 = escalate, never --reset" 'exit .?4.?.{0,120}(escalat|stop)'
 # The pattern matches "no --reviewers" / "do not pass --reviewers" and NOT the old advice, which
 # read "name the reviewers you have — the quorum". `sf_clause` requires EVERY file in SF_ADAPTERS to
 # match — the three adapters AND `WORKFLOW.md`, which is the source they compress — so one file
@@ -3837,16 +3839,16 @@ sf_panel_absent() { # sf_panel_absent <label> <extended-regex>
 # reading the output catches a seat that dropped out.
 sf_panel_clause "read each round's startup lines" 'startup lines.{0,200}(actually ran|benched|relay-only|exits .?0)'
 sf_panel_absent "type the panel yourself" 'explicit list = the agents|name the reviewers you have|--reviewers <your|pass an .{0,10}explicit reviewer list|always pass an explicit'
-sf_clause "a clean round 1 IS the closing round" 'round 1 was already clean|clean initial round is the closing round'
-sf_clause "exit 0 = DISPATCHED, and benched still exits 0" '(dispatched reviewer ran|supposed to dispatch).{0,200}.{0,200}benched'
-sf_clause "non-qualifying findings are left unfixed" 'non-qualifying findings are recorded and left unfixed'
-sf_clause "post dispositions BEFORE re-running" 'post (the )?dispositions before re-running'
-sf_clause "keep the relay marker out of that comment" '(do .{0,4}not.{0,4} put|keep|must not contain).{0,80}marker text.{0,180}delet'
-sf_clause "disputes are routed to Gate 2 with both positions" 'disput.{0,80}gate 2.{0,60}both positions|disput.{0,80}both positions'
-sf_clause "and that is not a third gate" 'two.{0,12}gates, (never|not) three'
-sf_clause "the plan is immutable once approved" 'immutable once approved'
-sf_clause "the initial quorum excludes the author" 'except the author'
-sf_clause "the author classifies findings in writing" 'author classifies( each finding)? in writing'
+sf_wf_clause "a clean round 1 IS the closing round" 'round 1 was already clean|clean initial round is the closing round'
+sf_wf_clause "exit 0 = DISPATCHED, and benched still exits 0" '(dispatched reviewer ran|supposed to dispatch).{0,200}.{0,200}benched'
+sf_wf_clause "non-qualifying findings are left unfixed" 'non-qualifying findings are recorded and left unfixed'
+sf_wf_clause "post dispositions BEFORE re-running" 'post (the )?dispositions before re-running'
+sf_wf_clause "keep the relay marker out of that comment" '(do .{0,4}not.{0,4} put|keep|must not contain).{0,80}marker text.{0,180}delet'
+sf_wf_clause "disputes are routed to Gate 2 with both positions" 'disput.{0,80}gate 2.{0,60}both positions|disput.{0,80}both positions'
+sf_wf_clause "and that is not a third gate" 'two.{0,12}gates, (never|not) three'
+sf_wf_clause "the plan is immutable once approved" 'immutable once approved'
+sf_wf_clause "the initial quorum excludes the author" 'except the author'
+sf_wf_clause "the author classifies findings in writing" 'author classifies( each finding)? in writing'
 
 # --- plan-review (step 2) gets the SAME discipline, in its own terms ----------------------------
 # A real session ran 13 rounds of plan-review before the panel agreed (~1h15m burned on convergence,
@@ -3854,30 +3856,26 @@ sf_clause "the author classifies findings in writing" 'author classifies( each f
 # "plan-qualifying" is asserted as a term DISTINCT from step 5's "qualifying Should-fix" (PR-qualifying:
 # correctness/safety/deployability/verification) — the two must not collapse into one grep-satisfying
 # phrase, or an adapter could state step 5's rule alone and wrongly pass for step 2's.
-sf_clause "plan-review round excludes exit 3" 'exit .?3.?.{0,200}does.{0,6}not.{0,6}count as a round'
-sf_clause "two consecutive exit-3s stop retrying and drop that reviewer" 'two consecutive attempts.{0,120}stop retrying.{0,160}drop that reviewer'
-sf_clause "a reduced panel is escalated to the human, not silent" '(tell the human|human.{0,20}call).{0,160}reduced panel|reduced panel.{0,160}(tell the human|human.{0,20}call)'
-sf_clause "plan-review cap is 6 rounds" '(6|six).{0,10}round.{0,40}cap|cap.{0,20}(6|six).{0,10}round'
-sf_clause "a clean round 1 skips a wasted round 2" 'clean round 1|round 1 .{0,60}(raises no|no blocker).{0,120}gate 1'
-sf_clause "round 2 runs the same full panel, never narrowed" 'same full panel.{0,60}never.{0,10}narrow|never.{0,10}narrow.{0,120}same full panel'
-sf_clause "plan-qualifying is compared against PR-qualifying/qualifying Should-fix" 'plan-qualifying.{0,150}.{0,150}(qualifying should-fix|pr-qualifying)|(qualifying should-fix|pr-qualifying).{0,150}.{0,150}plan-qualifying'
-sf_clause "plan-qualifying must not be conflated with PR-qualifying" '(not the same as|must not be conflated|distinct term|do not conflate)'
-sf_clause "plan-qualifying covers a missing edge case" 'materially incomplete.{0,160}missing edge case|missing edge case.{0,160}materially incomplete'
-sf_clause "plan-qualifying covers an unhandled failure mode" 'materially incomplete.{0,160}failure mode|failure mode.{0,160}materially incomplete'
-sf_clause "plan-qualifying covers missing verification" 'materially incomplete.{0,160}verification|verification.{0,160}materially incomplete'
-sf_clause "round 6 still open -> disagreement summary -> Gate 1" 'round 6.{0,150}.{0,150}disagreement summary.{0,200}gate 1|disagreement summary.{0,150}.{0,150}round 6'
-sf_clause "disagreement summary states objection + classification + reason" 'objection.{0,60}classification.{0,60}reason|disagreement summary.{0,200}.{0,200}(objection|classification|reason).{0,120}(objection|classification|reason).{0,120}(objection|classification|reason)'
-sf_clause "a human-authorized round is not an agent-initiated round" 'human-authorized.{0,80}not an agent-initiated round'
-sf_clause "a human-authorized round resolves clean or re-escalates" 'human-authorized.{0,200}(resolves cleanly|resolve).{0,160}(disagreement summary|gate 1)'
-sf_clause "Gate 1 accepts the plan plus a disagreement summary" 'plan plus a disagreement summary|plan.{0,20}disagreement summary'
-sf_clause "dropping the last reviewer is not a completed round" 'zero reviewers.{0,120}(not a completed round|isn.t a completed round)'
+sf_wf_clause "plan-review round excludes exit 3" 'exit .?3.?.{0,200}does.{0,6}not.{0,6}count as a round'
+sf_wf_clause "two consecutive exit-3s stop retrying and drop that reviewer" 'two consecutive attempts.{0,120}stop retrying.{0,160}drop that reviewer'
+sf_wf_clause "a reduced panel is escalated to the human, not silent" '(tell the human|human.{0,20}call).{0,160}reduced panel|reduced panel.{0,160}(tell the human|human.{0,20}call)'
+sf_wf_clause "plan-qualifying is compared against PR-qualifying/qualifying Should-fix" 'plan-qualifying.{0,150}.{0,150}(qualifying should-fix|pr-qualifying)|(qualifying should-fix|pr-qualifying).{0,150}.{0,150}plan-qualifying'
+sf_wf_clause "plan-qualifying must not be conflated with PR-qualifying" '(not the same as|must not be conflated|distinct term|do not conflate)'
+sf_wf_clause "plan-qualifying covers a missing edge case" 'materially incomplete.{0,160}missing edge case|missing edge case.{0,160}materially incomplete'
+sf_wf_clause "plan-qualifying covers an unhandled failure mode" 'materially incomplete.{0,160}failure mode|failure mode.{0,160}materially incomplete'
+sf_wf_clause "plan-qualifying covers missing verification" 'materially incomplete.{0,160}verification|verification.{0,160}materially incomplete'
+sf_wf_clause "dropping the last reviewer is not a completed round" 'zero reviewers.{0,120}(not a completed round|isn.t a completed round)'
 # Iterate to consensus without asking (Fizzy #1351). The same four literals are in WORKFLOW.md, the three
 # adapters and the plan-review exit-0 echo, so one clause per literal checks every place.
-sf_clause "a qualifying finding: run the next round at once" 'run the next round at once'
-sf_clause "never ask the human for one more round" 'never ask the human for one more round'
-sf_clause "an unreviewed plan revision never reaches Gate 1" 'an unreviewed plan revision never reaches gate 1'
-sf_clause "round 6 still open: do not run a round 7" 'do not run a round 7 on your own'
-sf_clause "only a qualifying finding changes the plan; a Nit is recorded" 'change the plan only for a blocker or a plan-qualifying should-fix.{0,200}nit.{0,60}recorded.{0,40}not applied'
+sf_wf_clause "only a qualifying finding changes the plan; a Nit is recorded" 'change the plan only for a blocker or a plan-qualifying should-fix.{0,200}nit.{0,60}recorded.{0,40}not applied'
+# The two lanes (2026-10-15): every adapter and WORKFLOW.md state the lane rules an agent needs first.
+sf_clause "the light lane is the default" 'light lane.{0,40}default'
+sf_clause "the light lane lands with ship-feature land" 'ship-feature land'
+sf_clause "the light lane reviews once" 'review once'
+sf_clause "a change is done when it is live" 'done means live|done when it is live'
+sf_clause "the careful lane is only for real risk" 'careful lane.{0,60}only'
+sf_clause "the careful lane reviews the plan in one round" 'one (plan-review )?round'
+sf_clause "the careful lane caps the cross-review at two rounds" 'two rounds at most|at most two'
 # The old cap must be ABSENT, not merely outvoted: a file that says both teaches the old rule.
 # README.md and CHANGELOG.md keep the 2-round cap as history, so they are not scanned.
 sf_absent() { # sf_absent <label> <extended-regex> [files]
@@ -3899,6 +3897,10 @@ sf_absent "the old 'Cap: 2 rounds'" 'cap: 2 rounds'
 sf_absent "the old '2-round cap'" '2-round cap'
 sf_absent "the old 'do not run a round 3'" 'do not run a round 3'
 sf_absent "the old 'revise **once**'" 'revise \*\*once\*\*' WORKFLOW.md
+# The two lanes (2026-10-15) removed the iterate-at-once loop, round 7 and the narrow rounds.
+sf_absent "the old 'run the next round at once'" 'run the next round at once'
+sf_absent "the old 'do not run a round 7'" 'do not run a round 7'
+sf_absent "the old narrow rounds" 'narrow rounds|rounds 2…n'
 
 # And the TOOL, not only the documents. `bin/ship-feature` prints the loop rule to the operator on
 # every relay run, which out-ranks any document nobody re-reads — so a revert of that one string must
@@ -3972,12 +3974,7 @@ for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md 
 done
 
 sf_plan_tool_clause "clean round goes straight to Gate 1" 'straight to gate 1'
-sf_plan_tool_clause "cap is 6 rounds" 'cap.{0,10}(6|six) rounds'
-sf_plan_tool_clause "do not run a round 7 on your own" 'do not run a round 7 on your own'
-sf_plan_tool_clause "write a disagreement summary instead" 'disagreement summary'
-sf_plan_tool_clause "a qualifying finding: run the next round at once" 'run the next round at once'
-sf_plan_tool_clause "never ask the human for one more round" 'never ask the human for one more round'
-sf_plan_tool_clause "an unreviewed plan revision never reaches Gate 1" 'an unreviewed plan revision never reaches gate 1'
+sf_plan_tool_clause "cap is 1 round" 'cap: 1 round'
 sf_plan_tool_clause "keeps the review vocabulary (plan-qualifying)" 'plan-qualifying'
 # Every 'Plan review done' line: none may still state the old cap.
 sf_plan_tool_absent() { # sf_plan_tool_absent <label> <extended-regex>
@@ -3995,6 +3992,7 @@ sf_plan_tool_absent() { # sf_plan_tool_absent <label> <extended-regex>
 sf_plan_tool_absent "the old 'both times'" 'both times'
 sf_plan_tool_absent "the old 'do not run a round 3'" 'do not run a round 3'
 sf_plan_tool_absent "the old 2-round cap" 'cap.{0,10}(2|two) rounds'
+sf_plan_tool_absent "the old 6-round cap" 'cap.{0,10}(6|six) rounds'
 
 # The exit-3 (NOT clean) message gets the same treatment: it used to say "Fix and re-run" with no
 # mention of the two-consecutive-failure drop rule, which itself invites retrying the same reviewer
@@ -4016,10 +4014,10 @@ sf_plan_tool_clause_notclean "tell the human about the reduced panel" 'reduced p
 
 # The pre-push hook rule (Fizzy #1370): WORKFLOW.md and the three adapters, then the files that carry
 # the merge-gate and CLI text.
-sf_clause "preflight refuses a repo without the hook" 'preflight`[^`]{0,30}refuses'
-sf_clause "the hook lives at .githooks/pre-push" '\.githooks/pre-push'
-sf_clause "the hook runs the tests, a linter and a formatter check" 'tests, a linter and a formatter'
-sf_clause "the agent names the hook's checks in the implementation notes" 'implementation notes'
+sf_wf_clause "preflight refuses a repo without the hook" 'preflight`[^`]{0,30}refuses'
+sf_wf_clause "the hook lives at .githooks/pre-push" '\.githooks/pre-push'
+sf_wf_clause "the hook runs the tests, a linter and a formatter check" 'tests, a linter and a formatter'
+sf_wf_clause "the agent names the hook's checks in the implementation notes" 'implementation notes'
 sf_doc() { # sf_doc <label> <file> <extended-regex>
   tr '\n' ' ' <"$HERE/../$2" | tr -s ' ' | grep -Eqi -- "$3" &&
     {
@@ -4888,7 +4886,7 @@ printf 'plan\n' | (
   PATH="$ABIN:$PATH"
   bash "$CLI" plan-review --reviewers codex,grok >"$PR_OUT" 2>&1
 )
-check "plan-review (plain, clean): still prints the human closing lines" "$(grep -c 'straight to Gate 1' "$PR_OUT")|$(grep -c 'do not run a round 7' "$PR_OUT")" "1|1"
+check "plan-review (plain, clean): still prints the human closing lines" "$(grep -c 'straight to Gate 1' "$PR_OUT")|$(grep -c 'cap: 1 round' "$PR_OUT")" "1|1"
 printf 'plan\n' | (
   export STUB_LOG="$AH/p4.log" STUB_FAIL_grok="$AH/fail_grok"
   PATH="$ABIN:$PATH"
@@ -5186,14 +5184,10 @@ _pcx="$(sed -n -e '/^cmd_plan_consensus()/,/^}$/p' -e '/^sf_plan_consensus_run()
 check "plan-consensus code: the extract is non-empty, reaches the exit-2 line and has no 'no round 3' or 'once more'" "$([ -n "$_pcx" ] && echo nonempty)|$(printf '%s\n' "$_pcx" | grep -c 'Revise the plan and run plan-consensus again')|$(printf '%s\n' "$_pcx" | grep -Eci 'no round 3|once more')" "nonempty|1|0"
 _wfx="$(awk '/^\*\*Replacing Gate 1:/ { f = 1; print; next } f && /^\*\*/ { exit } f' "$HERE/../WORKFLOW.md")"
 check "WORKFLOW.md 'Replacing Gate 1': non-empty, states the 6-round cap and has no 'no round 3' or 'once more'" "$([ -n "$_wfx" ] && echo nonempty)|$(printf '%s\n' "$_wfx" | tr '\n' ' ' | grep -c 'Cap: 6 rounds and 9 attempts')|$(printf '%s\n' "$_wfx" | grep -Eci 'no round 3|once more')" "nonempty|1|0"
-for adapter in adapters/codex/AGENTS.snippet.md adapters/cursor/ship-feature.md adapters/skill/SKILL.md; do
-  _ax="$(grep -E '^(- )?\*\*Autonomous mode' "$HERE/../$adapter")"
-  check "$adapter autonomous paragraph: non-empty, says up to 6 rounds, no 'no round 3' or 'once more'" "$([ -n "$_ax" ] && echo nonempty)|$(printf '%s\n' "$_ax" | grep -c 'up to 6 rounds')|$(printf '%s\n' "$_ax" | grep -Eci 'no round 3|once more')" "nonempty|1|0"
-done
 
 # docs and adapters state the mode (consistency clauses: WORKFLOW.md and every adapter)
-sf_clause "autonomous mode exists, is experimental and is off by default" 'autonomous mode.{0,200}(experimental|off by default)'
-sf_clause "autonomous mode needs the env key SHIP_FEATURE_AUTONOMOUS" 'SHIP_FEATURE_AUTONOMOUS'
+sf_wf_clause "autonomous mode exists, is experimental and is off by default" 'autonomous mode.{0,200}(experimental|off by default)'
+sf_wf_clause "autonomous mode needs the env key SHIP_FEATURE_AUTONOMOUS" 'SHIP_FEATURE_AUTONOMOUS'
 grep -q 'AUTONOMOUS_OFF' "$HERE/../WORKFLOW.md" && grep -q 'Plan-Key:' "$HERE/../WORKFLOW.md" && grep -q 'Disputed findings: none' "$HERE/../WORKFLOW.md" && grep -q -- '- DISPUTED:' "$HERE/../WORKFLOW.md" && grep -q 'Disposition,' "$HERE/../WORKFLOW.md"
 check "WORKFLOW.md documents the kill switch, Plan-Key and the disposition/dispute line formats" $? 0
 
@@ -5432,6 +5426,102 @@ check "own bin/ci C8b: a leak-scan failure -> fails at that stage, the suite doe
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_SUITE_RC=1 ci_run "$_r/bin/ci"
 check "own bin/ci C8c: a suite failure -> fails at the tests stage" "$_ci_rc|$(ci_said 'bin/ci [tests]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan suite "
 
+# --- land: the light lane's merge, no PR -------------------------------------
+# A fresh remote per case: land pushes, so the cases must not share a default branch.
+# ld_repo <name> [nohook]: a bare remote with one seed commit (carrying the committed .githooks/pre-push
+# unless "nohook") and a clone with a feature worktree "f" holding one commit. Prints the clone path.
+ld_repo() {
+  local r="$WORK/land-$1"
+  git init -q --bare "$r.git" && git -C "$r.git" symbolic-ref HEAD refs/heads/main &&
+    git clone -q "$r.git" "$r" 2>/dev/null &&
+    (cd "$r" && { [ "${2:-}" = nohook ] || sf_seed_hook .; } && echo seed >seed.txt && git add seed.txt &&
+      git commit -q -m seed && git push -q origin HEAD:main &&
+      git remote set-head origin main >/dev/null 2>&1 && printf '.claude/\n' >>.git/info/exclude &&
+      git worktree add -q -b f .claude/worktrees/f origin/main &&
+      cd .claude/worktrees/f && echo feat >feat.txt && git add feat.txt && git commit -q -m "add feat") &&
+    printf '%s\n' "$r"
+}
+# ld_tip <clone>: the remote's main, read from the bare repo itself (not a possibly stale tracking ref).
+ld_tip() { git --git-dir="$1.git" rev-parse refs/heads/main; }
+# land with core.hooksPath=.githooks, as a real clone has it (the isolation points it nowhere).
+ld() { GIT_CONFIG_VALUE_2=.githooks bash "$CLI" land "$@"; }
+# ld_main_commit <clone> <hook body> <file>: a commit on the remote's main that sets the committed hook
+# and adds <file>, made from a scratch branch in the clone.
+ld_main_commit() {
+  (cd "$1" && git checkout -q -B other origin/main && printf '#!/bin/sh\n%s\n' "$2" >.githooks/pre-push &&
+    git add --chmod=+x .githooks/pre-push && echo m >"$3" && git add "$3" && git commit -q -m main &&
+    git push -q origin HEAD:main)
+}
+
+_r="$(ld_repo ok)"
+_before="$(ld_tip "$_r")"
+(cd "$_r/.claude/worktrees/f" && ld -m "Not fixed: a nit" >"$WORK/land.out" 2>&1)
+_rc=$?
+_tip="$(ld_tip "$_r")"
+_p1="$(git --git-dir="$_r.git" rev-parse "$_tip^1")"
+_p2="$(git --git-dir="$_r.git" rev-parse "$_tip^2" 2>/dev/null)"
+_f="$(git -C "$_r/.claude/worktrees/f" rev-parse f)"
+_msg="$(git --git-dir="$_r.git" log -1 --format=%B "$_tip")"
+_on="$(git -C "$_r/.claude/worktrees/f" rev-parse --abbrev-ref HEAD)"
+check "land: a merge commit on main, first parent the old main, second the branch" "$_rc|$([ "$_p1" = "$_before" ] && echo old)|$([ "$_p2" = "$_f" ] && echo branch)" "0|old|branch"
+check "land: the merge message names the branch and carries each -m" "$(printf '%s' "$_msg" | grep -c "^Merge branch 'f'$")|$(printf '%s' "$_msg" | grep -c '^Not fixed: a nit$')" "1|1"
+check "land: returns to the feature branch and prints the cleanup command" "$_on|$(grep -c 'git worktree remove' "$WORK/land.out")" "f|1"
+
+_r="$(ld_repo default)"
+(cd "$_r" && git checkout -q -B main origin/main && ld >/dev/null 2>&1)
+check "land: refuses on the default branch" $? 1
+
+_r="$(ld_repo maintree)"
+_before="$(ld_tip "$_r")"
+(cd "$_r" && git checkout -q -b g origin/main && echo g >g.txt && git add g.txt && git commit -q -m g && ld >/dev/null 2>&1)
+_rc=$?
+check "land: refuses a feature branch in the main working tree, which stays on it" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_r" rev-parse --abbrev-ref HEAD)" "1|same|g"
+
+_r="$(ld_repo nohook nohook)"
+_before="$(ld_tip "$_r")"
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
+_rc=$?
+check "land: refuses a tree with no committed pre-push hook, remote unchanged, back on the branch" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_r/.claude/worktrees/f" rev-parse --abbrev-ref HEAD)" "1|same|f"
+
+_r="$(ld_repo dirty)"
+_before="$(ld_tip "$_r")"
+echo change >>"$_r/.claude/worktrees/f/feat.txt"
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
+check "land: refuses uncommitted changes, remote unchanged" "$?|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)" "1|same"
+
+_r="$(ld_repo empty)"
+(cd "$_r/.claude/worktrees/f" && git reset -q --hard origin/main && ld >/dev/null 2>&1)
+check "land: refuses a branch with nothing to land" $? 1
+
+_r="$(ld_repo args)"
+(cd "$_r/.claude/worktrees/f" && ld --squash >/dev/null 2>&1)
+check "land: refuses an unknown argument" $? 1
+
+# A conflict: main changed the same file the branch changed.
+_r="$(ld_repo conflict)"
+(cd "$_r" && git checkout -q -b other origin/main && echo theirs >feat.txt && git add feat.txt && git commit -q -m other && git push -q origin HEAD:main)
+_before="$(ld_tip "$_r")"
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
+_rc=$?
+_wt="$_r/.claude/worktrees/f"
+check "land: a conflict -> refused, remote unchanged, back on the branch, no merge in progress" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_wt" rev-parse --abbrev-ref HEAD)|$([ -e "$(git -C "$_wt" rev-parse --git-path MERGE_HEAD)" ] && echo merging)" "1|same|f|"
+
+# The committed hook decides. A failing hook on main reaches the merged tree, so the push is refused.
+_r="$(ld_repo hookfail)"
+ld_main_commit "$_r" 'exit 1' other.txt
+_before="$(ld_tip "$_r")"
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
+_rc=$?
+check "land: a failing pre-push hook -> refused, remote unchanged, back on the branch" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_r/.claude/worktrees/f" rev-parse --abbrev-ref HEAD)" "1|same|f"
+
+# And the hook sees the MERGED tree: main gained main.txt (and a hook that requires it) after the branch
+# was cut, so the hook passes only if land checked the merge out before pushing.
+_r="$(ld_repo hooktree)"
+ld_main_commit "$_r" '[ -f main.txt ] && [ -f feat.txt ]' main.txt
+_before="$(ld_tip "$_r")"
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
+check "land: the pre-push hook runs on the merged tree (main's new file and the branch's file both present)" "$?|$([ "$(ld_tip "$_r")" != "$_before" ] && echo moved)" "0|moved"
+
 echo "-------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 # FAIL is checked FIRST: when a case fails, PASS is naturally short of the total, and reporting that
@@ -5440,7 +5530,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=736
+EXPECTED=737
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

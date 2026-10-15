@@ -27,6 +27,12 @@ each driver agent (Claude, Codex, Cursor) gets a thin adapter that points at it,
 
 ## 🆕 What's new
 
+**Unreleased** — **two lanes, and the light lane is the default.** A change that is not risky now
+skips the plan, the PR and the human merge: one review round by one reviewer, then
+`ship-feature land`, which merges onto the default branch and pushes with the pre-push hook on the
+exact merged tree. Risky changes keep the gated pipeline, with one plan-review round and at most two
+cross-review rounds.
+
 **Unreleased** — **two plan-review seats on the `pi` runner: `pi_glm` (GLM 5.3) and `pi_grok`
 (Grok 4.7).** They are the relay's pi seats, pinned by the same keys (`MODEL_pi_*` / `EFFORT_pi_*` in
 the shared panel config), but they read your checkout with a read-only tool allowlist, so they can check
@@ -113,30 +119,35 @@ Agents reinvent your release/PR process every session — worktree or not, which
 
 ## The workflow
 
-The authoritative version is [`WORKFLOW.md`](WORKFLOW.md). At a glance:
+The authoritative version is [`WORKFLOW.md`](WORKFLOW.md). It has **two lanes**.
+
+**The light lane — the default.** For every change that is not risky:
+
+| Step | What happens |
+|:----:|--------------|
+| 1 | **Implement** in a worktree, with tests |
+| 2 | **One review round by one reviewer** on the branch diff (`review-local`), no PR |
+| 3 | Fix only what breaks the change for a real user; record the rest |
+| 4 | **`ship-feature land`**: merge onto the default branch and push — the pre-push hook tests the exact merged tree |
+| 5 | **Ship it**: a change is done when it is live, not when it is merged |
+
+**The careful lane — only for real risk** (payments, consent, auth and account deletion, migrations,
+security, store policy):
 
 | Step | What happens | Gate |
 |:----:|--------------|:--|
 | 1 | **Plan** the change | |
-| 2 | A second agent **reviews the plan** (up to 6 rounds, no question between rounds; open disagreement → Gate 1) | |
+| 2 | The panel **reviews the plan** — one round | |
 | 3 | You **approve the plan** | 🚦 **human gate** |
 | 4 | **Implement** in a worktree → open a **PR** | |
-| 5 | **Cross-review + tests** — the panel gets the **plan**, and iterates only for a Blocker or a *qualifying* Should-fix | |
+| 5 | **Cross-review + tests** — the panel gets the **plan**; two rounds at most | |
 | 6 | You **merge** | 🚦 **human gate** |
 | 7 | **Verify** on the merge commit | |
 
-The two 🚦 gates are the only places the agent stops and waits for you — and the agent never merges its
-own work. Everything else runs on its own.
-
-**Step 5 in one paragraph.** The reviewers are given the **plan** (`--context-file`), not just the
-diff, so they can say *"this is not what we agreed to build"* and not only *"this line is wrong"*.
-Round 1 is the full panel; the fix rounds are **narrow** — the reviewers with a stake in an open
-finding, plus anyone whose finding you downgraded, so nobody is classified out of their own
-objection; the closing round is the full panel again, on the SHA that will merge, unless round 1 was
-already clean and there was nothing to fix. Iterating happens for
-a **Blocker** or a **qualifying** Should-fix (correctness, safety, deployability, verification), not
-for every remark. Anything the author downgrades is written down, and if the reviewer still disagrees
-it goes to you at the merge gate — which is a change to what that gate *receives*, not a third gate.
+**Why two lanes.** The careful lane used to be the only lane, with caps of six rounds. A panel of
+several models almost always finds one more thing, so the loop did not converge, and one fix could
+take days. The light lane trades a few small bugs that reach users for changes that ship the same day;
+the careful lane keeps the full gates where a bug costs money, data or trust.
 
 ## Autonomous mode (experimental)
 
@@ -242,9 +253,9 @@ ship-feature skill for any feature/fix.
   [`pr-review-relay`](https://github.com/hamen/pr-review-relay) that preserves its stdout and exact exit
   code, and reminds you what each code means: `0` = every **dispatched** reviewer ran — not that
   everyone ran, since a benched (out-of-quota) seat is dropped and still exits `0` — and not "clean";
-  `3` = re-run; `4` = escalate. It injects your configured reviewer quorum when you omit
+  `3` = re-run; `4` = take the open findings to Gate 2. It injects your configured reviewer quorum when you omit
   `--reviewers` — **which is how it should normally be run**: the config is the panel, and a typed
-  list can only be staler than it. Pass the flag for a narrow follow-up round, or to override. Read
+  list can only be staler than it. Pass the flag only to override. Read
   each round's startup lines either way: omitting the flag fixes a stale list, it cannot tell you a
   seat dropped out — a **benched** (out-of-quota) reviewer is skipped and the round still exits
   `0`.

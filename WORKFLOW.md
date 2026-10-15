@@ -1,17 +1,67 @@
 # ship-feature — the workflow
 
 The canonical, single source of truth for how to ship **any** repository change. Every adapter (Claude,
-Codex, Cursor) points here. Follow it top to bottom for a new feature or fix.
+Codex, Cursor) points here.
 
-This is a **gated pipeline**: two points require an explicit human decision, and the agent must stop and
-wait at each. The agent never merges its own work.
+There are **two lanes**:
 
-(That is the default and it never changes on its own. The one exception is the opt-in
-**Autonomous mode** at the end of this file: experimental, off by default.)
+- **The light lane — the default.** No plan, one review round by one reviewer, and the agent lands its
+  own work with `ship-feature land`. No PR.
+- **The careful lane — only for real risk.** The gated pipeline below: a plan, one plan-review round, a
+  PR, at most two cross-review rounds, and a human who merges.
+
+Why the light lane is the default: the gated pipeline, run on every change with high round caps, turned
+one fix into days of rounds. A panel of several models almost always finds one more thing, so a loop
+that iterates until the panel is silent does not converge, and a fix that waits in round 8 helps no
+user. Caps that are low by design, and a default lane with one reviewer, trade a few small bugs that
+reach users for changes that ship the same day. The careful lane keeps the full gates where a bug costs
+money, data or trust.
 
 ---
 
-## The two human gates
+## The light lane (default)
+
+Use it for every change that is not on the careful-lane list.
+
+1. **Worktree and branch** off the default branch (`origin/HEAD`), as in step 4 below. Stage explicit
+   paths. The repository's pre-push hook runs the tests, a linter and a formatter check.
+2. **Implement**, with tests at the level you touched. Commit.
+3. **Review once**, with one reviewer, on the branch diff — no PR needed:
+   `review-local --author <self> --base origin/<default> --reviewers <one seat>`
+   (`review-local` ships with `pr-review-relay`).
+4. **Fix only what breaks the change for a real user**, loses money, or leaks data. Record every other
+   finding in the merge message (`-m "Not fixed: …"`) and move on. No second round, unless the fix was
+   large.
+5. **Land it:** `ship-feature land [-m <message>]...` from inside the worktree. It merges the branch
+   (`--no-ff`) onto a freshly fetched default branch, checks that merge out, and pushes it, so the
+   pre-push hook tests the exact tree that lands. If the push is refused, nothing landed: fix what the
+   hook reported, or run `land` again if the default branch moved. The agent lands its own work here.
+6. **Ship it** when the change needs a release or a deploy. **A change is done when it is live**, not
+   when it is merged: report the version or the deployed commit.
+
+### The careful lane — when to use it
+
+Payments and subscriptions; ad consent and ad-revenue paths; authentication and account deletion;
+database migrations and data deletion; security fixes; store-policy changes (permissions, SDKs that
+collect data). Also any change the human asks to run in the careful lane.
+
+### When a PR is still needed
+
+A PR is the product for upstream and fork work, it is required where branch protection demands it,
+and it is the human's inbox for code written by an unattended agent. In those repos, run the careful
+lane's steps 4–7 with the same round caps.
+
+---
+
+## The careful lane — the gated pipeline
+
+This is a **gated pipeline**: two points require an explicit human decision, and the agent must stop and
+wait at each. The agent never merges its own work in this lane.
+
+(The one exception is the opt-in **Autonomous mode** at the end of this file: experimental, off by
+default, and due for removal when pr-review-relay folds into ship-feature.)
+
+### The two human gates
 
 A **human gate** means: *explicit human approval, recorded in the active conversation, before the agent
 proceeds.* The agent's native plan/ask mode is only a convenience that helps enforce this — it is not the
@@ -23,7 +73,7 @@ the **source repository**.
 
 ---
 
-## The pipeline
+### The steps
 
 ### 1. Plan
 Write a short, concrete plan: the problem, the approach, the files you expect to touch, and how success is
@@ -162,36 +212,23 @@ exists, not a **PR** under cross-review, so "plan-qualifying" below is a distinc
   step 5's initial or closing round is the human's call, not a silent substitution. **If dropping the
   reviewer leaves zero reviewers, that is not a completed round at all** — stop and take the failure
   itself to Gate 1 (a plan nobody reviewed is not "the agreed plan").
-- **Cap: 6 rounds.** Round 1 is the full configured panel (`SHIP_FEATURE_PLAN_REVIEWERS`, or a
-  `--reviewers` override). If round 1 raises no Blocker and no plan-qualifying Should-fix, **stop — go straight
-  to Gate 1.** Do not spend a second round confirming an already-clean plan. If a round raises a
-  plan-qualifying finding, revise the plan and **run the next round at once**, against **the same full
-  panel — never a narrowed one.** A plan-review panel is 2–3 reviewers, too small to narrow the way step
-  5 narrows a PR panel; unlike step 5, there is no narrow phase here at all.
-- **Iterate without asking.** Between rounds, do not ask the human "accept it as is, or one more
-  round?": **never ask the human for one more round.** A revision that no reviewer has seen is not a
-  reviewed plan, so **an unreviewed plan revision never reaches Gate 1.** Gate 1 gets the plan when one
-  round is clean on the latest revision.
+- **Cap: 1 round.** One round with the full configured panel (`SHIP_FEATURE_PLAN_REVIEWERS`, or a
+  `--reviewers` override). Fix each Blocker and each plan-qualifying Should-fix in the plan, then go to
+  Gate 1 with the revised plan and a short list of what changed and why. Do not run a second round on
+  your own: the human reads the revision at Gate 1, and may ask for one more round there.
 - **Plan-qualifying** means: a **Blocker**, or a **Should-fix** saying the plan is wrong about the
   existing tree, unsafe to execute as written, or **materially incomplete** — a missing edge case, an
   unhandled failure mode, or missing verification that would let a broken change ship. A **Nit**, or a
   Should-fix that only expresses a stylistic or approach preference without any of the above, does not
-  reopen a round. **Change the plan only for a Blocker or a plan-qualifying Should-fix:** every change
-  needs one more round, so a Nit or a non-qualifying Should-fix is recorded at Gate 1, not applied.
-- **If round 6 still has an open plan-qualifying finding, stop — do not run a round 7 on your own.**
-  Write a short **disagreement summary**: for each open finding, the reviewer's objection, your
-  classification, and the reason. Take that summary to Gate 1 instead of "the agreed plan."
-- **A human-authorized extra round is not an agent-initiated round.** If the human reviews the
-  disagreement summary at Gate 1 and asks for one more pass, that round runs like any other: it either
-  resolves and reaches Gate 1 clean, or it produces an updated disagreement summary and returns to
-  Gate 1 again. There is no agent-initiated round beyond the cap — only a human-authorized one.
+  reopen a round. **Change the plan only for a Blocker or a plan-qualifying Should-fix:** the human reads
+  each change at Gate 1 without a second review, so keep them few; a Nit or a non-qualifying Should-fix
+  is recorded at Gate 1, not applied.
 
 ### 3. 🚦 Gate 1 — human approves the plan
-Summarize the plan and **stop**. This is one of two shapes: **the agreed plan** (a clean round, or a
-later round resolved every plan-qualifying finding), or **the plan plus a disagreement summary** (the
-cap was hit with a plan-qualifying finding still open). In the second shape the human chooses: accept
-the plan as you classified it, authorize one more round with explicit reasoning for why, or drop the
-change. Do not touch the source repository until the human says go.
+Summarize the plan and **stop**. Bring the plan as revised after its one review round, with a short
+list of each finding, how you classified it, and what you changed. Where you disagree with a reviewer,
+say so with both positions. The human approves it, asks for one more round, or drops the change. Do not
+touch the source repository until the human says go.
 
 ### 4. Implement in a worktree, open a PR
 - Work in a **git worktree**, never the main working tree. Default root `.claude/worktrees/`, override
@@ -230,8 +267,7 @@ it — `SHIP_FEATURE_REVIEWERS` and nothing else: from the environment if export
 `~/.config/ship-feature/config`, else your `REVIEWERS` line in `~/.config/pr-review-relay/config` —
 so the config is the panel and there is nothing to keep in sync. An **exported** value beats both files — see the Quorum note in §5 — so check the environment first when a round comes back the wrong size. The failure this prevents is quiet: an agent carrying
 last month's list runs a smaller panel than the one you configured, every round exits `0`, and the
-reviews read as complete. Pass the flag for the **narrow** rounds described below, where a subset
-is the point, and to override on purpose. And read the startup lines every round: a benched
+reviews read as complete. Pass the flag only to override on purpose. And read the startup lines every round: a benched
 (out-of-quota) seat is dropped and the run still exits `0`.
 
 **Always pass the plan with `--context-file`.** The plan already exists — §2 wrote it for the plan
@@ -261,7 +297,7 @@ PR thread, where the human reads them at Gate 2.
 - `0` — every dispatched reviewer ran and posted **against a stable SHA**. This does **not** mean the
   reviews are clean — you must READ the verdicts.
 - `3` — the round is not trustworthy (a reviewer failed / SHA unreadable / HEAD moved). Re-run.
-- `4` — the round cap was hit. Escalate to the human.
+- `4` — the round cap was hit. Take the open findings to Gate 2.
 
 **Quorum:** set it once — `SHIP_FEATURE_REVIEWERS` in `~/.config/ship-feature/config`, or
 `REVIEWERS` in `~/.config/pr-review-relay/config`, not both — and then **do not pass a list on the
@@ -278,41 +314,34 @@ list does. A partial pass must not read as consensus, so also read each round's 
 benched (out-of-quota) seat is dropped and the round still exits `0`.
 
 **Loop-termination rule.** Iterating on *every* Should-fix produced eight full-quorum rounds on one
-PR where the last five found no Blocker. The loop now has **three named phases**:
+PR where the last five found no Blocker, and a later cap of six rounds still let one change run for
+days. The loop is now **two rounds at most** (`--max-rounds 2`):
 
-| phase | panel | purpose |
+| round | panel | purpose |
 |---|---|---|
 | **Initial** — round 1 | full quorum | find everything |
-| **Narrow** — rounds 2…n | reviewers with a stake in an open finding, **plus any whose finding you downgraded** | verify targeted fixes |
-| **Closing** — final round | full quorum, on the SHA that will merge | confirm the merge candidate |
+| **Closing** — round 2 | full quorum, on the SHA that will merge | confirm the fixes and the merge candidate |
 
 **A clean initial round IS the closing round.** If round 1 completes with no Blocker and no qualifying
 Should-fix, you are done — there is nothing to fix, so the SHA the panel reviewed is already the SHA
 that will merge. Do not run a second full quorum to "close" a round that never opened. The closing
 round exists only because *fixing* something creates a SHA nobody reviewed in full.
 
-**If the closing round raises a new qualifying finding, it becomes the initial round of another
-cycle** — fix, narrow, then a full quorum again on the new merge candidate. Not fix-narrow-stop: that
-would merge a SHA that no full panel ever saw, which is the thing the closing round is for.
+**If the closing round still raises a qualifying finding, do not start another cycle.** Take it to
+Gate 2 as an open item; the human merges with it recorded, or sends it to a follow-up change.
 
 - **A round only counts if it completed** — every reviewer **the round was supposed to dispatch**
-  produced and posted a review. For an initial or closing round that is every configured reviewer
-  except the author; for a narrow round it is the narrow set, not the whole `SHIP_FEATURE_REVIEWERS`
-  list. Exit `0` is *not* that statement: a **benched** reviewer (out of quota) is
+  produced and posted a review: every configured reviewer except the author. Exit `0` is *not* that
+  statement: a **benched** reviewer (out of quota) is
   dropped deliberately and still exits `0`. A benched seat in an **initial or closing** round is a
   decision for the human **before the round**, taken when the relay announces the bench at startup:
   wait for the quota to reset, or authorise the reduced panel explicitly, recorded in the PR thread
-  and repeated at Gate 2. **Narrow rounds are unaffected**: a benched seat there simply means the
-  finding it raised stays open until that seat comes back — nothing to decide, nothing to wait for.
+  and repeated at Gate 2.
 - **Iterate only for a Blocker, or a qualifying Should-fix** — one that is a material problem of
   **correctness, safety, deployability, or verification**. That covers documentation that
   misinstructs, release and deploy configuration, packaging, migrations, portability and API
   contracts; it does not cover wording, structure, or coverage of paths the PR does not touch.
 - **The author classifies in writing**, naming the finding and the reason.
-- **The narrow panel is defined by stake, not by size**: every reviewer that raised a qualifying
-  finding, **plus** every reviewer whose finding the author downgraded — otherwise classifying
-  someone out of the panel removes their only way to object. Usually that is fewer seats, which is
-  where the saving is; if everyone has a stake, it is everyone.
 - **A downgraded reviewer must be able to see the downgrade.** Reviewers are told not to read the PR
   discussion, so dispositions travel in the **derived context file** — each finding, its
   classification, the reason, and whether it is disputed.
@@ -326,8 +355,8 @@ would merge a SHA that no full panel ever saw, which is the thing the closing ro
 - **Stop** when the closing round returns no Blocker and no undisputed qualifying Should-fix.
   Documented **disputes do not block the stop** — they travel to Gate 2 as open items.
 
-The round cap (exit `4`) is an **escalation** threshold: stop and hand the open findings to the
-human. It is never permission to merge, and never grounds for `--reset`.
+The round cap (exit `4`) means: stop and take the open findings to Gate 2. It is never permission to
+merge, and never grounds for `--reset` or a higher `--max-rounds`.
 
 **Exact-SHA rule:** capture the PR `headRefOid`; require local `HEAD` to equal it before testing; run the
 tests; then re-check that the PR head has not moved. CI must check out the PR **head** SHA
@@ -338,11 +367,11 @@ code.
 Summarize the state and **stop**. The **human** merges. The agent never self-merges — merge authority
 stays with the human.
 
-The summary must state: green on the PR head; **no open Blockers and no open qualifying Should-fix**;
-every remaining finding recorded with its classification; **every disputed classification listed with
-both positions**; and any reduced panel that was authorised. The human rules on the disputes as part
-of deciding to merge — accept the downgrade and merge, or reject it, which sends the PR back into the
-narrow/closing cycle with that finding reclassified as qualifying.
+The summary must state: green on the PR head; each Blocker and qualifying Should-fix either fixed or,
+when the round cap stopped the loop, **listed as an open item**; every remaining finding recorded with
+its classification; **every disputed classification listed with both positions**; and any reduced
+panel that was authorised. The human rules on the open items and the disputes as part of deciding to
+merge — merge with them recorded, ask for one more round on a fix, or send them to a follow-up change.
 
 This is still **two** gates, not three: a dispute does not create a new stopping point, it changes
 what Gate 2 receives.
@@ -490,14 +519,6 @@ records that run. A PR can weaken the gate without touching its entry points (de
 linter or formatter config, change a package script or a build file): the full panel on the exact SHA is
 the protection there. `preflight` runs once, before the implementation, so a working-tree edit of the
 hook after that (edit, push, restore) leaves no trace in any commit.
-
----
-
-## The light path
-
-`--light` is for a trivial change (a typo, a one-line fix) and is **only** valid when the human explicitly
-asks for it. It may skip the **plan review** (step 2). It may **never** skip the worktree, the relevant
-tests, the cross-review, or the merge gate.
 
 ---
 
