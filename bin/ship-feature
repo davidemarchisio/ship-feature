@@ -2958,7 +2958,7 @@ sf_gate_merge() {
 # hook test the branch alone, and a change on the default branch that the branch never saw would land
 # untested. Every failure path returns to the branch, and the remote moves only on a successful push.
 cmd_land() {
-  local msgs=() def cur top merged
+  local msgs=() def cur top merged git_dir common_dir hook_err
   while [ $# -gt 0 ]; do
     case "$1" in
       -m | --message)
@@ -2974,6 +2974,13 @@ cmd_land() {
   cur=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || die "cannot read current branch."
   [ "$cur" != "HEAD" ] || die "detached HEAD — run land from the feature branch you want to land."
   [ "$cur" != "$def" ] || die "you are on the default branch '$def' — land runs from a feature branch."
+  # A linked worktree only, as in preflight: land checks the merge out, and in the main working tree
+  # that would move the checkout under every other agent that uses it.
+  git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
+  common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+  case "$common_dir" in /*) : ;; *) common_dir=$(CDPATH='' cd "./$common_dir" 2>/dev/null && pwd) ;; esac
+  [ -n "$git_dir" ] && [ "$git_dir" != "$common_dir" ] || die "not in a linked worktree — land never runs in the main working tree."
+  top=$(git rev-parse --show-toplevel 2>/dev/null)
   git diff --quiet && git diff --cached --quiet || die "uncommitted changes — commit them first: land ships commits only."
   git fetch -q origin "$def" || die "git fetch origin $def failed."
   [ "$(git rev-list --count "origin/$def..$cur")" -gt 0 ] || die "nothing to land: $cur has no commit that origin/$def lacks."
@@ -2985,12 +2992,16 @@ cmd_land() {
     die "merge conflict with origin/$def — merge origin/$def into $cur, resolve, commit, then run land again."
   fi
   merged=$(git rev-parse HEAD)
+  # The gate must exist on the tree that lands, or the push below would test nothing.
+  if ! hook_err="$(sf_prepush_hook "$top" 2>&1)"; then
+    git checkout -q "$cur"
+    die "pre-push hook on the merged tree: $hook_err"
+  fi
   if ! git push -q origin "HEAD:refs/heads/$def"; then
     git checkout -q "$cur"
     die "push refused: the pre-push hook failed, or $def moved since the fetch. Nothing landed. Fix what the hook reported, or run land again."
   fi
   git checkout -q "$cur"
-  top=$(git rev-parse --show-toplevel 2>/dev/null)
   ok "landed $cur on $def as $merged"
   echo "  next: release or deploy if the change needs it, then remove the worktree:"
   echo "    git worktree remove '$top' && git branch -d '$cur'"

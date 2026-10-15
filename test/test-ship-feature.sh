@@ -5428,13 +5428,14 @@ check "own bin/ci C8c: a suite failure -> fails at the tests stage" "$_ci_rc|$(c
 
 # --- land: the light lane's merge, no PR -------------------------------------
 # A fresh remote per case: land pushes, so the cases must not share a default branch.
-# ld_repo <name>: a bare remote with one seed commit and a clone with a feature worktree "f" holding one
-# commit. Prints the clone path; the worktree is <clone>/.claude/worktrees/f.
+# ld_repo <name> [nohook]: a bare remote with one seed commit (carrying the committed .githooks/pre-push
+# unless "nohook") and a clone with a feature worktree "f" holding one commit. Prints the clone path.
 ld_repo() {
   local r="$WORK/land-$1"
   git init -q --bare "$r.git" && git -C "$r.git" symbolic-ref HEAD refs/heads/main &&
     git clone -q "$r.git" "$r" 2>/dev/null &&
-    (cd "$r" && echo seed >seed.txt && git add seed.txt && git commit -q -m seed && git push -q origin HEAD:main &&
+    (cd "$r" && { [ "${2:-}" = nohook ] || sf_seed_hook .; } && echo seed >seed.txt && git add seed.txt &&
+      git commit -q -m seed && git push -q origin HEAD:main &&
       git remote set-head origin main >/dev/null 2>&1 && printf '.claude/\n' >>.git/info/exclude &&
       git worktree add -q -b f .claude/worktrees/f origin/main &&
       cd .claude/worktrees/f && echo feat >feat.txt && git add feat.txt && git commit -q -m "add feat") &&
@@ -5442,14 +5443,23 @@ ld_repo() {
 }
 # ld_tip <clone>: the remote's main, read from the bare repo itself (not a possibly stale tracking ref).
 ld_tip() { git --git-dir="$1.git" rev-parse refs/heads/main; }
+# land with core.hooksPath=.githooks, as a real clone has it (the isolation points it nowhere).
+ld() { GIT_CONFIG_VALUE_2=.githooks bash "$CLI" land "$@"; }
+# ld_main_commit <clone> <hook body> <file>: a commit on the remote's main that sets the committed hook
+# and adds <file>, made from a scratch branch in the clone.
+ld_main_commit() {
+  (cd "$1" && git checkout -q -B other origin/main && printf '#!/bin/sh\n%s\n' "$2" >.githooks/pre-push &&
+    git add --chmod=+x .githooks/pre-push && echo m >"$3" && git add "$3" && git commit -q -m main &&
+    git push -q origin HEAD:main)
+}
 
 _r="$(ld_repo ok)"
 _before="$(ld_tip "$_r")"
-(cd "$_r/.claude/worktrees/f" && bash "$CLI" land -m "Not fixed: a nit" >"$WORK/land.out" 2>&1)
+(cd "$_r/.claude/worktrees/f" && ld -m "Not fixed: a nit" >"$WORK/land.out" 2>&1)
 _rc=$?
 _tip="$(ld_tip "$_r")"
 _p1="$(git --git-dir="$_r.git" rev-parse "$_tip^1")"
-_p2="$(git --git-dir="$_r.git" rev-parse "$_tip^2")"
+_p2="$(git --git-dir="$_r.git" rev-parse "$_tip^2" 2>/dev/null)"
 _f="$(git -C "$_r/.claude/worktrees/f" rev-parse f)"
 _msg="$(git --git-dir="$_r.git" log -1 --format=%B "$_tip")"
 _on="$(git -C "$_r/.claude/worktrees/f" rev-parse --abbrev-ref HEAD)"
@@ -5458,46 +5468,58 @@ check "land: the merge message names the branch and carries each -m" "$(printf '
 check "land: returns to the feature branch and prints the cleanup command" "$_on|$(grep -c 'git worktree remove' "$WORK/land.out")" "f|1"
 
 _r="$(ld_repo default)"
-(cd "$_r" && git checkout -q main 2>/dev/null || git checkout -q -b main origin/main)
-(cd "$_r" && bash "$CLI" land >/dev/null 2>&1)
+(cd "$_r" && git checkout -q -B main origin/main && ld >/dev/null 2>&1)
 check "land: refuses on the default branch" $? 1
+
+_r="$(ld_repo maintree)"
+_before="$(ld_tip "$_r")"
+(cd "$_r" && git checkout -q -b g origin/main && echo g >g.txt && git add g.txt && git commit -q -m g && ld >/dev/null 2>&1)
+_rc=$?
+check "land: refuses a feature branch in the main working tree, which stays on it" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_r" rev-parse --abbrev-ref HEAD)" "1|same|g"
+
+_r="$(ld_repo nohook nohook)"
+_before="$(ld_tip "$_r")"
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
+_rc=$?
+check "land: refuses a tree with no committed pre-push hook, remote unchanged, back on the branch" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_r/.claude/worktrees/f" rev-parse --abbrev-ref HEAD)" "1|same|f"
 
 _r="$(ld_repo dirty)"
 _before="$(ld_tip "$_r")"
 echo change >>"$_r/.claude/worktrees/f/feat.txt"
-(cd "$_r/.claude/worktrees/f" && bash "$CLI" land >/dev/null 2>&1)
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
 check "land: refuses uncommitted changes, remote unchanged" "$?|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)" "1|same"
 
 _r="$(ld_repo empty)"
-(cd "$_r/.claude/worktrees/f" && git reset -q --hard origin/main && bash "$CLI" land >/dev/null 2>&1)
+(cd "$_r/.claude/worktrees/f" && git reset -q --hard origin/main && ld >/dev/null 2>&1)
 check "land: refuses a branch with nothing to land" $? 1
 
 _r="$(ld_repo args)"
-(cd "$_r/.claude/worktrees/f" && bash "$CLI" land --squash >/dev/null 2>&1)
+(cd "$_r/.claude/worktrees/f" && ld --squash >/dev/null 2>&1)
 check "land: refuses an unknown argument" $? 1
 
 # A conflict: main changed the same file the branch changed.
 _r="$(ld_repo conflict)"
 (cd "$_r" && git checkout -q -b other origin/main && echo theirs >feat.txt && git add feat.txt && git commit -q -m other && git push -q origin HEAD:main)
 _before="$(ld_tip "$_r")"
-(cd "$_r/.claude/worktrees/f" && bash "$CLI" land >/dev/null 2>&1)
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
 _rc=$?
 _wt="$_r/.claude/worktrees/f"
 check "land: a conflict -> refused, remote unchanged, back on the branch, no merge in progress" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_wt" rev-parse --abbrev-ref HEAD)|$([ -e "$(git -C "$_wt" rev-parse --git-path MERGE_HEAD)" ] && echo merging)" "1|same|f|"
 
-# The hook decides, and it sees the MERGED tree: main gained main.txt after the branch was cut, so a
-# hook that requires main.txt passes only if land checked the merge out before pushing.
-_r="$(ld_repo hook)"
-(cd "$_r" && git checkout -q -b other origin/main && echo m >main.txt && git add main.txt && git commit -q -m main && git push -q origin HEAD:main)
-mkdir -p "$WORK/land-hooks-tree" "$WORK/land-hooks-fail"
-printf '#!/bin/sh\n[ -f main.txt ] && [ -f feat.txt ]\n' >"$WORK/land-hooks-tree/pre-push"
-printf '#!/bin/sh\nexit 1\n' >"$WORK/land-hooks-fail/pre-push"
-chmod +x "$WORK/land-hooks-tree/pre-push" "$WORK/land-hooks-fail/pre-push"
+# The committed hook decides. A failing hook on main reaches the merged tree, so the push is refused.
+_r="$(ld_repo hookfail)"
+ld_main_commit "$_r" 'exit 1' other.txt
 _before="$(ld_tip "$_r")"
-(cd "$_r/.claude/worktrees/f" && GIT_CONFIG_VALUE_2="$WORK/land-hooks-fail" bash "$CLI" land >/dev/null 2>&1)
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
 _rc=$?
 check "land: a failing pre-push hook -> refused, remote unchanged, back on the branch" "$_rc|$([ "$(ld_tip "$_r")" = "$_before" ] && echo same)|$(git -C "$_r/.claude/worktrees/f" rev-parse --abbrev-ref HEAD)" "1|same|f"
-(cd "$_r/.claude/worktrees/f" && GIT_CONFIG_VALUE_2="$WORK/land-hooks-tree" bash "$CLI" land >/dev/null 2>&1)
+
+# And the hook sees the MERGED tree: main gained main.txt (and a hook that requires it) after the branch
+# was cut, so the hook passes only if land checked the merge out before pushing.
+_r="$(ld_repo hooktree)"
+ld_main_commit "$_r" '[ -f main.txt ] && [ -f feat.txt ]' main.txt
+_before="$(ld_tip "$_r")"
+(cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
 check "land: the pre-push hook runs on the merged tree (main's new file and the branch's file both present)" "$?|$([ "$(ld_tip "$_r")" != "$_before" ] && echo moved)" "0|moved"
 
 echo "-------------------------------------------"
@@ -5508,7 +5530,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=735
+EXPECTED=737
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

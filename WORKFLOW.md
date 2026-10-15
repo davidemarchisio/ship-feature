@@ -220,8 +220,9 @@ exists, not a **PR** under cross-review, so "plan-qualifying" below is a distinc
   existing tree, unsafe to execute as written, or **materially incomplete** — a missing edge case, an
   unhandled failure mode, or missing verification that would let a broken change ship. A **Nit**, or a
   Should-fix that only expresses a stylistic or approach preference without any of the above, does not
-  reopen a round. **Change the plan only for a Blocker or a plan-qualifying Should-fix:** every change
-  needs one more round, so a Nit or a non-qualifying Should-fix is recorded at Gate 1, not applied.
+  reopen a round. **Change the plan only for a Blocker or a plan-qualifying Should-fix:** the human reads
+  each change at Gate 1 without a second review, so keep them few; a Nit or a non-qualifying Should-fix
+  is recorded at Gate 1, not applied.
 
 ### 3. 🚦 Gate 1 — human approves the plan
 Summarize the plan and **stop**. Bring the plan as revised after its one review round, with a short
@@ -366,11 +367,11 @@ code.
 Summarize the state and **stop**. The **human** merges. The agent never self-merges — merge authority
 stays with the human.
 
-The summary must state: green on the PR head; **no open Blockers and no open qualifying Should-fix**;
-every remaining finding recorded with its classification; **every disputed classification listed with
-both positions**; and any reduced panel that was authorised. The human rules on the disputes as part
-of deciding to merge — accept the downgrade and merge, or reject it, which sends the PR back into the
-closing round with that finding reclassified as qualifying.
+The summary must state: green on the PR head; each Blocker and qualifying Should-fix either fixed or,
+when the round cap stopped the loop, **listed as an open item**; every remaining finding recorded with
+its classification; **every disputed classification listed with both positions**; and any reduced
+panel that was authorised. The human rules on the open items and the disputes as part of deciding to
+merge — merge with them recorded, ask for one more round on a fix, or send them to a follow-up change.
 
 This is still **two** gates, not three: a dispute does not create a new stopping point, it changes
 what Gate 2 receives.
