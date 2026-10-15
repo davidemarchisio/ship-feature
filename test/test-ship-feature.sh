@@ -506,10 +506,14 @@ check "install.sh links the skill for Cursor" \
 # Antigravity and Junie get a link where they are installed, and nothing where they are not: the
 # installer must not create config for a tool nobody uses.
 FAKEHOME5="$WORK/home5"
-mkdir -p "$FAKEHOME5/.gemini/antigravity-cli" "$FAKEHOME5/.junie"
+mkdir -p "$FAKEHOME5/.gemini/config" "$FAKEHOME5/.gemini/antigravity-cli" "$FAKEHOME5/.junie"
 (cd "$HERE/.." && HOME="$FAKEHOME5" bash install.sh >/dev/null 2>&1)
 check "install.sh links the skill for Antigravity and Junie when they are installed" \
-  "$(for _h in .gemini/antigravity-cli .junie; do [ -f "$FAKEHOME5/$_h/skills/ship-feature/SKILL.md" ] && printf y || printf n; done)" yy
+  "$(for _h in .gemini/config .junie; do [ -f "$FAKEHOME5/$_h/skills/ship-feature/SKILL.md" ] && printf y || printf n; done)" yy
+# Antigravity keeps its state in ~/.gemini/antigravity-cli, but does not read skills there
+# (measured with `agy -p`); the link that went there loaded nothing.
+check "install.sh puts no skill in ~/.gemini/antigravity-cli, which Antigravity does not read" \
+  "$([ -e "$FAKEHOME5/.gemini/antigravity-cli/skills" ] && echo linked || echo none)" none
 check "install.sh creates no skill home for a harness that is not installed" \
   "$({ [ -e "$FAKEHOME/.junie" ] || [ -e "$FAKEHOME/.gemini" ]; } && echo created || echo none)" none
 # Migration from the old layout, WITHOUT a backup: a backup would sit in the skills directory, and
@@ -4448,7 +4452,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=499
+EXPECTED=500
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

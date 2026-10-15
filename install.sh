@@ -129,14 +129,16 @@ if [ -d "$_old_skill" ] && [ ! -L "$_old_skill" ] && [ -L "$_old_skill/SKILL.md"
 fi
 link "$REPO/adapters/skill" "$AGENTS_SKILLS/ship-feature"
 # ~/.agents/skills is read by Codex, Gemini CLI, OpenCode, Pi, Qwen and Grok. Claude, Cursor,
-# Antigravity and Junie read only their own directory (Antigravity measured with `agy -p`; Cursor
-# and Junie are where their own installers put skills), so they get a link to the same place.
+# Antigravity and Junie read only their own directory (Cursor and Junie are where their own
+# installers put skills), so they get a link to the same place. Antigravity's is ~/.gemini/config,
+# its global root: measured with `agy -p`, a skill there loads, a linked directory too, and a skill
+# in ~/.gemini/antigravity-cli/skills does not.
 # Cursor always gets it, as it always gets the Cursor rule (step 4). Antigravity and Junie get it
 # only when their home directory exists: the installer does not create config for a tool you do
 # not use.
 link "$AGENTS_SKILLS/ship-feature" "$HOME/.claude/skills/ship-feature"
 link "$AGENTS_SKILLS/ship-feature" "$HOME/.cursor/skills/ship-feature"
-SKILL_HOMES=(.gemini/antigravity-cli .junie)
+SKILL_HOMES=(.gemini/config .junie)
 for _h in "${SKILL_HOMES[@]}"; do
   [ -d "$HOME/$_h" ] || continue
   if mkdir -p "$HOME/$_h/skills"; then link "$AGENTS_SKILLS/ship-feature" "$HOME/$_h/skills/ship-feature"; else
