@@ -78,11 +78,12 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 - **Codex never loaded the ship-feature skill.** `install.sh` made `~/.agents/skills/ship-feature` a
   real directory holding only a `SKILL.md` symlink, and Codex skips a `SKILL.md` that is a symlink to a
-  file (measured with `codex exec`; every other harness loaded it). The skill directory is now the
-  link. The installer removes the old layout without a backup, because a backup in the skills
-  directory loads as a second `ship-feature`. Cursor, Antigravity and Junie read only their own skills
-  directory, so they now get a link there: Cursor always, as it always gets the Cursor rule;
-  Antigravity and Junie only when the tool is installed.
+  file (measured with `codex exec`; every other harness that reads `~/.agents/skills` loaded it). The
+  skill directory is now the link. The installer removes the old layout without a backup, because a
+  backup in the skills directory loads as a second `ship-feature`. Cursor, Antigravity and Junie read
+  only their own skills directory, so they now get a link there: Cursor always, as it always gets the
+  Cursor rule; Antigravity (`~/.gemini/config/skills`, its global root, measured with `agy -p`) and
+  Junie only when the tool is installed.
 
 - **A reviewer that did not review could still count as a review.** `pr-review-relay` and
   `review-local` failed closed only on an EMPTY answer, so any text at all was that seat's verdict
