@@ -88,6 +88,18 @@ All notable changes to **ship-feature** are documented here. This project follow
   eight review rounds; `VERDICT: clean` also counts as an approval, and an echo of the
   `--verdict-file` rules does not count as a verdict.
 
+- **A `.git` directory that is not a repository could become "the repository being reviewed", and
+  the relay then refused to start.** `relay_worktree_root` accepted any existing `.git` and kept the
+  outermost match, so a directory that holds only `info/exclude` (Claude Code creates one at the top
+  of a projects directory, to keep `.claude/` out of every project's status) made a whole tree of
+  unrelated repositories look like one. Every `PATH` entry symlinked into that tree, such as a skill
+  `bin` under `~/.claude/skills/`, was then "inside the repository", and the `PATH` guard refused the
+  run. A `.git` directory must now contain a `HEAD` file. A `.git` that is not a directory (a linked
+  worktree, a submodule) is accepted as before, and a `.git` directory that cannot be searched still
+  counts as a repository, so the guard never turns itself off. The fix is in `lib-opencode.sh`, so
+  `review-local` and `pr-review-distill` get it too. Ported from the open pr-review-relay PR #39
+  (three review rounds, no Blockers at the end).
+
 ## [0.6.0] — 2026-09-25
 
 ### Changed
