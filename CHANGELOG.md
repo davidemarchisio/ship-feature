@@ -8,6 +8,18 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Added
 
+- **pr-review-relay is part of ship-feature now**, in `relay/`, imported as one commit from
+  pr-review-relay 9fc675d; the older history stays in
+  [hamen/pr-review-relay](https://github.com/hamen/pr-review-relay). `install.sh` links
+  `review-local`, `pr-review-relay`, `pr-review-fetch`, `pr-review-distill`,
+  `pr-review-collapse-comments`, `pr-review-consensus` and `wrap-collapsed-pr-comment.mjs` from
+  `relay/` into `~/.local/bin`, so one clone and one install give the whole workflow. `ship-feature
+  review` is the light lane's review step, a pass-through to `review-local` with the exact exit
+  code. `bin/ci` runs `relay/bin/ci` as a new last stage; `relay/` is syntax-checked but stays out
+  of shellcheck and shfmt until a commit of pure tool output brings it in. The relay's own pre-push
+  hook and its test suite go: ship-feature's hook guards the repository. The commands, flags, exit
+  codes and `~/.config/pr-review-relay/config` do not change.
+
 - **Two lanes; the light lane is the default.** A change that is not risky skips the plan, the plan
   review, the PR and the human merge: one review round by one reviewer on the branch diff
   (`review-local`), then `ship-feature land`. The careful lane (payments, consent, auth, migrations,

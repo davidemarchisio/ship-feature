@@ -8,9 +8,11 @@
 #   scripts/scan-generic.sh                 # scan all git-tracked files (minus fixtures + this scanner)
 set -uo pipefail
 
-# Real emails, but not RFC-2606 reserved example domains or noreply addresses (those are placeholders).
+# Real emails, but not RFC-2606 reserved example domains (subdomains too, as in pass@ghe.example.com)
+# or noreply addresses (those are placeholders). The example-domain rule is anchored at the end, so a
+# look-alike such as pass@ghe.example.com.evil.io is still flagged: each extracted address is one line.
 EMAIL_RE='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z][A-Za-z]+'
-EMAIL_ALLOW='@example\.(com|org|net|test)\b|@example\b|noreply@|@localhost'
+EMAIL_ALLOW='@([a-z0-9-]+\.)*example\.(com|org|net|test)$|@example\b|noreply@|@localhost'
 # Absolute home paths (a leaked developer machine path). No trailing slash required, so a bare
 # "/home/user" at end-of-line is still caught. Covers /home, /Users, and /root.
 HOME_RE='(/home/|/Users/|/root/)[A-Za-z0-9._-]+'

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # ship-feature — a small helper for the ship-feature workflow (see WORKFLOW.md).
 #
-# v1 commands:
+# Commands:
+#   ship-feature review [..]  Review the current branch's diff, no PR needed: a pass-through to
+#                            `review-local` (relay/), the light lane's review step. Same args, same
+#                            stdout, the exact exit code. Typical: --author claude --base origin/main
+#                            --reviewers codex.
 #   ship-feature preflight   Assert the working copy is set up for step 4 (worktree, feature
 #                            branch off origin/HEAD, excluded marker, ancestry, and a committed
 #                            .githooks/pre-push that git runs on push). Non-zero on failure.
-#   ship-feature relay [..]  Transparent pass-through to `pr-review-relay`: forwards all args, preserves
+#   ship-feature relay [..]  Transparent pass-through to `pr-review-relay` (relay/): forwards all args, preserves
 #                            stdout and the EXACT exit code, and prints (on stderr) a one-line reminder of
 #                            what each code means for the workflow.
 #   ship-feature plan-review [<file>] [--reviewers a,b,c] [--sequential]
@@ -558,10 +562,16 @@ cmd_preflight() {
   echo "✔ preflight passed."
 }
 
+# The light lane's review: review-local, unchanged. It ships in relay/ and install.sh puts it on PATH.
+cmd_review() {
+  command -v review-local >/dev/null 2>&1 || die "review-local not found on PATH: run ship-feature's install.sh, which links it from relay/."
+  review-local "$@"
+}
+
 cmd_relay() {
   local _a
   for _a in "$@"; do case "$_a" in --autonomous) die "--autonomous was removed with autonomous mode (2026-10-15). See WORKFLOW.md for the two lanes." ;; esac done
-  command -v pr-review-relay >/dev/null 2>&1 || die "pr-review-relay not found on PATH (it is a dependency: https://github.com/hamen/pr-review-relay)."
+  command -v pr-review-relay >/dev/null 2>&1 || die "pr-review-relay not found on PATH: run ship-feature's install.sh, which links it from relay/."
   load_config
   # If the caller omitted --reviewers and a quorum is configured, inject it (still fully overridable by
   # passing --reviewers yourself). stdout and the exact exit code are always preserved.
@@ -1762,6 +1772,7 @@ main() {
   local sub="${1:-help}"
   [ $# -gt 0 ] && shift
   case "$sub" in
+    review) cmd_review "$@" ;;
     preflight) cmd_preflight "$@" ;;
     relay) cmd_relay "$@" ;;
     plan-review) cmd_plan_review "$@" ;;

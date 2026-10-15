@@ -400,6 +400,18 @@ done
 (PATH="/usr/bin:/bin" bash "$CLI" relay >/dev/null 2>&1)
 check "relay fails clearly when pr-review-relay is absent" $? 1
 
+# --- review passthrough: review-local's args, stdout and exit code -----------
+for code in 0 3; do
+  printf '#!/usr/bin/env bash\necho "REVIEW-LOCAL ARGS: $*"\nexit %s\n' "$code" >"$BIN/review-local"
+  chmod +x "$BIN/review-local"
+  out=$(PATH="$BIN:$PATH" bash "$CLI" review --author claude --base origin/main --reviewers codex 2>/dev/null)
+  rc=$?
+  check "review passthrough: exit $code, stdout and every argument reach review-local" "$rc|$out" "$code|REVIEW-LOCAL ARGS: --author claude --base origin/main --reviewers codex"
+done
+rm -f "$BIN/review-local"
+out=$(PATH="/usr/bin:/bin" bash "$CLI" review 2>&1)
+check "review fails clearly when review-local is absent, and names install.sh" "$?|$(printf '%s' "$out" | grep -c 'install.sh')" "1|1"
+
 # --- privacy scan: planted term caught; clean tree passes --------------------
 SREPO="$WORK/scanrepo"
 git init -q "$SREPO"
@@ -438,6 +450,13 @@ fi
 # first plan is written — not be created by some later command that happens to
 # run first.
 check "install.sh creates the plans directory" "$([ -d "$FAKEHOME/.config/ship-feature/plans" ] && echo yes || echo no)" yes
+_rl_bad=""
+for _c in pr-review-relay review-local pr-review-fetch pr-review-distill pr-review-collapse-comments pr-review-consensus wrap-collapsed-pr-comment.mjs; do
+  [ "$(readlink "$FAKEHOME/.local/bin/$_c" 2>/dev/null)" = "$(cd "$HERE/.." && pwd)/relay/$_c" ] || _rl_bad="$_rl_bad $_c"
+done
+check "install.sh links every relay command to relay/" "${_rl_bad:-none}" none
+out="$(cd "$WORK" && HOME="$FAKEHOME" "$FAKEHOME/.local/bin/review-local" --help 2>&1)"
+check "the linked review-local runs (finds its libraries through the link)" "$?|$(printf '%s' "$out" | grep -q '^review-local' && echo help)" "0|help"
 # `stat -c` is GNU; macOS ships BSD stat and would return an empty string, so the
 # assertion below would compare "" against 700 and fail the required macOS job.
 # `ls -ld` is in POSIX and prints the same permission string on both.
@@ -547,6 +566,17 @@ check "generic scan passes a clean file" $? 0
 printf 'contact us at hello@example.com\n' >"$WORK/dummy.txt"
 bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy.txt" >/dev/null 2>&1
 check "generic scan ignores reserved example.com email" $? 0
+printf 'a URL with userinfo: https://user:pass@ghe.example.com/owner/repo\n' >"$WORK/dummy-sub.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy-sub.txt" >/dev/null 2>&1
+check "generic scan ignores a reserved subdomain of example.com" $? 0
+# The look-alikes are built at run time ('@' passed through %s), so the repo-wide scan of this
+# file does not flag them.
+printf 'pass%sghe.example.com.evil.io\n' @ >"$WORK/dummy-near.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy-near.txt" >/dev/null 2>&1
+check "generic scan flags a domain that only starts like a subdomain of example.com" $? 1
+printf 'real.person%snotexample.com\n' @ >"$WORK/dummy-near2.txt"
+bash "$HERE/../scripts/scan-generic.sh" "$WORK/dummy-near2.txt" >/dev/null 2>&1
+check "generic scan flags a domain that only ends in example.com" $? 1
 
 # --- cmd_relay injects SHIP_FEATURE_REVIEWERS from config (and honors explicit override) ------
 printf '#!/usr/bin/env bash\necho "ARGS: $*"\nexit 0\n' >"$BIN/pr-review-relay"
@@ -4211,7 +4241,7 @@ ci_files() {
   for f in .githooks/pre-push bin/ci bin/ship-feature install.sh scripts/scan-generic.sh scripts/scan-personal-data.sh test/test-ship-feature.sh; do
     case "$line" in *" ./$f "*) ;; *) miss="$miss missing:$f" ;; esac
   done
-  for f in README.md CHANGELOG.md LICENSE mise.toml test/fixtures/leaky.sample; do
+  for f in README.md CHANGELOG.md LICENSE mise.toml test/fixtures/leaky.sample relay/; do
     case "$line" in *"$f"*) miss="$miss extra:$f" ;; esac
   done
   echo "${miss:-ok}"
@@ -4258,15 +4288,20 @@ CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTU
 check "own bin/ci C7: a syntax error -> fails at the syntax stage and names the file; lint and format do not run" "$_ci_rc|$(ci_said 'bin/ci [syntax]: bash -n failed on ./scripts/bad.sh')|$(ci_work shellcheck)|$(ci_work shfmt)" "nonzero|said|0|0"
 
 _r="$(ci_repo stages "$(cat "$OWN/mise.toml")")"
+mkdir -p "$_r/relay/bin"
 printf '#!/usr/bin/env bash\necho scan >>"$CISTUB_LOG2"\nexit "${CISTUB_SCAN_RC:-0}"\n' >"$_r/scripts/scan-generic.sh"
 printf '#!/usr/bin/env bash\necho suite >>"$CISTUB_LOG2"\nexit "${CISTUB_SUITE_RC:-0}"\n' >"$_r/test/test-ship-feature.sh"
-ci_commit "$_r" scripts/scan-generic.sh test/test-ship-feature.sh
+printf '#!/usr/bin/env bash\necho relay >>"$CISTUB_LOG2"\nexit "${CISTUB_RELAY_RC:-0}"\n' >"$_r/relay/bin/ci"
+ci_commit "$_r" scripts/scan-generic.sh test/test-ship-feature.sh relay/bin/ci
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 ci_run "$_r/bin/ci"
-check "own bin/ci C8a: every stage passes -> exit 0, the leak scan runs, then the suite" "$_ci_rc|$(tr '\n' ' ' <"$CISTUB_LOG2")" "0|scan suite "
+check "own bin/ci C8a: every stage passes -> exit 0, the leak scan runs, then the suite, then the relay's checks" "$_ci_rc|$(tr '\n' ' ' <"$CISTUB_LOG2")" "0|scan suite relay "
+check "own bin/ci C8a: relay/ is syntax-checked but kept out of lint and format" "$(ci_said 'syntax (4 files)')|$(ci_said 'lint (3 files)')|$(ci_said 'format (3 files)')" "said|said|said"
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_SCAN_RC=1 ci_run "$_r/bin/ci"
 check "own bin/ci C8b: a leak-scan failure -> fails at that stage, the suite does not run" "$_ci_rc|$(ci_said 'bin/ci [leak scan]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan "
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_SUITE_RC=1 ci_run "$_r/bin/ci"
-check "own bin/ci C8c: a suite failure -> fails at the tests stage" "$_ci_rc|$(ci_said 'bin/ci [tests]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan suite "
+check "own bin/ci C8c: a suite failure -> fails at the tests stage, the relay's checks do not run" "$_ci_rc|$(ci_said 'bin/ci [tests]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan suite "
+CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_RELAY_RC=1 ci_run "$_r/bin/ci"
+check "own bin/ci C8d: a relay failure -> fails at the relay stage" "$_ci_rc|$(ci_said 'bin/ci [relay]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan suite relay "
 
 # --- autonomous mode is gone: its commands stop with a message, never run ------------------------
 # An agent with stale instructions must learn why, not get "unknown command" or a relay error.
@@ -4381,7 +4416,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=482
+EXPECTED=492
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

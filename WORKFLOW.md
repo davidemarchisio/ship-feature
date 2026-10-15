@@ -27,8 +27,8 @@ Use it for every change that is not on the careful-lane list.
    paths. The repository's pre-push hook runs the tests, a linter and a formatter check.
 2. **Implement**, with tests at the level you touched. Commit.
 3. **Review once**, with one reviewer, on the branch diff — no PR needed:
-   `review-local --author <self> --base origin/<default> --reviewers <one seat>`
-   (`review-local` ships with `pr-review-relay`).
+   `ship-feature review --author <self> --base origin/<default> --reviewers <one seat>`
+   (a pass-through to `review-local`, which ships in `relay/`).
 4. **Fix only what breaks the change for a real user**, loses money, or leaks data. Record every other
    finding in the merge message (`-m "Not fixed: …"`) and move on. No second round, unless the fix was
    large.

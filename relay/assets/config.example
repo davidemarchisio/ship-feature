@@ -1,0 +1,66 @@
+# pr-review-relay — who reviews, and with which model.
+#
+# This is the ONE place that answers those two questions. Copy it to
+# ~/.config/pr-review-relay/config and edit; every tool in this repo reads it, and so does
+# ship-feature. Before it existed the answer lived in five places, and a seat that was dropped
+# from the panel kept reviewing for weeks because callers that omit --reviewers got the default
+# assigned in the script instead of the configured one.
+#
+# Precedence, strongest first:
+#   1. the command-line flag     (--reviewers)
+#   2. the environment variable  (CLAUDE_REVIEW_MODEL, PR_RELAY_AGENT_TIMEOUT, ...)
+#   3. this file
+#   4. the default in the script — the last resort, for a machine with no config
+#
+# An EMPTY value means "not configured" and falls through to the next layer. It does NOT mean
+# "disable this".
+#
+# The file is READ, never sourced: no command substitution, no shell. Unknown keys and malformed
+# lines are reported on stderr rather than ignored.
+
+# Who sits on the panel. Every seat named here must also have a MODEL_ key below, or it silently
+# falls back to whatever the script defaults to — which is exactly how a dropped seat comes back.
+REVIEWERS=claude,codex,grok,opencode
+
+# The plan-review panel (ship-feature plan-review). `grok` is the same seat as in REVIEWERS, pinned
+# by the same MODEL_grok / EFFORT_grok. `glm` is plan-review's opencode runner pinned read-only
+# (MODEL_glm). The old names grok45high and kimi3 were renamed in ship-feature PR #29 and #28.
+PLAN_REVIEWERS=codex,grok,glm
+
+# Seconds before a reviewer is considered fallen. In parallel the total is the slowest seat, not
+# the sum, so this can be generous without costing wall-clock — and reasoning models at high effort
+# routinely need more than five minutes on a substantial diff or plan.
+#
+# This is the ONE place to set it: ship-feature's plan-review reads this same file, so the two tools
+# cannot end up on different budgets. Matches the built-in default; lower it if you have fast
+# inference and would rather not wait.
+AGENT_TIMEOUT=500
+
+# One key per seat. The key follows the SEAT name you pass to --reviewers, not the environment
+# variable it maps to — nobody should need to know that opencode's variable is called
+# PR_RELAY_OPENCODE_MODEL, or antigravity's AGY_REVIEW_MODEL. MODEL_agy is accepted as an old
+# alias for MODEL_antigravity. A suffix that names no seat is stored but reported, so a typo
+# does not pass for a setting that quietly had no effect.
+MODEL_claude=opus
+MODEL_claude_fallback=sonnet
+MODEL_codex=gpt-5.6-sol
+MODEL_grok=grok-4.6
+MODEL_opencode=openrouter/z-ai/glm-5.2
+MODEL_cursor=composer-2.5
+MODEL_antigravity=Gemini 3.1 Pro (High)
+
+# The two pi seats (opt-in: add pi_glm / pi_grok to REVIEWERS). One pi binary, so one pair of keys
+# per seat. The model is a pi provider/model id, as `pi --list-models` prints it.
+#MODEL_pi_glm=zai/glm-5.3
+#MODEL_pi_grok=xai/grok-4.7
+
+# Reasoning effort, where the agent supports it.
+#EFFORT_claude=
+#EFFORT_codex=
+#EFFORT_grok=medium
+# The pi seats pass this to `pi --thinking`. Valid: off minimal low medium high xhigh max; any other
+# value fails the seat (pi itself would only warn and run at its own default). Pin `medium` only
+# with AGENT_TIMEOUT=900 or more: on a ~300 KB diff it took 731 s (GLM) and 792 s (Grok), against
+# 120 s and 352 s at `low`.
+#EFFORT_pi_glm=low
+#EFFORT_pi_grok=low
