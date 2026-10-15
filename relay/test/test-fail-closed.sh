@@ -1593,10 +1593,13 @@ git -C "$LREPO" worktree remove --force "$WORK/lc-wt-b"
 # assurance. This script runs under `set -o pipefail`, so a failing `git worktree list` would make
 # the helper non-zero without its explicit `return 0`, and a caller that ever adds `set -e` would
 # abort inside the code whose only job is explaining a fallback.
+# The sed script goes through a variable: Bash 3.2 brace-expands "{/,/^}" inside a quoted $(...)
+# within double quotes, which hands sed two broken scripts and defines no function at all.
 _rsn_rc=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   set -eo pipefail
   HEAD_SHA=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-  eval "$(sed -n "/^local_context_reason() {/,/^}/p;/^worktrees_on_pr_head() {/,/^}/p;/^best_worktree_on_pr_head() {/,/^}/p" "$1")"
+  _fns="/^local_context_reason() {/,/^}/p;/^worktrees_on_pr_head() {/,/^}/p;/^best_worktree_on_pr_head() {/,/^}/p"
+  eval "$(sed -n "$_fns" "$1")"
   git() { return 1; }        # every git call fails, pipeline included
   export -f git 2>/dev/null || true
   reason=$(local_context_reason)
@@ -1612,7 +1615,8 @@ else echo "  FAIL a failing git aborted local_context_reason under set -e"; FAIL
 _rsn_rc=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   set -e
   HEAD_SHA=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-  eval "$(sed -n "/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p" "$1")"
+  _fns="/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p"
+  eval "$(sed -n "$_fns" "$1")"
   reason=$(local_context_reason)
   echo "$reason" >/dev/null
   echo ok
@@ -1624,7 +1628,8 @@ else echo "  FAIL local_context_reason returned non-zero with no matching worktr
 # Outside a git work tree it says that, rather than guessing about SHAs.
 _rsn=$( cd "$WORK" && env PATH="$BIN:$PATH" bash -c '
   HEAD_SHA=deadbeef
-  eval "$(sed -n "/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p" "$1")"
+  _fns="/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p"
+  eval "$(sed -n "$_fns" "$1")"
   local_context_reason
 ' _ "$RELAY" 2>/dev/null )
 case "$_rsn" in
@@ -1635,7 +1640,8 @@ esac
 # With no PR head there is nothing to compare against, and the message must not print an empty SHA.
 _rsn=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   HEAD_SHA=
-  eval "$(sed -n "/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p" "$1")"
+  _fns="/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p"
+  eval "$(sed -n "$_fns" "$1")"
   local_context_reason
 ' _ "$RELAY" 2>/dev/null )
 case "$_rsn" in
