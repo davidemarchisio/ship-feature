@@ -3076,10 +3076,11 @@ env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter
 _blog=$(latest_log)
 grep -q "verdict exit=2 invalid LINK_DIFF_FALLBACK_MAX_BYTES" "$_blog" 2>/dev/null
 ok_if $? "a bad LINK_DIFF_FALLBACK_MAX_BYTES logs its verdict" "$(tail -1 "$_blog" 2>/dev/null)"
-# The remaining post-log exits are NOT covered: both mktemp -d failures and the round-state write
-# need a full or read-only temp filesystem to reach, and faking that would mean a test-only hook in
-# production code. They carry their verdict line; this note is the honest record that nothing
-# asserts it. Two more that never will: RUN_BASE's own mktemp failure cannot log (relay_log does not
+# The remaining post-log exits are NOT covered: the STATUS_DIR mktemp -d failure and the round-state
+# write need a full or read-only temp filesystem to reach, and faking that would mean a test-only
+# hook in production code. They carry their verdict line; this note is the honest record that
+# nothing asserts it. (The ATTACH_DIR mktemp -d failure is covered further down, by a mktemp stub
+# on PATH.) Two more that never will: RUN_BASE's own mktemp failure cannot log (relay_log does not
 # exist until it succeeds), and `invalid --max-rounds` is validated deliberately BEFORE the log is
 # opened — a usage error should leave no file behind at all.
 
@@ -3181,7 +3182,71 @@ else
   echo "  skip [-] SIGKILL test: no job control (set -m) available in this shell"
   SKIP=$((SKIP+1))
 fi
-unset _s _r _m _rc _log _side _sz _n _bad _key _o _f _before _old _msg _i _sha _w _kid _pgid rcs rc1 rc2 rc3
+
+# --- a SIGTERM still kills the relay, and the handler still cleans up -----------------------------
+# Whatever killed the relay must see it die of the signal (status 143), not "finish"; a TERM trap
+# that exits would break that. The EXIT handler must still remove both temp dirs (grok is in the
+# panel, so ATTACH_DIR exists). An `exit` inside the EXIT handler does NOT trip the status check:
+# measured on bash 5.2, a TERM'd shell dies of the signal whatever its EXIT trap does. TERM the
+# relay alone while the stub sits in `gh pr diff`, after both dirs exist, and WAIT for it so the
+# handler has finished; the group KILL after that only reaps the stub left hanging.
+if ( set -m ) 2>/dev/null; then
+  s_reset; rm -f "$WORK/hangmark" "$WORK/kstatus" "$WORK/kbefore"; rm -rf "$WORK/ktmp"; mkdir -p "$WORK/ktmp"
+  ( set -m
+    env PATH="$BIN:$PATH" TMPDIR="$WORK/ktmp" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
+      GH_FIXED_SHA="$SHA_A" GH_DIFF_HANG=1 GH_HANG_MARK="$WORK/hangmark" \
+      bash "$RELAY" --pr 1 --author antigravity --reviewers claude,grok >/dev/null 2>&1 &
+    _kid=$!
+    _pgid=$(ps -o pgid= -p "$_kid" 2>/dev/null | tr -d ' ')
+    _w=0
+    while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do sleep 0.1; _w=$((_w+1)); done
+    # What the handler has to remove, counted before the TERM: an empty TMPDIR afterwards proves
+    # nothing unless both dirs were there to begin with.
+    ls -A "$WORK/ktmp" 2>/dev/null | wc -l | tr -d ' ' > "$WORK/kbefore"
+    kill -TERM "$_kid" 2>/dev/null
+    wait "$_kid" 2>/dev/null; echo "$?" > "$WORK/kstatus"
+    kill -9 -"$_pgid" 2>/dev/null || kill -9 "$_kid" 2>/dev/null
+    wait "$_kid" 2>/dev/null || true
+  )
+  [ -e "$WORK/hangmark" ]; ok_if $? "SIGTERM: the relay was inside \`gh pr diff\` when it was killed" "-"
+  [ "$(cat "$WORK/kstatus" 2>/dev/null)" = 143 ]
+  ok_if $? "SIGTERM: the relay still dies of the signal (status 143)" "status=$(cat "$WORK/kstatus" 2>/dev/null)"
+  [ "$(cat "$WORK/kbefore" 2>/dev/null)" = 2 ]
+  ok_if $? "SIGTERM: STATUS_DIR and ATTACH_DIR both existed when the TERM was sent" "entries=$(cat "$WORK/kbefore" 2>/dev/null)"
+  [ -z "$(ls -A "$WORK/ktmp" 2>/dev/null)" ]
+  ok_if $? "SIGTERM: the handler removed STATUS_DIR and ATTACH_DIR" "left: $(ls -A "$WORK/ktmp" 2>/dev/null | tr '\n' ' ')"
+else
+  echo "  skip [-] SIGTERM test: no job control (set -m) available in this shell"
+  SKIP=$((SKIP+4))
+fi
+
+# --- the cleanup trap is armed as soon as STATUS_DIR exists ---------------------------------------
+# A kill between creating STATUS_DIR and setting the trap cannot be timed, so this forces the one
+# failure inside that gap that can be forced: the next `mktemp -d`, ATTACH_DIR (grok again). That
+# path has no `rm` of its own, so if the trap were set any later, STATUS_DIR would stay in TMPDIR.
+# The stub fails the 2nd `mktemp -d` and hands every other call to the real mktemp.
+_real_mktemp="$(command -v mktemp)"
+_mb="$WORK/mktemp-bin"; mkdir -p "$_mb"
+cat > "$_mb/mktemp" <<MK
+#!/usr/bin/env bash
+case " \$* " in *" -d "*)
+  n=\$(( \$(cat "$WORK/mk.count" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$WORK/mk.count"
+  [ "\$n" = 2 ] && exit 1;;
+esac
+exec "$_real_mktemp" "\$@"
+MK
+chmod +x "$_mb/mktemp"
+s_reset; rm -rf "$WORK/ttmp"; mkdir -p "$WORK/ttmp"; rm -f "$WORK/mk.count"
+env PATH="$_mb:$BIN:$PATH" TMPDIR="$WORK/ttmp" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
+  GH_FIXED_SHA="$SHA_A" bash "$RELAY" --pr 1 --author antigravity --reviewers claude,grok >/dev/null 2>"$WORK/mk.err"
+_mrc=$?
+[ "$_mrc" = 1 ] && grep -q 'cannot create temp dir for attachments' "$WORK/mk.err" && [ "$(cat "$WORK/mk.count" 2>/dev/null)" = 2 ]
+ok_if $? "the mktemp -d right after STATUS_DIR (ATTACH_DIR) fails → exit 1" "rc=$_mrc count=$(cat "$WORK/mk.count" 2>/dev/null)"
+[ -z "$(ls -A "$WORK/ttmp" 2>/dev/null)" ]
+ok_if $? "the trap, set right after STATUS_DIR, removed it: nothing left in TMPDIR" "left: $(ls -A "$WORK/ttmp" 2>/dev/null | tr '\n' ' ')"
+grep -q "verdict exit=1 cannot create attachment temp dir" "$(latest_log)" 2>/dev/null
+ok_if $? "that exit logs its verdict" "$(tail -1 "$(latest_log)" 2>/dev/null)"
+unset _s _r _m _rc _log _side _sz _n _bad _key _o _f _before _old _msg _i _sha _w _kid _pgid rcs rc1 rc2 rc3 _mrc _mb _real_mktemp
 
 # --- hermeticity, asserted rather than assumed --------------------------------
 # The header unsets the inherited git environment. If someone deletes those lines, everything here
