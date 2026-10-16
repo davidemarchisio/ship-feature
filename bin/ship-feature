@@ -1461,6 +1461,26 @@ have found something serious, write it down before you go looking for the next t
       echo fail >"$STATUS_DIR/$key"
       return 0
     fi
+    # The relay's gate (relay/lib-panel.sh), as in review-local: an answer must name a severity or
+    # say it looks good, and must not end by announcing more reading. Before this, any text at all
+    # was a seat's verdict, so "Reading the plan before reviewing." made a clean round. A rejected
+    # answer never goes out under the review banner, where the reader would take it for a review: it
+    # is shown, labelled, with the failures, and the round exits 3.
+    review_looks_like_a_review "$out"
+    local _nr=$?
+    if [ "$_nr" -ne 0 ]; then
+      {
+        if [ "$_nr" = 2 ]; then
+          printf '  ! %s: not a review — it names a verdict and then says it is still reading\n' "$name"
+        else
+          printf '  ! %s: not a review — it names no severity (Blocker/Should-fix/Nit) and does not say it looks good\n' "$name"
+        fi
+        printf '    %s returned:\n' "$name"
+        printf '%s\n' "$out" | sed 's/^/    │ /'
+      } >"$STATUS_DIR/diag_$key"
+      echo fail >"$STATUS_DIR/$key"
+      return 0
+    fi
     {
       printf '\n========== %s (plan review) ==========\n' "$Name"
       [ -n "$degraded_note" ] && printf '%s\n\n' "$degraded_note"
