@@ -4,7 +4,14 @@ All notable changes to **pr-review-relay** are documented here. This project fol
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+> **This file is closed.** It is the history of pr-review-relay up to 2026-10-15, when the relay
+> moved into ship-feature's `relay/` directory. Relay changes since then are in ship-feature's
+> [CHANGELOG](../CHANGELOG.md); do not add entries here.
+
+## [Not released in pr-review-relay] — on its `main` (9fc675d) at the move, 2026-10-15
+
+These changes never had a pr-review-relay release. They ship with ship-feature from its first release
+that contains `relay/`.
 
 ### Added
 
