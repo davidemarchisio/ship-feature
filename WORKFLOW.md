@@ -193,7 +193,7 @@ a file the codex seat reads goes to OpenAI — `--sandbox read-only` restricts w
 is printed to your terminal only; nothing posts it. The one seat that never reads the checkout is
 `antigravity`/`gemini`, which is fully isolated and sees the plan text only, so review a plan for a
 repository you do not trust with that seat, or not at all.
-Exit `0` = every reviewer responded, `3` = a reviewer failed/timed out/returned empty/answered
+Exit `0` = every reviewer returned a review, `3` = a reviewer failed/timed out/returned empty/answered
 without a verdict (re-run — see the two-consecutive-failure rule below), `1` = usage error. The
 single-reviewer default still works too:
 `cat ~/.config/ship-feature/plans/<repo>-<slug>.md | codex exec --sandbox read-only`.

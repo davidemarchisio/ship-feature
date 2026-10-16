@@ -2368,12 +2368,18 @@ gate_case() { # <label> <body> <expected label text>
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\nexit 0\n' "$2" >"$PBIN/claude"
   chmod +x "$PBIN/claude"
   out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude 2>&1)
-  check "$1" "$?|$(printf '%s' "$out" | grep -c "$3")|$(printf '%s' "$out" | grep -c 'Claude (plan review)')" "3|1|0"
+  check "$1" "$?|$(printf '%s' "$out" | grep -c "$3")|$(printf '%s' "$out" | grep -cF "│ $2")|$(printf '%s' "$out" | grep -c 'Claude (plan review)')" "3|1|1|0"
 }
 gate_case "plan-review: an answer with no verdict fails the round (3)" \
   "Reading the plan before reviewing." "names no severity"
 gate_case "plan-review: a verdict followed by more reading fails the round (3)" \
   "Blocker: none in the first half. Let me read the rest before concluding." "still reading"
+# The accept side, not only "Looks good.": a review that names a severity passes, and reading
+# mentioned EARLIER in the answer is fine while the answer ends on a finding.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\nexit 0\n' $'I read the plan twice before I wrote this.\nShould-fix: the rollback step has no owner.' >"$PBIN/claude"
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude 2>&1)
+check "plan-review: a review that names a severity passes the gate (0), under the banner" \
+  "$?|$(printf '%s' "$out" | grep -c 'Claude (plan review)')|$(printf '%s' "$out" | grep -c 'rollback step has no owner')" "0|1|1"
 make_reviewer claude 0 claude # restore
 printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude >/dev/null 2>&1
 check "plan-review: the restored claude stub, which says it looks good, passes the gate (0)" $? 0
@@ -4532,7 +4538,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=509
+EXPECTED=510
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
