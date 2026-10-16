@@ -25,6 +25,15 @@ All notable changes to **ship-feature** are documented here. This project follow
   sends the same prompts as before. Its two exit-handler checks (a signal still kills the relay, the
   trap is armed before the attachments directory) move to `test-fail-closed.sh`.
 
+### Fixed
+
+- **A plan-review seat that did not review could still count as a review.** `plan-review` failed a
+  seat only on an empty answer, so "Reading the plan before reviewing." made a clean round. It now
+  runs the relay's gate (`review_looks_like_a_review` in `relay/lib-panel.sh`), as `pr-review-relay`
+  and `review-local` do: an answer must name a severity (Blocker / Should-fix / Nit) or say that it
+  looks good, and its last sentence must not announce more reading. A rejected answer is shown with
+  a label, never under the review banner, and the round exits `3`. Fizzy #1412.
+
 ## [0.7.0] — 2026-10-16
 
 ### Added
