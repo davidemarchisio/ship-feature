@@ -1318,15 +1318,45 @@ printf '%s' "$sh8" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9"
   }
 # HOME unset must not abort the command under `set -u`. A caller that passes both paths
 # explicitly has every right not to have one.
-env -u HOME PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/shared1" SHIP_FEATURE_PLANS_DIR="$WORK/plans" \
-  bash "$CLI" plan-review --reviewers glm </dev/null >/dev/null 2>&1
-[ $? -ne 2 ] && {
+nh0=$(printf 'plan\n' | env -u HOME PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/shared1" SHIP_FEATURE_PLANS_DIR="$WORK/plans" \
+  bash "$CLI" plan-review --reviewers glm 2>&1)
+# An unbound variable exits 1 in a script, like an ordinary refusal, so the exit code cannot tell
+# them apart: read the error itself. And send a plan: an empty one is refused before any seat code
+# runs, which left this test unable to fail.
+! printf '%s' "$nh0" | grep -q 'unbound variable' && printf '%s' "$nh0" | grep -q 'REVIEW-glm' && {
   echo "  ok   [-] an unset HOME does not abort the run"
   PASS=$((PASS + 1))
 } || {
   echo "  FAIL unset HOME aborted (unbound variable)"
   FAIL=$((FAIL + 1))
 }
+# The same with NO PR_RELAY_CONFIG: the shared file's default path is built from HOME, so this is
+# the path that needs the guard in relay/lib-panel.sh. An unbound variable exits 1 in a script, the
+# same code as an ordinary failure, so read the error itself and require the seat to have run.
+nh=$(printf 'plan\n' | env -u HOME -u PR_RELAY_CONFIG PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null SHIP_FEATURE_PLANS_DIR="$WORK/plans" \
+  bash "$CLI" plan-review --reviewers glm 2>&1)
+nhrc=$?
+if [ "$nhrc" = 0 ] && ! printf '%s' "$nh" | grep -q 'unbound variable' && printf '%s' "$nh" | grep -q 'REVIEW-glm'; then
+  echo "  ok   [-] an unset HOME with no PR_RELAY_CONFIG still runs the seat"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL unset HOME with no PR_RELAY_CONFIG (rc=$nhrc): $(printf '%s' "$nh" | tail -n 3)"
+  FAIL=$((FAIL + 1))
+fi
+# An inline `# ...` is part of the value in the shared file. The relay's parser has always read it
+# that way, and ship-feature reads the file with that parser now; stripping it here again would give
+# one line two meanings, one per tool.
+printf 'MODEL_glm=openrouter/z-ai/glm-9.9 # pinned\n' >"$CFGDIR/shared-inline"
+shi=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-inline" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+printf '%s' "$shi" | grep 'REVIEW-glm' | grep -qF -- "-m openrouter/z-ai/glm-9.9 # pinned" &&
+  {
+    echo "  ok   [-] an inline comment in the shared file stays part of the value"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the shared value lost its inline '# ...': $(printf '%s' "$shi" | grep 'REVIEW-glm')"
+    FAIL=$((FAIL + 1))
+  }
 # WHO sits on the panel comes from the shared file too. It was duplicated in both configs —
 # identical today, free to drift tomorrow, and a panel that differs between the plan gate and the
 # PR gate is something you discover from a verdict.
@@ -4538,7 +4568,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=510
+EXPECTED=512
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
