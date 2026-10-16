@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2319 # each check passes on the $? of the test line before it, on purpose
 # Fail-closed verdict tests for pr-review-relay.
 #
 # Stubs `gh` and the agent CLIs on PATH, runs the relay against a fake PR, and
@@ -18,7 +19,10 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RELAY="$HERE/../pr-review-relay"
-WORK="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 1; }
+WORK="$(mktemp -d)" || {
+  echo "mktemp failed" >&2
+  exit 1
+}
 # The developer's own ~/.config/pr-review-relay/config must not reach these fixtures. It sets the
 # real panel and real models, so a machine with one configured would fail assertions that pin a
 # model or a reviewer list — and the pre-push gate would go red for a reason that has nothing to do
@@ -26,8 +30,12 @@ WORK="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 1; }
 # WANT a config set PR_RELAY_CONFIG themselves, per invocation.
 export PR_RELAY_CONFIG="$WORK/no-such-panel-config"
 
-[ -n "$WORK" ] && [ -d "$WORK" ] || { echo "no temp dir" >&2; exit 1; }
-BIN="$WORK/bin"; mkdir -p "$BIN"
+[ -n "$WORK" ] && [ -d "$WORK" ] || {
+  echo "no temp dir" >&2
+  exit 1
+}
+BIN="$WORK/bin"
+mkdir -p "$BIN"
 trap 'rm -rf "$WORK"' EXIT
 
 # shellcheck source=lib-hermetic.sh
@@ -36,7 +44,7 @@ relay_require_git_2_31
 relay_isolate_git "$WORK"
 
 # --- stub: gh ----------------------------------------------------------------
-cat > "$BIN/gh" <<'GH'
+cat >"$BIN/gh" <<'GH'
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr view"|"pr diff")
@@ -109,7 +117,7 @@ chmod +x "$BIN/gh"
 
 # --- stub: agents (claude / codex / cursor-agent / agy / opencode / qwen / grok) ----
 make_agent() {
-  cat > "$BIN/$1" <<AG
+  cat >"$BIN/$1" <<AG
 #!/usr/bin/env bash
 self="\$(basename "\$0")"
 case "\$self" in cursor-agent) key=cursor;; agy) key=antigravity;; *) key="\$self";; esac
@@ -166,56 +174,73 @@ AG
 for a in claude codex cursor-agent agy opencode qwen grok; do make_agent "$a"; done
 
 # --- test harness ------------------------------------------------------------
-PASS=0; FAIL=0; SKIP=0
+PASS=0
+FAIL=0
+SKIP=0
 # Assertions use `grep -q ... <<< "$var"`, never `printf ... | grep -q`. Under
 # `set -o pipefail`, grep -q exits as soon as it matches, printf takes SIGPIPE, and
 # the pipeline reports 141 — so a SUCCESSFUL match reads as a failed assertion. It
 # passes locally whenever the payload fits the pipe buffer before grep leaves,
 # which is why this only ever went red on CI.
 run() { # run <expected_exit> <desc> -- <extra env assignments...>
-  local expect="$1" desc="$2"; shift 2
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"
+  local expect="$1" desc="$2"
+  shift 2
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
   rm -f "$WORK/sha_counter"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" "$@" \
     bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
   local rc=$?
-  if [ "$rc" = "$expect" ]; then echo "  ok   [$rc] $desc"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want $expect] $desc"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = "$expect" ]; then
+    echo "  ok   [$rc] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want $expect] $desc"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
 echo "pr-review-relay fail-closed tests:"
 run 0 "both reviewers post → clean pass"
-run 3 "one reviewer returns empty → not clean"          FAIL_EMPTY=codex
+run 3 "one reviewer returns empty → not clean" FAIL_EMPTY=codex
 run 3 "one reviewer exits non-zero (truncated) → not clean" FAIL_RC=codex
-run 3 "SHA drift during round → stale, fail"            GH_SHA_DRIFT=1
+run 3 "SHA drift during round → stale, fail" GH_SHA_DRIFT=1
 run 3 "SHA unreadable at start → cannot prove stability" GH_SHA_FAIL=start
-run 3 "SHA unreadable at end → cannot prove stability"   GH_SHA_FAIL=end
-run 3 "comment posting fails → not clean"               GH_POST_FAIL=1
-run 3 "whitespace-only review → not a valid review"     WS_ONLY=codex
-run 3 "reviewer times out → not clean"                  SLEEP_KEYS=codex PR_RELAY_AGENT_TIMEOUT=1
+run 3 "SHA unreadable at end → cannot prove stability" GH_SHA_FAIL=end
+run 3 "comment posting fails → not clean" GH_POST_FAIL=1
+run 3 "whitespace-only review → not a valid review" WS_ONLY=codex
+run 3 "reviewer times out → not clean" SLEEP_KEYS=codex PR_RELAY_AGENT_TIMEOUT=1
 
 # --- the bench: an agent that is out of quota ---------------------------------
 # Rationale in the "The bench" block of pr-review-relay. The short version: a quota-exhausted agent
 # fails every round for days, which makes every verdict worthless, so it is dropped for as long as
 # the agent itself said it would be out.
-run 0 "quota on stderr → benched, round still clean"    QUOTA_ERR=codex
+run 0 "quota on stderr → benched, round still clean" QUOTA_ERR=codex
 run 0 "quota on stdout → benched, not posted as review" QUOTA_OUT=codex
 run 3 "a timeout is NOT a quota → still fails the round" SLEEP_KEYS=codex PR_RELAY_AGENT_TIMEOUT=1
 
 # bespoke runs: <expected> <desc> -- <args...>  (custom --reviewers / --dry-run)
 runx() {
-  local expect="$1" desc="$2"; shift 2
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+  local expect="$1" desc="$2"
+  shift 2
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
     bash "$RELAY" --pr 1 --author antigravity "$@" >/dev/null 2>&1
   local rc=$?
-  if [ "$rc" = "$expect" ]; then echo "  ok   [$rc] $desc"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want $expect] $desc"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = "$expect" ]; then
+    echo "  ok   [$rc] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want $expect] $desc"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
-runx 3 "explicitly requested unknown reviewer → fail"   --reviewers claude,bogus --parallel
+runx 3 "explicitly requested unknown reviewer → fail" --reviewers claude,bogus --parallel
 runx 3 "malicious reviewer name is contained, still fails" --reviewers 'claude,../../PWNED' --parallel
-runx 0 "duplicate reviewer is deduped → clean pass"     --reviewers claude,claude --parallel
+runx 0 "duplicate reviewer is deduped → clean pass" --reviewers claude,claude --parallel
 
 # --- the fork trap ------------------------------------------------------------
 # `gh repo view` answers with the PARENT inside a fork, and unlike `gh pr view` it
@@ -225,17 +250,21 @@ runx 0 "duplicate reviewer is deduped → clean pass"     --reviewers claude,cla
 # The repository now comes off the resolved pull request URL. The round key, and so
 # the run log line, is built from $REPO, which is what this reads.
 _fork_out=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://github.com/StellarElements/android-dac-snippets/pull/1" \
-      GH_REPO_VIEW="android/snippets" \
-      bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel 2>&1
+    GH_PR_URL="https://github.com/StellarElements/android-dac-snippets/pull/1" \
+    GH_REPO_VIEW="android/snippets" \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel 2>&1
 )
-if grep -q 'StellarElements_android-dac-snippets#1' <<< "$_fork_out" &&
-   ! grep -q 'android_snippets#1' <<< "$_fork_out"; then
-  echo "  ok   [-] the pull request's own repository wins over the fork's parent"; PASS=$((PASS+1))
+if grep -q 'StellarElements_android-dac-snippets#1' <<<"$_fork_out" &&
+  ! grep -q 'android_snippets#1' <<<"$_fork_out"; then
+  echo "  ok   [-] the pull request's own repository wins over the fork's parent"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL the parent repository won: a --post round would write on it"; FAIL=$((FAIL+1))
+  echo "  FAIL the parent repository won: a --post round would write on it"
+  FAIL=$((FAIL + 1))
 fi
 
 # Where a POST actually goes. The round key above is a banner; this reads the
@@ -244,108 +273,134 @@ fi
 # passed the deletes landed on our repository and the comment on theirs — with
 # every line on screen naming ours.
 _fork_post=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/fork_posted.log"; : > "$WORK/fork_api.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/fork_posted.log"
+  : >"$WORK/fork_api.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://github.com/StellarElements/android-dac-snippets/pull/1" \
-      GH_REPO_VIEW="android/snippets" \
-      GH_POST_LOG="$WORK/fork_posted.log" GH_API_LOG="$WORK/fork_api.log" \
-      bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://github.com/StellarElements/android-dac-snippets/pull/1" \
+    GH_REPO_VIEW="android/snippets" \
+    GH_POST_LOG="$WORK/fork_posted.log" GH_API_LOG="$WORK/fork_api.log" \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
   cat "$WORK/fork_posted.log" "$WORK/fork_api.log" 2>/dev/null
 )
-_writes=$(grep -c . <<< "$_fork_post")
-_ours=$(grep -c 'StellarElements/android-dac-snippets' <<< "$_fork_post")
+_writes=$(grep -c . <<<"$_fork_post")
+_ours=$(grep -c 'StellarElements/android-dac-snippets' <<<"$_fork_post")
 if [ "$_writes" -gt 0 ] && [ "$_writes" = "$_ours" ] &&
-   grep -q -- '--repo StellarElements/android-dac-snippets' <<< "$_fork_post"; then
-  echo "  ok   [-] every write names the fork ($_writes of $_writes), none the parent"; PASS=$((PASS+1))
+  grep -q -- '--repo StellarElements/android-dac-snippets' <<<"$_fork_post"; then
+  echo "  ok   [-] every write names the fork ($_writes of $_writes), none the parent"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL only $_ours of $_writes writes named the fork"; FAIL=$((FAIL+1))
+  echo "  FAIL only $_ours of $_writes writes named the fork"
+  FAIL=$((FAIL + 1))
 fi
 
 # GitHub Enterprise: $REPO is owner/name with no host in it, so an api route built
 # from it goes wherever gh defaults — for us, a same-named repository on
 # github.com that we do not own. The host comes off the pull request URL now.
 _ent=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/ent_posted.log"; : > "$WORK/ent_api.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/ent_posted.log"
+  : >"$WORK/ent_api.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://ghe.example.com/owner/repo/pull/7" \
-      GH_POST_LOG="$WORK/ent_posted.log" GH_API_LOG="$WORK/ent_api.log" \
-      bash "$RELAY" --pr 7 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://ghe.example.com/owner/repo/pull/7" \
+    GH_POST_LOG="$WORK/ent_posted.log" GH_API_LOG="$WORK/ent_api.log" \
+    bash "$RELAY" --pr 7 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
   cat "$WORK/ent_posted.log" "$WORK/ent_api.log" 2>/dev/null
 )
-if grep -q 'host=ghe.example.com' <<< "$_ent" && ! grep -q 'host=default' <<< "$_ent"; then
-  echo "  ok   [-] writes go to the host the pull request is on, not gh's default"; PASS=$((PASS+1))
+if grep -q 'host=ghe.example.com' <<<"$_ent" && ! grep -q 'host=default' <<<"$_ent"; then
+  echo "  ok   [-] writes go to the host the pull request is on, not gh's default"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL a write went to the default host for an Enterprise pull request"; FAIL=$((FAIL+1))
+  echo "  FAIL a write went to the default host for an Enterprise pull request"
+  FAIL=$((FAIL + 1))
 fi
 
 # The host slice of a URL is not always a hostname. Credentials in front of it
 # and a port behind it both arrive here, and GH_HOST takes a hostname.
 _hosts=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/host_api.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/host_api.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://user:pass@ghe.example.com:8443/owner/repo/pull/7" \
-      GH_API_LOG="$WORK/host_api.log" \
-      bash "$RELAY" --pr 7 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://user:pass@ghe.example.com:8443/owner/repo/pull/7" \
+    GH_API_LOG="$WORK/host_api.log" \
+    bash "$RELAY" --pr 7 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
   cat "$WORK/host_api.log" 2>/dev/null
 )
-if grep -q 'host=ghe.example.com:8443' <<< "$_hosts" && ! grep -q '@' <<< "$_hosts"; then
-  echo "  ok   [-] credentials are stripped from the host and the port is kept"; PASS=$((PASS+1))
+if grep -q 'host=ghe.example.com:8443' <<<"$_hosts" && ! grep -q '@' <<<"$_hosts"; then
+  echo "  ok   [-] credentials are stripped from the host and the port is kept"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL GH_HOST was set to something that is not a hostname"; FAIL=$((FAIL+1))
+  echo "  FAIL GH_HOST was set to something that is not a hostname"
+  FAIL=$((FAIL + 1))
 fi
 
 # gh reads GH_HOST as an Enterprise host. Setting it to github.com can miss the
 # github.com login entirely, so the default host stays unset.
 _gh_default=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/dflt_api.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/dflt_api.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://github.com/owner/repo/pull/7" GH_API_LOG="$WORK/dflt_api.log" \
-      bash "$RELAY" --pr 7 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://github.com/owner/repo/pull/7" GH_API_LOG="$WORK/dflt_api.log" \
+    bash "$RELAY" --pr 7 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
   cat "$WORK/dflt_api.log" 2>/dev/null
 )
-if grep -q 'host=default' <<< "$_gh_default" && ! grep -q 'host=github.com' <<< "$_gh_default"; then
-  echo "  ok   [-] github.com is left as gh's default host, not pinned as an Enterprise one"; PASS=$((PASS+1))
+if grep -q 'host=default' <<<"$_gh_default" && ! grep -q 'host=github.com' <<<"$_gh_default"; then
+  echo "  ok   [-] github.com is left as gh's default host, not pinned as an Enterprise one"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL GH_HOST was pinned to github.com"; FAIL=$((FAIL+1))
+  echo "  FAIL GH_HOST was pinned to github.com"
+  FAIL=$((FAIL + 1))
 fi
 
 # A repository may be named "pull". `%%/pull/*` takes the longest suffix and ate
 # everything after the first one.
 _pullrepo=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/pull_api.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/pull_api.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://github.com/owner/pull/pull/34" GH_API_LOG="$WORK/pull_api.log" \
-      bash "$RELAY" --pr 34 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://github.com/owner/pull/pull/34" GH_API_LOG="$WORK/pull_api.log" \
+    bash "$RELAY" --pr 34 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
   cat "$WORK/pull_api.log" 2>/dev/null
 )
-if grep -q 'repos/owner/pull/issues/34/comments' <<< "$_pullrepo"; then
-  echo "  ok   [-] a repository named pull resolves to owner/pull, not owner"; PASS=$((PASS+1))
+if grep -q 'repos/owner/pull/issues/34/comments' <<<"$_pullrepo"; then
+  echo "  ok   [-] a repository named pull resolves to owner/pull, not owner"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL a repository named pull was mis-parsed"; FAIL=$((FAIL+1))
+  echo "  FAIL a repository named pull was mis-parsed"
+  FAIL=$((FAIL + 1))
 fi
 
 # `--pr` takes a URL as well as a number, and the number is pasted into API
 # routes. Left as a URL the delete pass builds `issues/https://.../comments`,
 # fails behind `|| true`, and every round adds another copy of the same review.
 _urlform=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/url_api.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/url_api.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://github.com/owner/repo/pull/34" GH_API_LOG="$WORK/url_api.log" \
-      bash "$RELAY" --pr https://github.com/owner/repo/pull/34 --author antigravity \
-      --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://github.com/owner/repo/pull/34" GH_API_LOG="$WORK/url_api.log" \
+    bash "$RELAY" --pr https://github.com/owner/repo/pull/34 --author antigravity \
+    --reviewers claude,codex --parallel >/dev/null 2>&1
   cat "$WORK/url_api.log" 2>/dev/null
 )
-if grep -q 'repos/owner/repo/issues/34/comments' <<< "$_urlform" &&
-   ! grep -q 'issues/http' <<< "$_urlform"; then
-  echo "  ok   [-] --pr <url> reaches the API as a number, so the delete pass works"; PASS=$((PASS+1))
+if grep -q 'repos/owner/repo/issues/34/comments' <<<"$_urlform" &&
+  ! grep -q 'issues/http' <<<"$_urlform"; then
+  echo "  ok   [-] --pr <url> reaches the API as a number, so the delete pass works"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL --pr <url> reached an API route unresolved"; FAIL=$((FAIL+1))
+  echo "  FAIL --pr <url> reached an API route unresolved"
+  FAIL=$((FAIL + 1))
 fi
 
 # Reads, not only writes. Reducing `--pr <url>` to a number removed the one thing
@@ -353,40 +408,48 @@ fi
 # resolve against the checkout — review repository A, post the result on
 # repository B, with nothing on screen showing it.
 _reads=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/read.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/read.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://github.com/StellarElements/android-dac-snippets/pull/34" \
-      GH_READ_LOG="$WORK/read.log" \
-      bash "$RELAY" --pr https://github.com/StellarElements/android-dac-snippets/pull/34 \
-      --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://github.com/StellarElements/android-dac-snippets/pull/34" \
+    GH_READ_LOG="$WORK/read.log" \
+    bash "$RELAY" --pr https://github.com/StellarElements/android-dac-snippets/pull/34 \
+    --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
   # The first read resolves the URL itself and cannot be pinned yet; every read
   # after that must be.
   tail -n +2 "$WORK/read.log" 2>/dev/null
 )
-_nreads=$(grep -c . <<< "$_reads")
-_pinned=$(grep -c 'repo=StellarElements/android-dac-snippets' <<< "$_reads")
+_nreads=$(grep -c . <<<"$_reads")
+_pinned=$(grep -c 'repo=StellarElements/android-dac-snippets' <<<"$_reads")
 if [ "$_nreads" -gt 0 ] && [ "$_nreads" = "$_pinned" ]; then
-  echo "  ok   [-] every read after the first is pinned to the same repository ($_pinned)"; PASS=$((PASS+1))
+  echo "  ok   [-] every read after the first is pinned to the same repository ($_pinned)"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL $_pinned of $_nreads reads were pinned; the rest used the checkout"; FAIL=$((FAIL+1))
+  echo "  FAIL $_pinned of $_nreads reads were pinned; the rest used the checkout"
+  FAIL=$((FAIL + 1))
 fi
 
 # `--pr <url>` with nothing numeric on the end. The rewrite leaves $PR as the URL,
 # and it is pasted into API routes, so refuse rather than build issues/https://...
 _nonum_rc=$(
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  : > "$WORK/nonum.log"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  : >"$WORK/nonum.log"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      GH_PR_URL="https://github.com/owner/repo/pull/" GH_POST_LOG="$WORK/nonum.log" \
-      bash "$RELAY" --pr https://github.com/owner/repo/pull/ --author antigravity \
-      --reviewers claude,codex --parallel >/dev/null 2>&1
+    GH_PR_URL="https://github.com/owner/repo/pull/" GH_POST_LOG="$WORK/nonum.log" \
+    bash "$RELAY" --pr https://github.com/owner/repo/pull/ --author antigravity \
+    --reviewers claude,codex --parallel >/dev/null 2>&1
   echo "$?"
 )
 if [ "$_nonum_rc" != 0 ] && [ ! -s "$WORK/nonum.log" ]; then
-  echo "  ok   [$_nonum_rc] --pr with a URL carrying no number refuses"; PASS=$((PASS+1))
+  echo "  ok   [$_nonum_rc] --pr with a URL carrying no number refuses"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [rc=$_nonum_rc] a URL with no number reached the API path"; FAIL=$((FAIL+1))
+  echo "  FAIL [rc=$_nonum_rc] a URL with no number reached the API path"
+  FAIL=$((FAIL + 1))
 fi
 
 # A URL that cannot be reduced to owner/name used to fall back to `gh repo view`
@@ -394,17 +457,21 @@ fi
 # the one that guessed. It now refuses.
 for _bad in "" "http://example.test/pr/1" "https://github.com/owner/repo//pull/1"; do
   _rc=$(
-    rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-    : > "$WORK/bad_posted.log"
+    rm -rf "$WORK/cache"
+    mkdir -p "$WORK/cache"
+    rm -f "$WORK/sha_counter"
+    : >"$WORK/bad_posted.log"
     env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-        GH_PR_URL="$_bad" GH_REPO_VIEW="android/snippets" GH_POST_LOG="$WORK/bad_posted.log" \
-        bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
+      GH_PR_URL="$_bad" GH_REPO_VIEW="android/snippets" GH_POST_LOG="$WORK/bad_posted.log" \
+      bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
     echo "$?"
   )
   if [ "$_rc" != 0 ] && [ ! -s "$WORK/bad_posted.log" ]; then
-    echo "  ok   [$_rc] an unusable pull request URL refuses instead of guessing (${_bad:-empty})"; PASS=$((PASS+1))
+    echo "  ok   [$_rc] an unusable pull request URL refuses instead of guessing (${_bad:-empty})"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL [rc=$_rc] guessed the repository from an unusable URL (${_bad:-empty})"; FAIL=$((FAIL+1))
+    echo "  FAIL [rc=$_rc] guessed the repository from an unusable URL (${_bad:-empty})"
+    FAIL=$((FAIL + 1))
   fi
 done
 
@@ -413,37 +480,63 @@ done
 # Seeds the bench file the relay will read, so these assert what a LATER run sees — the whole point
 # of writing it down. The file lives beside the round state (XDG_CACHE_HOME), not in ~/.config.
 bench_run() {
-  local expect="$1" desc="$2" contents="$3"; shift 3
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache/pr-review-relay"; rm -f "$WORK/sha_counter"
-  printf '%b' "$contents" > "$WORK/cache/pr-review-relay/benched"
+  local expect="$1" desc="$2" contents="$3"
+  shift 3
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache/pr-review-relay"
+  rm -f "$WORK/sha_counter"
+  printf '%b' "$contents" >"$WORK/cache/pr-review-relay/benched"
   local outf="$WORK/bench_out"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity "$@" > "$outf" 2>&1
+    bash "$RELAY" --pr 1 --author antigravity "$@" >"$outf" 2>&1
   local rc=$?
-  if [ "$rc" = "$expect" ]; then echo "  ok   [$rc] $desc"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want $expect] $desc"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = "$expect" ]; then
+    echo "  ok   [$rc] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want $expect] $desc"
+    FAIL=$((FAIL + 1))
+  fi
 }
-_future=$(( $(date +%s) + 7200 ))
-_past=$(( $(date +%s) - 7200 ))
+_future=$(($(date +%s) + 7200))
+_past=$(($(date +%s) - 7200))
 
 bench_run 0 "a benched reviewer is dropped and the round is still clean" \
   "codex\t$_future\tout of quota\n" --reviewers claude,codex --parallel
-grep -q '⏸ skip codex' "$WORK/bench_out" \
-  && { echo "  ok   [-] the drop is announced, never silent"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL [-] the drop is announced, never silent"; FAIL=$((FAIL+1)); }
+grep -q '⏸ skip codex' "$WORK/bench_out" &&
+  {
+    echo "  ok   [-] the drop is announced, never silent"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL [-] the drop is announced, never silent"
+    FAIL=$((FAIL + 1))
+  }
 
 # The contract change decided on 2026-08-03: --reviewers normally makes a missing reviewer a hard
 # fail, and a benched one is the single exception. Without this the bench does nothing under
 # ship-feature, which always passes --reviewers.
-grep -q 'PARTIAL' "$WORK/bench_out" \
-  && { echo "  ok   [-] a reduced panel is reported as PARTIAL, not as a full cross-review"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL [-] a reduced panel is reported as PARTIAL, not as a full cross-review"; FAIL=$((FAIL+1)); }
+grep -q 'PARTIAL' "$WORK/bench_out" &&
+  {
+    echo "  ok   [-] a reduced panel is reported as PARTIAL, not as a full cross-review"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL [-] a reduced panel is reported as PARTIAL, not as a full cross-review"
+    FAIL=$((FAIL + 1))
+  }
 
 bench_run 0 "an expired bench line lets the reviewer back in" \
   "codex\t$_past\tout of quota\n" --reviewers claude,codex --parallel
-grep -q '⏸ skip codex' "$WORK/bench_out" \
-  && { echo "  FAIL [-] an expired line must not keep anyone out"; FAIL=$((FAIL+1)); } \
-  || { echo "  ok   [-] an expired line must not keep anyone out"; PASS=$((PASS+1)); }
+grep -q '⏸ skip codex' "$WORK/bench_out" &&
+  {
+    echo "  FAIL [-] an expired line must not keep anyone out"
+    FAIL=$((FAIL + 1))
+  } ||
+  {
+    echo "  ok   [-] an expired line must not keep anyone out"
+    PASS=$((PASS + 1))
+  }
 
 bench_run 3 "every reviewer benched → empty panel is NOT clean" \
   "claude\t$_future\tout of quota\ncodex\t$_future\tout of quota\n" --reviewers claude,codex --parallel
@@ -456,31 +549,39 @@ bench_run 0 "a malformed line is ignored, the rest still parsed" \
 # (`k_codex`) while the panel looks it up by NAME (`codex`), so nothing matched and the feature was
 # inert across runs. Every earlier test missed it: the discovery ones only checked one round, and
 # the persistence ones hand-seeded the file with the right name already in place.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" QUOTA_ERR=codex \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
 if grep -q "^codex	" "$WORK/cache/pr-review-relay/benched" 2>/dev/null; then
-  echo "  ok   [-] discovery writes the AGENT NAME, not the status key"; PASS=$((PASS+1))
+  echo "  ok   [-] discovery writes the AGENT NAME, not the status key"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [-] discovery writes the AGENT NAME, not the status key"; FAIL=$((FAIL+1))
+  echo "  FAIL [-] discovery writes the AGENT NAME, not the status key"
+  FAIL=$((FAIL + 1))
 fi
 # The stub says "Resets in 2h30m0s", so the expiry must land ~9000s out. A greedy parser read that
 # as 2h0m0s and brought the agent back 30 minutes early; on the real message (56h55m40s) it was a
 # whole day early. Assert the arithmetic, not merely that a number was written.
 _exp="$(awk -F'\t' '$1=="codex"{print $2}' "$WORK/cache/pr-review-relay/benched" 2>/dev/null)"
-_delta=$(( ${_exp:-0} - $(date +%s) ))
+_delta=$((${_exp:-0} - $(date +%s)))
 if [ "$_delta" -gt 8900 ] && [ "$_delta" -lt 9100 ]; then
-  echo "  ok   [-] the reset time is parsed in full (2h30m, not 2h)"; PASS=$((PASS+1))
+  echo "  ok   [-] the reset time is parsed in full (2h30m, not 2h)"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [-] the reset time is parsed in full — got ${_delta}s, want ~9000s"; FAIL=$((FAIL+1))
+  echo "  FAIL [-] the reset time is parsed in full — got ${_delta}s, want ~9000s"
+  FAIL=$((FAIL + 1))
 fi
 rm -f "$WORK/sha_counter" "$WORK/argv2"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" ARGV_LOG="$WORK/argv2" \
-  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel > "$WORK/round2_out" 2>&1
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >"$WORK/round2_out" 2>&1
 if grep -q "skip codex" "$WORK/round2_out" && ! grep -q "^codex " "$WORK/argv2" 2>/dev/null; then
-  echo "  ok   [-] the next run drops it without invoking it"; PASS=$((PASS+1))
+  echo "  ok   [-] the next run drops it without invoking it"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [-] the next run drops it without invoking it"; FAIL=$((FAIL+1))
+  echo "  FAIL [-] the next run drops it without invoking it"
+  FAIL=$((FAIL + 1))
 fi
 
 # A review that merely MENTIONS quota, and succeeds, must not bench its author — the likeliest place
@@ -490,20 +591,26 @@ run 0 "a successful review mentioning quota does not bench" QUOTA_TEXT_OK=codex
 # Two agents out of quota in the SAME round must both survive the merge. This is the case that
 # forced the parent-side merge in the first place: if children wrote the file themselves, the
 # second would rename over the first and one bench would vanish.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" QUOTA_ERR=claude,codex \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
 _n=$(grep -cE "^(claude|codex)	" "$WORK/cache/pr-review-relay/benched" 2>/dev/null || echo 0)
 if [ "$_n" = 2 ]; then
-  echo "  ok   [-] two agents benched in one round both survive the merge"; PASS=$((PASS+1))
+  echo "  ok   [-] two agents benched in one round both survive the merge"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [-] two agents benched in one round both survive the merge (got $_n)"; FAIL=$((FAIL+1))
+  echo "  FAIL [-] two agents benched in one round both survive the merge (got $_n)"
+  FAIL=$((FAIL + 1))
 fi
 
 # If the bench cannot be persisted, the round must NOT exit clean. A benched-but-unrecorded agent
 # would come back to the same wall next run with nothing written down to explain it — the quiet
 # clean pass this design refuses everywhere else. An undeletable lock directory simulates it.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache/pr-review-relay"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache/pr-review-relay"
+rm -f "$WORK/sha_counter"
 mkdir -p "$WORK/cache/pr-review-relay/benched.lock"
 touch -t 203001010000 "$WORK/cache/pr-review-relay/benched.lock" 2>/dev/null || true
 chmod 500 "$WORK/cache/pr-review-relay" 2>/dev/null
@@ -512,99 +619,138 @@ env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_cou
 _rc=$?
 chmod 700 "$WORK/cache/pr-review-relay" 2>/dev/null
 if [ "$_rc" = 3 ]; then
-  echo "  ok   [-] a bench that cannot be persisted fails the round, not a quiet clean pass"; PASS=$((PASS+1))
+  echo "  ok   [-] a bench that cannot be persisted fails the round, not a quiet clean pass"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [got $_rc, want 3] a bench that cannot be persisted fails the round"; FAIL=$((FAIL+1))
+  echo "  FAIL [got $_rc, want 3] a bench that cannot be persisted fails the round"
+  FAIL=$((FAIL + 1))
 fi
 
 # A zero-padded reset ("08m00s") is invalid octal. Before this it aborted the arithmetic and took
 # the relay down with it — a quota message turning into a crash is the worst of the three outcomes.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" QUOTA_PAD=codex \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
 _e="$(awk -F'\t' '$1=="codex"{print $2}' "$WORK/cache/pr-review-relay/benched" 2>/dev/null)"
-_d=$(( ${_e:-0} - $(date +%s) ))
+_d=$((${_e:-0} - $(date +%s)))
 if [ "$_d" -gt 400 ] && [ "$_d" -lt 560 ]; then
-  echo "  ok   [-] a zero-padded reset parses as base 10, not octal"; PASS=$((PASS+1))
+  echo "  ok   [-] a zero-padded reset parses as base 10, not octal"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [-] a zero-padded reset parses as base 10 — got ${_d}s, want ~480s"; FAIL=$((FAIL+1))
+  echo "  FAIL [-] a zero-padded reset parses as base 10 — got ${_d}s, want ~480s"
+  FAIL=$((FAIL + 1))
 fi
 
 # Pruning takes the lock too. With the lock held by someone else, prune must leave the file alone
 # rather than overwrite it with its own older view — which is how a concurrent discovery vanishes.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache/pr-review-relay"; rm -f "$WORK/sha_counter"
-_future=$(( $(date +%s) + 7200 ))
-printf 'codex\t%s\tout of quota\n' "$_future" > "$WORK/cache/pr-review-relay/benched"
-mkdir -p "$WORK/cache/pr-review-relay/benched.lock"   # fresh lock: held by a "concurrent" relay
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache/pr-review-relay"
+rm -f "$WORK/sha_counter"
+_future=$(($(date +%s) + 7200))
+printf 'codex\t%s\tout of quota\n' "$_future" >"$WORK/cache/pr-review-relay/benched"
+mkdir -p "$WORK/cache/pr-review-relay/benched.lock" # fresh lock: held by a "concurrent" relay
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude --parallel >/dev/null 2>&1
 if grep -q "^codex	" "$WORK/cache/pr-review-relay/benched" 2>/dev/null; then
-  echo "  ok   [-] prune respects the lock instead of overwriting a live entry"; PASS=$((PASS+1))
+  echo "  ok   [-] prune respects the lock instead of overwriting a live entry"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [-] prune respects the lock instead of overwriting a live entry"; FAIL=$((FAIL+1))
+  echo "  FAIL [-] prune respects the lock instead of overwriting a live entry"
+  FAIL=$((FAIL + 1))
 fi
 rm -rf "$WORK/cache/pr-review-relay/benched.lock"
-
-
 
 runx 0 "dry-run + valid explicit config → clean preflight" --reviewers claude,codex --dry-run
 runx 3 "dry-run + invalid explicit config → fail preflight" --reviewers claude,bogus --dry-run
 
 # author-only reviewer list → nobody runs → exit 3 (real run and dry-run)
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   bash "$RELAY" --pr 1 --author claude --reviewers claude --parallel >/dev/null 2>&1
-rc=$?; if [ "$rc" = 3 ]; then echo "  ok   [3] author-only list → no reviewers ran"; PASS=$((PASS+1)); else echo "  FAIL [got $rc, want 3] author-only"; FAIL=$((FAIL+1)); fi
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rc=$?
+if [ "$rc" = 3 ]; then
+  echo "  ok   [3] author-only list → no reviewers ran"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 3] author-only"
+  FAIL=$((FAIL + 1))
+fi
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   bash "$RELAY" --pr 1 --author claude --reviewers claude --dry-run >/dev/null 2>&1
-rc=$?; if [ "$rc" = 3 ]; then echo "  ok   [3] dry-run + zero runnable reviewers → fail"; PASS=$((PASS+1)); else echo "  FAIL [got $rc, want 3] dry-run zero runnable"; FAIL=$((FAIL+1)); fi
+rc=$?
+if [ "$rc" = 3 ]; then
+  echo "  ok   [3] dry-run + zero runnable reviewers → fail"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 3] dry-run zero runnable"
+  FAIL=$((FAIL + 1))
+fi
 # --- agy gets our timeout budget, not its own 5-minute default ---------------
 # agy enforces --print-timeout (default 5m) on top of ours: left unset it wins whenever
 # PR_RELAY_AGENT_TIMEOUT is raised above 300, which is how three of four antigravity rounds
 # died on 2026-07-27 with "timeout waiting for response" despite a 900s budget. The failure
 # mode is a missing flag, which no output assertion would catch — so assert the argv.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter" "$WORK/argv.log"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter" "$WORK/argv.log"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   ARGV_LOG="$WORK/argv.log" PR_RELAY_AGENT_TIMEOUT=900 \
   bash "$RELAY" --pr 1 --author claude --reviewers antigravity --parallel >/dev/null 2>&1
 agy_argv="$(grep '^agy ' "$WORK/argv.log" 2>/dev/null || true)"
-if grep -q -- '--print-timeout 900s' <<< "$agy_argv"; then
-  echo "  ok   [-] agy is given the relay's timeout as --print-timeout"; PASS=$((PASS+1))
+if grep -q -- '--print-timeout 900s' <<<"$agy_argv"; then
+  echo "  ok   [-] agy is given the relay's timeout as --print-timeout"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL agy argv lacks '--print-timeout 900s': ${agy_argv:-<no agy invocation recorded>}"; FAIL=$((FAIL+1))
+  echo "  FAIL agy argv lacks '--print-timeout 900s': ${agy_argv:-<no agy invocation recorded>}"
+  FAIL=$((FAIL + 1))
 fi
 
 # the traversal attempt must NOT create a file outside the temp status dir
 if [ -e "$WORK/PWNED" ] || [ -e "$HOME/PWNED" ] || [ -e ./PWNED ]; then
-  echo "  FAIL path traversal escaped STATUS_DIR"; FAIL=$((FAIL+1))
+  echo "  FAIL path traversal escaped STATUS_DIR"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] traversal contained (no stray PWNED file)"; PASS=$((PASS+1))
+  echo "  ok   [-] traversal contained (no stray PWNED file)"
+  PASS=$((PASS + 1))
 fi
 
 # The sequential path, named explicitly: since 2026-09-25 a run with no flag is PARALLEL, so this
 # case would otherwise pass under parallel while its title claimed the opposite.
-runx 0 "sequential run (--sequential) → clean pass"     --reviewers claude,codex --sequential
+runx 0 "sequential run (--sequential) → clean pass" --reviewers claude,codex --sequential
 
 # --- qwen: opt-in reviewer dispatch (generic stub) ---------------------------
 # qwen is opt-in like opencode: absent from the default set, dispatched only when
 # named. These exercise the new dispatch path through the generic stub; the exact
 # argv (incl. the security-relevant --safe-mode) is asserted separately below.
-runx 0 "qwen named explicitly → runs and passes"        --reviewers claude,qwen --parallel
-runx 0 "qwen deduped like any reviewer → clean pass"    --reviewers qwen,qwen --parallel
+runx 0 "qwen named explicitly → runs and passes" --reviewers claude,qwen --parallel
+runx 0 "qwen deduped like any reviewer → clean pass" --reviewers qwen,qwen --parallel
 # qwen empty / non-zero exit must fail the round, same as the built-in reviewers.
 qwen_env_run() { # <expected> <desc> <VAR=val>
   local expect="$1" desc="$2" envassign="$3"
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" "$envassign" \
     bash "$RELAY" --pr 1 --author antigravity --reviewers claude,qwen --parallel >/dev/null 2>&1
   local rc=$?
-  if [ "$rc" = "$expect" ]; then echo "  ok   [$rc] $desc"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want $expect] $desc"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = "$expect" ]; then
+    echo "  ok   [$rc] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want $expect] $desc"
+    FAIL=$((FAIL + 1))
+  fi
 }
-qwen_env_run 3 "qwen returns empty → not clean"         FAIL_EMPTY=qwen
+qwen_env_run 3 "qwen returns empty → not clean" FAIL_EMPTY=qwen
 qwen_env_run 3 "qwen exits non-zero (truncated) → not clean" FAIL_RC=qwen
-qwen_env_run 3 "qwen whitespace-only review → not valid"     WS_ONLY=qwen
+qwen_env_run 3 "qwen whitespace-only review → not valid" WS_ONLY=qwen
 
 # default set with only a subset of CLIs installed → skip the missing ones, exit 0.
 # PATH excludes the real agent dir; BIN2 has gh+claude+codex (+node for the wrapper).
@@ -620,10 +766,13 @@ qwen_env_run 3 "qwen whitespace-only review → not valid"     WS_ONLY=qwen
 #
 # grok hid the hole by passing for the right reason — it resolves through PATH only,
 # so it really was skipped. One assertion, two code paths, one of them not isolated.
-BIN2="$WORK/bin2"; mkdir -p "$BIN2"
+BIN2="$WORK/bin2"
+mkdir -p "$BIN2"
 for t in gh claude codex; do ln -sf "$BIN/$t" "$BIN2/$t"; done
 ln -sf "$(command -v node)" "$BIN2/node" 2>/dev/null
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 # Two documented variables are UNSET, not merely emptied, so this runs as it would on
 # a machine that configured neither.
 #
@@ -642,65 +791,105 @@ mkdir -p "$WORK/home-subset"
 env -u PR_RELAY_OPENCODE_BIN -u PR_RELAY_REVIEWERS \
   PATH="$BIN2:/usr/bin:/bin" HOME="$WORK/home-subset" \
   XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-  bash "$RELAY" --pr 1 --parallel > "$WORK/subset-out" 2>&1
+  bash "$RELAY" --pr 1 --parallel >"$WORK/subset-out" 2>&1
 rc=$?
 # rc == 0 ALONE IS NOT ENOUGH, and that is how this test hid a live opencode for as
 # long as it did: a real reviewer that runs and happens to succeed also exits 0. The
 # assertion has to name what was supposed to happen — both uninstalled seats
 # SKIPPED — or "it passed" and "it billed someone" are the same result.
-if [ "$rc" = 0 ] \
-   && grep -q "grok not installed (skip grok)" "$WORK/subset-out" \
-   && grep -q "opencode not installed (skip opencode)" "$WORK/subset-out"; then
-  echo "  ok   [0] default set, subset installed → skip missing, pass"; PASS=$((PASS+1))
+if [ "$rc" = 0 ] &&
+  grep -q "grok not installed (skip grok)" "$WORK/subset-out" &&
+  grep -q "opencode not installed (skip opencode)" "$WORK/subset-out"; then
+  echo "  ok   [0] default set, subset installed → skip missing, pass"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [got $rc, want 0] default subset — or a missing seat was not skipped"; FAIL=$((FAIL+1))
+  echo "  FAIL [got $rc, want 0] default subset — or a missing seat was not skipped"
+  FAIL=$((FAIL + 1))
   grep -E "reviewing…|not installed" "$WORK/subset-out" | sed 's/^/       /'
 fi
 
 # wrap helper: a review that merely MENTIONS <details> must still be wrapped with our summary.
-printf '## Heading\nThis review discusses a <details> element in the code.\n' > "$WORK/rev.md"
+printf '## Heading\nThis review discusses a <details> element in the code.\n' >"$WORK/rev.md"
 wout=$(node "$HERE/../wrap-collapsed-pr-comment.mjs" --summary "MARK-42" --footer "<sub>f</sub>" --file "$WORK/rev.md")
-if grep -q "<summary>MARK-42</summary>" <<< "$wout"; then echo "  ok   [-] wrap keeps summary when body mentions <details>"; PASS=$((PASS+1)); else echo "  FAIL wrap dropped summary"; FAIL=$((FAIL+1)); fi
+if grep -q "<summary>MARK-42</summary>" <<<"$wout"; then
+  echo "  ok   [-] wrap keeps summary when body mentions <details>"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL wrap dropped summary"
+  FAIL=$((FAIL + 1))
+fi
 
 # invalid --max-rounds is a usage error (must not silently bypass the cap)
-runx 2 "invalid --max-rounds → usage error"             --reviewers claude,codex --max-rounds nope
+runx 2 "invalid --max-rounds → usage error" --reviewers claude,codex --max-rounds nope
 
 # a preflight-only failure (--reviewers bogus) must NOT consume a cap round
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers bogus --parallel >/dev/null 2>&1
-if [ ! -f "$WORK/cache/pr-review-relay/owner_repo#1.round" ]; then echo "  ok   [-] preflight-only failure does not burn a round"; PASS=$((PASS+1)); else echo "  FAIL bogus consumed a round"; FAIL=$((FAIL+1)); fi
+if [ ! -f "$WORK/cache/pr-review-relay/owner_repo#1.round" ]; then
+  echo "  ok   [-] preflight-only failure does not burn a round"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL bogus consumed a round"
+  FAIL=$((FAIL + 1))
+fi
 
 # contrast: a round that actually dispatched reviewers but failed DOES consume a slot
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" FAIL_EMPTY=codex \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
 rf="$WORK/cache/pr-review-relay/owner_repo#1.round"
 # State is "<sha> <rounds> <same-sha-invocations>" (it used to be a bare integer). The INTENT of
 # this assertion is unchanged: a round that actually dispatched reviewers records itself even when
 # the round then fails, so a persistently flaky reviewer still marches toward the cap.
-read -r _sha _rounds _same _junk < "$rf" 2>/dev/null || true
+read -r _sha _rounds _same _junk <"$rf" 2>/dev/null || true
 if [ -f "$rf" ] && [ -n "${_sha:-}" ] && [ "${_rounds:-}" = 1 ] && [ "${_same:-}" = 1 ] && [ -z "${_junk:-}" ]; then
-  echo "  ok   [-] failed round (reviewers ran) consumes a slot"; PASS=$((PASS+1))
-else echo "  FAIL failed round did not consume a slot (state: $(cat "$rf" 2>/dev/null || echo '<missing>'))"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] failed round (reviewers ran) consumes a slot"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL failed round did not consume a slot (state: $(cat "$rf" 2>/dev/null || echo '<missing>'))"
+  FAIL=$((FAIL + 1))
+fi
 unset _sha _rounds _same _junk
 
 # wrapper (node) failure → reviewer recorded as failed → exit 3 (not posted as ok)
-BIN4="$WORK/bin4"; mkdir -p "$BIN4"
+BIN4="$WORK/bin4"
+mkdir -p "$BIN4"
 for t in gh claude codex; do ln -sf "$BIN/$t" "$BIN4/$t"; done
-printf '#!/usr/bin/env bash\nexit 1\n' > "$BIN4/node"; chmod +x "$BIN4/node"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$BIN4/node"
+chmod +x "$BIN4/node"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN4:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
-rc=$?; if [ "$rc" = 3 ]; then echo "  ok   [3] comment wrapper failure → not clean"; PASS=$((PASS+1)); else echo "  FAIL [got $rc, want 3] wrapper failure"; FAIL=$((FAIL+1)); fi
+rc=$?
+if [ "$rc" = 3 ]; then
+  echo "  ok   [3] comment wrapper failure → not clean"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 3] wrapper failure"
+  FAIL=$((FAIL + 1))
+fi
 
 # cap: pre-seed the round file at the cap, then a normal run must exit 4
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache/pr-review-relay"
-printf '3' > "$WORK/cache/pr-review-relay/owner_repo#1.round"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache/pr-review-relay"
+printf '3' >"$WORK/cache/pr-review-relay/owner_repo#1.round"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --parallel >/dev/null 2>&1
 rc=$?
-if [ "$rc" = 4 ]; then echo "  ok   [4] round cap reached → exit 4"; PASS=$((PASS+1)); else echo "  FAIL [got $rc, want 4] round cap"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 4 ]; then
+  echo "  ok   [4] round cap reached → exit 4"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 4] round cap"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- opencode invocation contract --------------------------------------------
 # These assert the ARGV the relay builds, not just that a review was posted — the
@@ -711,7 +900,7 @@ if [ "$rc" = 4 ]; then echo "  ok   [4] round cap reached → exit 4"; PASS=$((P
 OC_ARGV="$WORK/oc_argv"
 make_strict_opencode() { # $1 = dir to install the stub into
   mkdir -p "$1"
-  cat > "$1/opencode" <<'OC'
+  cat >"$1/opencode" <<'OC'
 #!/usr/bin/env bash
 # Record argv so the test can assert on it, then enforce the contract.
 printf '%s\n' "$*" > "${OC_ARGV_FILE:?}"
@@ -754,12 +943,25 @@ OC
 make_strict_opencode "$BIN"
 
 oc_run() { # oc_run <expected_exit> <desc> [VAR=val ...] [-- <relay args...>]
-  local expect="$1" desc="$2"; shift 2
+  local expect="$1" desc="$2"
+  shift 2
   local -a envs=() relay_args=()
   while [ $# -gt 0 ]; do
-    case "$1" in --) shift; relay_args=("$@"); break;; *) envs+=("$1"); shift;; esac
+    case "$1" in --)
+      shift
+      relay_args=("$@")
+      break
+      ;;
+    *)
+      envs+=("$1")
+      shift
+      ;;
+    esac
   done
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  oc_reset
   # Clear PR_RELAY_OPENCODE_MODEL first: the "unset → no -m" assertion below tests the
   # DEFAULT, so a developer who exports the variable in their own shell (a normal thing to
   # do — it is a documented knob) would otherwise fail the suite on an unmodified checkout.
@@ -769,10 +971,15 @@ oc_run() { # oc_run <expected_exit> <desc> [VAR=val ...] [-- <relay args...>]
     PR_RELAY_OPENCODE_MODEL= \
     OC_ARGV_FILE="$OC_ARGV" ${envs[@]+"${envs[@]}"} \
     bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode \
-      ${relay_args[@]+"${relay_args[@]}"} >/dev/null 2>&1
+    ${relay_args[@]+"${relay_args[@]}"} >/dev/null 2>&1
   local rc=$?
-  if [ "$rc" = "$expect" ]; then echo "  ok   [$rc] $desc"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want $expect] $desc"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = "$expect" ]; then
+    echo "  ok   [$rc] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want $expect] $desc"
+    FAIL=$((FAIL + 1))
+  fi
 }
 # The stub writes FIVE files per run — the argv log plus four sidecars beside it.
 # Every reset site used to hand-list the ones it happened to care about, in three
@@ -791,18 +998,33 @@ oc_run() { # oc_run <expected_exit> <desc> [VAR=val ...] [-- <relay args...>]
 # downstream to catch it.
 oc_reset() { # oc_reset [prefix]  (defaults to $OC_ARGV)
   local f="${1-$OC_ARGV}"
-  [ -n "$f" ] || { echo "  FAIL oc_reset called with an empty prefix"; FAIL=$((FAIL+1)); return 1; }
+  [ -n "$f" ] || {
+    echo "  FAIL oc_reset called with an empty prefix"
+    FAIL=$((FAIL + 1))
+    return 1
+  }
   rm -f "$f" "$f.cfg" "$f.cwd" "$f.projcfg" "$f.stdin"
 }
 
 oc_assert() { # oc_assert <desc> <grep-mode: has|hasnt> <pattern>
   local desc="$1" mode="$2" pat="$3"
-  local got; got="$(cat "$OC_ARGV" 2>/dev/null || true)"
+  local got
+  got="$(cat "$OC_ARGV" 2>/dev/null || true)"
   case "$mode" in
-    has)   if grep -q -- "$pat" <<< "$got"; then echo "  ok   [-] $desc"; PASS=$((PASS+1));
-           else echo "  FAIL $desc (argv: $got)"; FAIL=$((FAIL+1)); fi;;
-    hasnt) if grep -q -- "$pat" <<< "$got"; then echo "  FAIL $desc (argv: $got)"; FAIL=$((FAIL+1));
-           else echo "  ok   [-] $desc"; PASS=$((PASS+1)); fi;;
+    has) if grep -q -- "$pat" <<<"$got"; then
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL $desc (argv: $got)"
+      FAIL=$((FAIL + 1))
+    fi ;;
+    hasnt) if grep -q -- "$pat" <<<"$got"; then
+      echo "  FAIL $desc (argv: $got)"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    fi ;;
   esac
 }
 
@@ -810,10 +1032,20 @@ oc_stdin() { # oc_stdin <desc> <has|hasnt> <pattern>
   local desc="$1" mode="$2" pat="$3" got
   got="$(cat "$OC_ARGV.stdin" 2>/dev/null || true)"
   case "$mode" in
-    has)   if grep -q -- "$pat" <<< "$got"; then echo "  ok   [-] $desc"; PASS=$((PASS+1));
-           else echo "  FAIL $desc (stdin: $(printf '%s' "$got" | head -c 120))"; FAIL=$((FAIL+1)); fi;;
-    hasnt) if grep -q -- "$pat" <<< "$got"; then echo "  FAIL $desc"; FAIL=$((FAIL+1));
-           else echo "  ok   [-] $desc"; PASS=$((PASS+1)); fi;;
+    has) if grep -q -- "$pat" <<<"$got"; then
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL $desc (stdin: $(printf '%s' "$got" | head -c 120))"
+      FAIL=$((FAIL + 1))
+    fi ;;
+    hasnt) if grep -q -- "$pat" <<<"$got"; then
+      echo "  FAIL $desc"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    fi ;;
   esac
 }
 
@@ -821,33 +1053,48 @@ oc_stdin() { # oc_stdin <desc> <has|hasnt> <pattern>
 # wrong path makes tests pass by erasing evidence, and no pass-count check would
 # show it: a successful dispatch rewrites the sidecars either way.
 _ocr="$WORK/oc-reset-probe"
-for _sfx in "" .cfg .cwd .projcfg .stdin; do : > "$_ocr$_sfx"; done
+for _sfx in "" .cfg .cwd .projcfg .stdin; do : >"$_ocr$_sfx"; done
 oc_reset "$_ocr"
 _left=""
 for _sfx in "" .cfg .cwd .projcfg .stdin; do [ -e "$_ocr$_sfx" ] && _left="$_left $_ocr$_sfx"; done
-if [ -z "$_left" ]; then echo "  ok   [-] oc_reset clears the argv log and all four sidecars"; PASS=$((PASS+1))
-else echo "  FAIL oc_reset left:$_left"; FAIL=$((FAIL+1)); fi
+if [ -z "$_left" ]; then
+  echo "  ok   [-] oc_reset clears the argv log and all four sidecars"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL oc_reset left:$_left"
+  FAIL=$((FAIL + 1))
+fi
 # The default argument, which twelve of the thirteen call sites rely on.
-for _sfx in "" .cfg .cwd .projcfg .stdin; do : > "$OC_ARGV$_sfx"; done
+for _sfx in "" .cfg .cwd .projcfg .stdin; do : >"$OC_ARGV$_sfx"; done
 oc_reset
 _left=""
 for _sfx in "" .cfg .cwd .projcfg .stdin; do [ -e "$OC_ARGV$_sfx" ] && _left="$_left $OC_ARGV$_sfx"; done
-if [ -z "$_left" ]; then echo "  ok   [-] oc_reset with no argument defaults to \$OC_ARGV"; PASS=$((PASS+1))
-else echo "  FAIL oc_reset default argument left:$_left"; FAIL=$((FAIL+1)); fi
+if [ -z "$_left" ]; then
+  echo "  ok   [-] oc_reset with no argument defaults to \$OC_ARGV"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL oc_reset default argument left:$_left"
+  FAIL=$((FAIL + 1))
+fi
 
 # An EMPTY argument must be refused outright. Without the guard this deletes
 # `.cfg`/`.cwd`/`.projcfg`/`.stdin` out of the current directory and `rm` still
 # exits 0 — a test helper quietly removing files that are not its own.
-_ocrdir="$WORK/oc-reset-empty"; mkdir -p "$_ocrdir"
-for _sfx in .cfg .cwd .projcfg .stdin bystander; do : > "$_ocrdir/$_sfx"; done
+_ocrdir="$WORK/oc-reset-empty"
+mkdir -p "$_ocrdir"
+for _sfx in .cfg .cwd .projcfg .stdin bystander; do : >"$_ocrdir/$_sfx"; done
 # Subshell: the guard's own FAIL increment is deliberately not counted here — this
 # assertion is about the files, and the guard firing is the expected path.
-( cd "$_ocrdir" && oc_reset "" ) >/dev/null 2>&1
+(cd "$_ocrdir" && oc_reset "") >/dev/null 2>&1
 _survived=1
 for _sfx in .cfg .cwd .projcfg .stdin bystander; do [ -e "$_ocrdir/$_sfx" ] || _survived=0; done
 if [ "$_survived" = 1 ]; then
-  echo "  ok   [-] oc_reset refuses an empty prefix instead of clearing the cwd"; PASS=$((PASS+1))
-else echo "  FAIL oc_reset with an empty prefix deleted files from the cwd"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] oc_reset refuses an empty prefix instead of clearing the cwd"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL oc_reset with an empty prefix deleted files from the cwd"
+  FAIL=$((FAIL + 1))
+fi
 
 oc_run 0 "opencode runs read-only under its own agent, link mode"
 oc_assert "link mode selects the relay agent" has "--agent pr-review-relay-ro"
@@ -859,10 +1106,20 @@ oc_cfg() { # oc_cfg <desc> <has|hasnt> <pattern>
   local desc="$1" mode="$2" pat="$3" got
   got="$(cat "$OC_ARGV.cfg" 2>/dev/null || true)"
   case "$mode" in
-    has)   if grep -q -- "$pat" <<< "$got"; then echo "  ok   [-] $desc"; PASS=$((PASS+1));
-           else echo "  FAIL $desc (cfg: $got)"; FAIL=$((FAIL+1)); fi;;
-    hasnt) if grep -q -- "$pat" <<< "$got"; then echo "  FAIL $desc (cfg: $got)"; FAIL=$((FAIL+1));
-           else echo "  ok   [-] $desc"; PASS=$((PASS+1)); fi;;
+    has) if grep -q -- "$pat" <<<"$got"; then
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL $desc (cfg: $got)"
+      FAIL=$((FAIL + 1))
+    fi ;;
+    hasnt) if grep -q -- "$pat" <<<"$got"; then
+      echo "  FAIL $desc (cfg: $got)"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    fi ;;
   esac
 }
 # NOTE ON WHAT THESE CAN AND CANNOT PROVE: they assert the policy the relay SENDS,
@@ -898,9 +1155,11 @@ oc_assert "no duplicate inline diff fallback" hasnt "Fallback: the PR diff"
 # reviewed repo can declare an `mcp` server that runs at startup, before any
 # permission applies. The only defence is not being in that directory.
 if [ -s "$OC_ARGV.cwd" ] && [ "$(cat "$OC_ARGV.cwd")" != "$PWD" ]; then
-  echo "  ok   [-] opencode is not launched inside the repo (no project config read)"; PASS=$((PASS+1))
+  echo "  ok   [-] opencode is not launched inside the repo (no project config read)"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL opencode ran in the repo cwd — project opencode.json/mcp would be honoured"; FAIL=$((FAIL+1))
+  echo "  FAIL opencode ran in the repo cwd — project opencode.json/mcp would be honoured"
+  FAIL=$((FAIL + 1))
 fi
 
 # Shell is denied, so the reviewer can never fetch the PR: the diff must reach it on
@@ -951,9 +1210,11 @@ oc_assert "sets exactly -m <value>" has "-m opencode/some-model"
 # outside-the-repo cwd is not sufficient on its own, and only review-local pinned it.
 oc_run 0 "relay disables the project config"
 if [ "$(cat "$OC_ARGV.projcfg" 2>/dev/null || true)" = "1" ]; then
-  echo "  ok   [-] relay sets OPENCODE_DISABLE_PROJECT_CONFIG=1"; PASS=$((PASS+1))
+  echo "  ok   [-] relay sets OPENCODE_DISABLE_PROJECT_CONFIG=1"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL relay did not set OPENCODE_DISABLE_PROJECT_CONFIG (got '$(cat "$OC_ARGV.projcfg" 2>/dev/null)')"; FAIL=$((FAIL+1))
+  echo "  FAIL relay did not set OPENCODE_DISABLE_PROJECT_CONFIG (got '$(cat "$OC_ARGV.projcfg" 2>/dev/null)')"
+  FAIL=$((FAIL + 1))
 fi
 
 # THE REGRESSION THIS DELIVERY EXISTS FOR. The `-f` attachment was injected only up
@@ -968,21 +1229,25 @@ fi
 OC_BIG_LINES=2000
 oc_run 0 "opencode receives a diff far past the old attachment cap" GH_BIG_DIFF_LINES=$OC_BIG_LINES
 oc_stdin "the last line of a 2000-line diff arrives" has "TAIL-MARKER-REACHED"
-_exp="$( GH_BIG_DIFF_LINES=$OC_BIG_LINES "$BIN/gh" pr diff 1 )"
+_exp="$(GH_BIG_DIFF_LINES=$OC_BIG_LINES "$BIN/gh" pr diff 1)"
 _exp_bytes=$(printf '%s' "$_exp" | wc -c | tr -d ' ')
-_got_bytes=$(wc -c < "$OC_ARGV.stdin" 2>/dev/null | tr -d ' ')
-_got_lines=$(wc -l < "$OC_ARGV.stdin" 2>/dev/null | tr -d ' ')
+_got_bytes=$(wc -c <"$OC_ARGV.stdin" 2>/dev/null | tr -d ' ')
+_got_lines=$(wc -l <"$OC_ARGV.stdin" 2>/dev/null | tr -d ' ')
 # cmp, not a byte COUNT: equal lengths would also pass for a same-length mangling,
 # and "the right number of bytes" is not the claim being made here.
 if printf '%s' "$_exp" | cmp -s - "$OC_ARGV.stdin"; then
-  echo "  ok   [-] the whole diff arrives byte for byte ($_got_bytes B, $_got_lines lines)"; PASS=$((PASS+1))
+  echo "  ok   [-] the whole diff arrives byte for byte ($_got_bytes B, $_got_lines lines)"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL diff altered or truncated on delivery (got ${_got_bytes}B, want ${_exp_bytes}B)"; FAIL=$((FAIL+1))
+  echo "  FAIL diff altered or truncated on delivery (got ${_got_bytes}B, want ${_exp_bytes}B)"
+  FAIL=$((FAIL + 1))
 fi
 if [ "${_got_lines:-0}" -gt 1035 ]; then
-  echo "  ok   [-] delivery clears the ~1035-line attachment cap"; PASS=$((PASS+1))
+  echo "  ok   [-] delivery clears the ~1035-line attachment cap"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL delivery is back under the old attachment cap ($_got_lines lines)"; FAIL=$((FAIL+1))
+  echo "  FAIL delivery is back under the old attachment cap ($_got_lines lines)"
+  FAIL=$((FAIL + 1))
 fi
 
 # Link mode omits the inline diff from $PROMPT above LINK_DIFF_FALLBACK_MAX_BYTES,
@@ -995,19 +1260,26 @@ oc_stdin "diff survives LINK_DIFF_FALLBACK_MAX_BYTES=1" has "+change"
 
 # PATH miss + stock install at \$HOME/.opencode/bin → reviewer must still RUN,
 # not be skipped by the `command -v` check that precedes dispatch.
-FAKEHOME="$WORK/fakehome"; make_strict_opencode "$FAKEHOME/.opencode/bin"
-BIN5="$WORK/bin5"; mkdir -p "$BIN5"
+FAKEHOME="$WORK/fakehome"
+make_strict_opencode "$FAKEHOME/.opencode/bin"
+BIN5="$WORK/bin5"
+mkdir -p "$BIN5"
 for t in gh claude; do ln -sf "$BIN/$t" "$BIN5/$t"; done
 ln -sf "$(command -v node)" "$BIN5/node" 2>/dev/null
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+oc_reset
 env PATH="$BIN5:/usr/bin:/bin" HOME="$FAKEHOME" XDG_CACHE_HOME="$WORK/cache" \
   GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1
 rc=$?
 if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
-  echo "  ok   [0] opencode off PATH but at \$HOME/.opencode/bin → resolved and run"; PASS=$((PASS+1))
+  echo "  ok   [0] opencode off PATH but at \$HOME/.opencode/bin → resolved and run"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL [got $rc] off-PATH stock install was skipped (argv file empty=$([ -s "$OC_ARGV" ] || echo yes))"; FAIL=$((FAIL+1))
+  echo "  FAIL [got $rc] off-PATH stock install was skipped (argv file empty=$([ -s "$OC_ARGV" ] || echo yes))"
+  FAIL=$((FAIL + 1))
 fi
 
 # HOME unset (cron / systemd / minimal containers) must NOT abort the relay. Under
@@ -1021,7 +1293,8 @@ fi
 # the relay returns 3 — which passes locally (node in /usr/bin) but is red on CI,
 # where setup-node installs outside /usr/bin and /bin. Symlink it in, as BIN5 does.
 ln -sf "$(command -v node)" "$BIN/node" 2>/dev/null
-rm -f "$WORK/sha_counter"; oc_reset
+rm -f "$WORK/sha_counter"
+oc_reset
 # TMPDIR under $WORK so the run's round state (which falls back to
 # $TMPDIR/pr-review-relay-$(id -u) when HOME and XDG_CACHE_HOME are both unset)
 # stays inside the test sandbox. Without this the suite writes to the real
@@ -1032,60 +1305,104 @@ env -u HOME -u XDG_CACHE_HOME PATH="$BIN:/usr/bin:/bin" TMPDIR="$WORK/tmphome" \
   GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_MAX_ROUNDS=99 \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1
 rc=$?
-if [ "$rc" = 0 ]; then echo "  ok   [0] HOME + XDG_CACHE_HOME both unset → relay still runs"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 0] minimal env aborted the relay"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ]; then
+  echo "  ok   [0] HOME + XDG_CACHE_HOME both unset → relay still runs"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 0] minimal env aborted the relay"
+  FAIL=$((FAIL + 1))
+fi
 
 # A RELATIVE PR_RELAY_OPENCODE_BIN must still work: the reviewer is launched after
 # a `cd "$ATTACH_DIR"`, so it has to be resolved to an absolute path up front or it
 # executes from the wrong directory.
-BIN7="$WORK/bin7"; make_strict_opencode "$BIN7"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
-( cd "$WORK" && env PATH="$BIN5:/usr/bin:/bin" HOME="$FAKEHOME" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_OPENCODE_BIN="./bin7/opencode" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+BIN7="$WORK/bin7"
+make_strict_opencode "$BIN7"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+oc_reset
+(cd "$WORK" && env PATH="$BIN5:/usr/bin:/bin" HOME="$FAKEHOME" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_OPENCODE_BIN="./bin7/opencode" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then echo "  ok   [0] relative PR_RELAY_OPENCODE_BIN resolved to absolute"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] relative PR_RELAY_OPENCODE_BIN broke after cd"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
+  echo "  ok   [0] relative PR_RELAY_OPENCODE_BIN resolved to absolute"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] relative PR_RELAY_OPENCODE_BIN broke after cd"
+  FAIL=$((FAIL + 1))
+fi
 
 # A broken PR_RELAY_OPENCODE_BIN must fail fast when opencode IS selected...
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   PR_RELAY_OPENCODE_BIN=/nonexistent/opencode \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] unusable PR_RELAY_OPENCODE_BIN fails fast when selected"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] bad override did not fail fast"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] unusable PR_RELAY_OPENCODE_BIN fails fast when selected"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] bad override did not fail fast"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...and must NOT affect a run that never asked for that reviewer.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   PR_RELAY_OPENCODE_BIN=/nonexistent/opencode \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex >/dev/null 2>&1
 rc=$?
-if [ "$rc" = 0 ]; then echo "  ok   [0] bad override is irrelevant when opencode is not a reviewer"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 0] optional reviewer broke an unrelated run"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ]; then
+  echo "  ok   [0] bad override is irrelevant when opencode is not a reviewer"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 0] optional reviewer broke an unrelated run"
+  FAIL=$((FAIL + 1))
+fi
 
 # A DIRECTORY passes a bare `[ -x ]`, so it must be rejected explicitly rather
 # than passing validation and failing confusingly at launch.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   PR_RELAY_OPENCODE_BIN="$WORK" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] a directory override is rejected, not treated as executable"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] directory override passed validation"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] a directory override is rejected, not treated as executable"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] directory override passed validation"
+  FAIL=$((FAIL + 1))
+fi
 
 # A BARE override that is not on PATH must fail, NOT silently resolve to
 # ./opencode in the working directory — which can be a repo whose PR added a file
 # by that name.
-mkdir -p "$WORK/bare"; printf '#!/usr/bin/env bash\necho PWNED\n' > "$WORK/bare/opencode"; chmod +x "$WORK/bare/opencode"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/bare" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" PR_RELAY_OPENCODE_BIN=opencode \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+mkdir -p "$WORK/bare"
+printf '#!/usr/bin/env bash\necho PWNED\n' >"$WORK/bare/opencode"
+chmod +x "$WORK/bare/opencode"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/bare" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" PR_RELAY_OPENCODE_BIN=opencode \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] bare override not on PATH is rejected, not read from cwd"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] bare override fell back to ./opencode"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] bare override not on PATH is rejected, not read from cwd"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] bare override fell back to ./opencode"
+  FAIL=$((FAIL + 1))
+fi
 
 # A PATH containing "." makes `command -v opencode` resolve a file from the repo
 # being reviewed. Executing it precedes every OpenCode-level defence, so implicit
@@ -1093,148 +1410,245 @@ else echo "  FAIL [got $rc, want 2] bare override fell back to ./opencode"; FAIL
 # A REAL git worktree: the guard only applies inside one, so a bare directory
 # would no longer exercise the threat it exists for.
 mkdir -p "$WORK/dotpath"
-( cd "$WORK/dotpath" && git init -q . && git config user.email t@t && git config user.name t ) >/dev/null 2>&1
-printf '#!/usr/bin/env bash\necho PWNED\n' > "$WORK/dotpath/opencode"; chmod +x "$WORK/dotpath/opencode"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+(cd "$WORK/dotpath" && git init -q . && git config user.email t@t && git config user.name t) >/dev/null 2>&1
+printf '#!/usr/bin/env bash\necho PWNED\n' >"$WORK/dotpath/opencode"
+chmod +x "$WORK/dotpath/opencode"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] a repo-local opencode on PATH is refused"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] ran an opencode from the reviewed checkout"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] a repo-local opencode on PATH is refused"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] ran an opencode from the reviewed checkout"
+  FAIL=$((FAIL + 1))
+fi
 
 # Same threat, reached through a SYMLINK to the worktree: git reports a physical
 # toplevel while $PWD stays logical, so a prefix comparison of the two misses.
 ln -sfn "$WORK/dotpath" "$WORK/dotlink"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotlink" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotlink" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] repo-local opencode refused through a symlinked worktree"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] symlinked worktree bypassed the containment guard"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] repo-local opencode refused through a symlinked worktree"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] symlinked worktree bypassed the containment guard"
+  FAIL=$((FAIL + 1))
+fi
 
 # A BARE override is a PATH lookup, not a trusted path, so it must get the same
 # containment check — otherwise setting PR_RELAY_OPENCODE_BIN=opencode with "." on
 # PATH walks straight past the guard.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" PR_RELAY_OPENCODE_BIN=opencode \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" PR_RELAY_OPENCODE_BIN=opencode \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] bare override is PATH-resolved and still contained"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] bare override bypassed the containment guard"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] bare override is PATH-resolved and still contained"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] bare override bypassed the containment guard"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...while an explicit PATH-ful override outside the repo remains usable.
-BINOUT="$WORK/binout"; make_strict_opencode "$BINOUT"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
-( cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_OPENCODE_BIN="$BINOUT/opencode" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+BINOUT="$WORK/binout"
+make_strict_opencode "$BINOUT"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+oc_reset
+(cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_OPENCODE_BIN="$BINOUT/opencode" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then echo "  ok   [0] explicit path override outside the repo still runs"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] explicit path override was wrongly refused"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
+  echo "  ok   [0] explicit path override outside the repo still runs"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] explicit path override was wrongly refused"
+  FAIL=$((FAIL + 1))
+fi
 
 # A PATH entry in a TRUSTED directory that symlinks INTO the checkout: the name
 # looks safe, the target is not. Containment must follow the chain.
 mkdir -p "$WORK/trustedbin"
-printf '#!/usr/bin/env bash\necho PWNED\n' > "$WORK/dotpath/malicious"; chmod +x "$WORK/dotpath/malicious"
+printf '#!/usr/bin/env bash\necho PWNED\n' >"$WORK/dotpath/malicious"
+chmod +x "$WORK/dotpath/malicious"
 ln -sf "$WORK/dotpath/malicious" "$WORK/trustedbin/opencode"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH="$WORK/trustedbin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH="$WORK/trustedbin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] a symlink into the repo is followed and refused"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] symlink chain bypassed containment"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] a symlink into the repo is followed and refused"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] symlink chain bypassed containment"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...and a legitimate symlinked install outside the repo is NOT refused.
 mkdir -p "$WORK/legit/real" "$WORK/legit/bin"
 make_strict_opencode "$WORK/legit/real"
 ln -sf "$WORK/legit/real/opencode" "$WORK/legit/bin/opencode"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
-( cd "$WORK/dotpath" && env PATH="$WORK/legit/bin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+oc_reset
+(cd "$WORK/dotpath" && env PATH="$WORK/legit/bin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then echo "  ok   [0] a symlinked install outside the repo still runs"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] legitimate symlinked install was refused"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
+  echo "  ok   [0] a symlinked install outside the repo still runs"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] legitimate symlinked install was refused"
+  FAIL=$((FAIL + 1))
+fi
 
 # TMPDIR inside the checkout would put the attachment dir — and so opencode's
 # working directory — back inside the repository, losing the isolation silently.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 mkdir -p "$WORK/dotpath/intmp"
-( cd "$WORK/dotpath" && env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    TMPDIR="$WORK/dotpath/intmp" GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+(cd "$WORK/dotpath" && env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  TMPDIR="$WORK/dotpath/intmp" GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] TMPDIR inside the repo is refused"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] reviewer would have run inside the repository"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] TMPDIR inside the repo is refused"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] reviewer would have run inside the repository"
+  FAIL=$((FAIL + 1))
+fi
 
 # PATH containing a directory inside the checkout compromises EVERY command the
 # relay runs — gh first of all — so it refuses to start rather than hardening one
 # command at a time.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH="$WORK/dotpath:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH="$WORK/dotpath:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] a PATH entry inside the repo refuses the whole run"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] ran with a repo-controlled PATH"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] a PATH entry inside the repo refuses the whole run"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] ran with a repo-controlled PATH"
+  FAIL=$((FAIL + 1))
+fi
 
 # An EMPTY PATH field means the current directory, and word splitting silently
 # drops a trailing one — so "PATH=/usr/bin:" looked clean while the shell resolved
 # commands from the checkout. Leading and doubled colons are the same field.
 for _p in "$BIN2:/usr/bin:/bin:" ":$BIN2:/usr/bin:/bin" "$BIN2::/usr/bin:/bin"; do
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  ( cd "$WORK/dotpath" && env PATH="$_p" XDG_CACHE_HOME="$WORK/cache" \
-      GH_SHA_COUNTER="$WORK/sha_counter" \
-      bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  (cd "$WORK/dotpath" && env PATH="$_p" XDG_CACHE_HOME="$WORK/cache" \
+    GH_SHA_COUNTER="$WORK/sha_counter" \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
   rc=$?
-  if [ "$rc" = 2 ]; then echo "  ok   [2] empty PATH field refused ($_p)"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want 2] empty PATH field slipped through ($_p)"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = 2 ]; then
+    echo "  ok   [2] empty PATH field refused ($_p)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want 2] empty PATH field slipped through ($_p)"
+    FAIL=$((FAIL + 1))
+  fi
 done
 unset _p
 
 # A PATH entry that does not exist YET must still be judged: the unsandboxed
 # reviewers can create it mid-round, after which commands resolve from the repo.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH="$WORK/dotpath/not/created/yet:$BIN2:/usr/bin:/bin" \
-    XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH="$WORK/dotpath/not/created/yet:$BIN2:/usr/bin:/bin" \
+  XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] a not-yet-existing PATH entry in the repo is refused"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] unresolved repo-local PATH entry was skipped"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] a not-yet-existing PATH entry in the repo is refused"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] unresolved repo-local PATH entry was skipped"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...while a nonexistent entry OUTSIDE the repo must not block anything.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH="/opt/definitely/not/here:$BIN2:/usr/bin:/bin" \
-    XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH="/opt/definitely/not/here:$BIN2:/usr/bin:/bin" \
+  XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 0 ]; then echo "  ok   [0] a nonexistent PATH entry outside the repo is fine"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 0] harmless missing PATH entry was rejected"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ]; then
+  echo "  ok   [0] a nonexistent PATH entry outside the repo is fine"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 0] harmless missing PATH entry was rejected"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...even when the repo also ships a hostile `git`, which is the bootstrap problem:
 # the guard cannot use a PATH-resolved command to decide whether PATH is safe.
-printf '#!/usr/bin/env bash\nexit 1\n' > "$WORK/dotpath/git"; chmod +x "$WORK/dotpath/git"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH="$WORK/dotpath:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+printf '#!/usr/bin/env bash\nexit 1\n' >"$WORK/dotpath/git"
+chmod +x "$WORK/dotpath/git"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH="$WORK/dotpath:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] refused even with a repo-controlled 'git' on PATH"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] a hostile git disabled the PATH guard"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] refused even with a repo-controlled 'git' on PATH"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] a hostile git disabled the PATH guard"
+  FAIL=$((FAIL + 1))
+fi
 rm -f "$WORK/dotpath/git"
 
 # ...and a "." entry, which is the same thing spelled differently.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH=".:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] a '.' PATH entry inside the repo is refused too"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] '.' on PATH slipped through"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] a '.' PATH entry inside the repo is refused too"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] '.' on PATH slipped through"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- a `.git` DIRECTORY that is not a repository must not become the root ----------------------
 # The guard above is only as good as the root it is given. relay_worktree_root used to accept any
@@ -1250,20 +1664,28 @@ else echo "  FAIL [got $rc, want 2] '.' on PATH slipped through"; FAIL=$((FAIL+1
 # alone; these assert the root itself, which is the point — an exit code cannot tell "inner repo"
 # from "no root at all" from "some other root".
 GITROOT_W="$(cd -P "$WORK" && pwd -P)"
-mkdir -p "$WORK/fakeroot/.git/info"                 # no HEAD: not a repository
-printf 'x\n' > "$WORK/fakeroot/.git/info/exclude"
+mkdir -p "$WORK/fakeroot/.git/info" # no HEAD: not a repository
+printf 'x\n' >"$WORK/fakeroot/.git/info/exclude"
 mkdir -p "$WORK/fakeroot/repo" "$WORK/fakeroot/bin"
-( cd "$WORK/fakeroot/repo" && relay_isolate_git "$WORK/fakeroot/repo" && git init -q . ) >/dev/null 2>&1
+(cd "$WORK/fakeroot/repo" && relay_isolate_git "$WORK/fakeroot/repo" && git init -q .) >/dev/null 2>&1
 
 # Sourced in a subshell and called directly: see the note above on why rc is not enough. `set -u`
 # because lib-opencode.sh documents that its callers run under it.
-git_root_from() ( cd "$1" 2>/dev/null || exit 1; set -u; . "$HERE/../lib-opencode.sh" 2>/dev/null; relay_worktree_root )
+git_root_from() (
+  cd "$1" 2>/dev/null || exit 1
+  set -u
+  . "$HERE/../lib-opencode.sh" 2>/dev/null
+  relay_worktree_root
+)
 
 got=$(git_root_from "$WORK/fakeroot/repo")
 if [ "$got" = "$GITROOT_W/fakeroot/repo" ]; then
-  echo "  ok   [-] a HEAD-less .git directory is not a root"; PASS=$((PASS+1))
+  echo "  ok   [-] a HEAD-less .git directory is not a root"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL a HEAD-less .git directory still inflated the root (got '$got')"; FAIL=$((FAIL+1)); fi
+  echo "  FAIL a HEAD-less .git directory still inflated the root (got '$got')"
+  FAIL=$((FAIL + 1))
+fi
 
 # `HEAD` must be a FILE. `-e` would accept a DIRECTORY (or a socket) named HEAD, and every other
 # case here would still pass — the negative fixture above has no HEAD at all, so it cannot tell
@@ -1272,9 +1694,12 @@ else
 mkdir -p "$WORK/badhead/.git/HEAD" "$WORK/badhead/sub"
 got=$(git_root_from "$WORK/badhead/sub")
 if [ -n "$got" ]; then
-  echo "  FAIL a .git whose HEAD is a directory was accepted as a root (got '$got')"; FAIL=$((FAIL+1))
+  echo "  FAIL a .git whose HEAD is a directory was accepted as a root (got '$got')"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] a .git whose HEAD is not a file is not a root"; PASS=$((PASS+1)); fi
+  echo "  ok   [-] a .git whose HEAD is not a file is not a root"
+  PASS=$((PASS + 1))
+fi
 
 # The end-to-end shape of the same bug, and it only reproduces FROM INSIDE the fake tree. An
 # earlier version of this case ran from $WORK/dotpath, whose ancestor walk never crosses
@@ -1285,39 +1710,56 @@ else
 # repository. Before the fix the root inflates to $WORK/fakeroot, the entry is inside it, and the
 # relay exits 2; after the fix the root is the repository itself and the run completes.
 mkdir -p "$WORK/fakeroot/inner"
-( cd "$WORK/fakeroot/inner" && relay_isolate_git "$WORK/fakeroot/inner" && git init -q . ) >/dev/null 2>&1
+(cd "$WORK/fakeroot/inner" && relay_isolate_git "$WORK/fakeroot/inner" && git init -q .) >/dev/null 2>&1
 cp "$BIN2/gh" "$WORK/fakeroot/bin/" 2>/dev/null || true
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/fakeroot/inner" && env PATH="$WORK/fakeroot/bin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/fakeroot/inner" && env PATH="$WORK/fakeroot/bin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 0 ]; then echo "  ok   [0] a PATH entry under a HEAD-less .git, outside the repo, is allowed"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 0] refused a PATH entry that is not in any repository"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ]; then
+  echo "  ok   [0] a PATH entry under a HEAD-less .git, outside the repo, is allowed"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 0] refused a PATH entry that is not in any repository"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...and the mirror image, so this fix cannot be mistaken for weakening the guard: an entry INSIDE
 # the repo is still refused. Named explicitly — at $WORK/fakeroot/bin it would just be the case
 # above with the opposite assertion.
 mkdir -p "$WORK/fakeroot/repo/bin"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/fakeroot/repo" && env PATH="$WORK/fakeroot/repo/bin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/fakeroot/repo" && env PATH="$WORK/fakeroot/repo/bin:$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] a PATH entry inside the repo is still refused"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] the fix weakened the containment guard"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] a PATH entry inside the repo is still refused"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] the fix weakened the containment guard"
+  FAIL=$((FAIL + 1))
+fi
 
 # A real repository is still found, including a fresh `git init` with no commits — the case that
 # rules out `objects/` or a commit as the marker. Its own fixture, OUTSIDE fakeroot: asserting this
 # on fakeroot/repo would repeat the case above with the same command and the same expectation, so
 # the two could only ever pass or fail together.
 mkdir -p "$WORK/freshinit"
-( cd "$WORK/freshinit" && relay_isolate_git "$WORK/freshinit" && git init -q . ) >/dev/null 2>&1
+(cd "$WORK/freshinit" && relay_isolate_git "$WORK/freshinit" && git init -q .) >/dev/null 2>&1
 got=$(git_root_from "$WORK/freshinit")
 if [ "$got" = "$GITROOT_W/freshinit" ]; then
-  echo "  ok   [-] a commit-less repository is still a root"; PASS=$((PASS+1))
+  echo "  ok   [-] a commit-less repository is still a root"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL a fresh git init was not recognised (got '$got')"; FAIL=$((FAIL+1)); fi
+  echo "  FAIL a fresh git init was not recognised (got '$got')"
+  FAIL=$((FAIL + 1))
+fi
 
 # A linked worktree still resolves — `.git` is a FILE there, which is why the predicate accepts
 # every non-directory unchanged. THE FIXTURE MUST HAVE NO ANCESTOR .git DIRECTORY: this project's
@@ -1328,13 +1770,16 @@ else
 # it an ancestor .git DIRECTORY, outermost-match would return the repository, and the assertion
 # would pass with the FILE branch deleted.
 mkdir -p "$WORK/wtsrc"
-( cd "$WORK/wtsrc" && relay_isolate_git "$WORK/wtsrc" && git init -q . \
-  && git commit -q --allow-empty -m x && git worktree add -q "$WORK/wtlinked" -b wt ) >/dev/null 2>&1
+(cd "$WORK/wtsrc" && relay_isolate_git "$WORK/wtsrc" && git init -q . &&
+  git commit -q --allow-empty -m x && git worktree add -q "$WORK/wtlinked" -b wt) >/dev/null 2>&1
 got=$(git_root_from "$WORK/wtlinked")
 if [ "$got" = "$GITROOT_W/wtlinked" ]; then
-  echo "  ok   [-] a linked worktree (.git is a FILE) is still a root"; PASS=$((PASS+1))
+  echo "  ok   [-] a linked worktree (.git is a FILE) is still a root"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL a linked worktree stopped being a root (got '$got')"; FAIL=$((FAIL+1)); fi
+  echo "  FAIL a linked worktree stopped being a root (got '$got')"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...and it stays a root even with the execute bit set on that FILE. This pins the `-d` line: drop
 # it and a non-executable .git file still passes (the `-x` test below is false for it, so it takes
@@ -1344,20 +1789,26 @@ chmod +x "$WORK/wtlinked/.git" 2>/dev/null || true
 got=$(git_root_from "$WORK/wtlinked")
 chmod 0644 "$WORK/wtlinked/.git" 2>/dev/null || true
 if [ "$got" = "$GITROOT_W/wtlinked" ]; then
-  echo "  ok   [-] an executable .git FILE is still a root"; PASS=$((PASS+1))
+  echo "  ok   [-] an executable .git FILE is still a root"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL the .git FILE branch depends on the execute bit (got '$got')"; FAIL=$((FAIL+1)); fi
+  echo "  FAIL the .git FILE branch depends on the execute bit (got '$got')"
+  FAIL=$((FAIL + 1))
+fi
 
 # The outermost-match rule still holds for REAL repositories: run from the inner one, the outer
 # wins. That rule is a deliberate conservative choice and this change must not relax it.
 mkdir -p "$WORK/outer/inner"
-( cd "$WORK/outer" && relay_isolate_git "$WORK/outer" && git init -q . ) >/dev/null 2>&1
-( cd "$WORK/outer/inner" && relay_isolate_git "$WORK/outer/inner" && git init -q . ) >/dev/null 2>&1
+(cd "$WORK/outer" && relay_isolate_git "$WORK/outer" && git init -q .) >/dev/null 2>&1
+(cd "$WORK/outer/inner" && relay_isolate_git "$WORK/outer/inner" && git init -q .) >/dev/null 2>&1
 got=$(git_root_from "$WORK/outer/inner")
 if [ "$got" = "$GITROOT_W/outer" ]; then
-  echo "  ok   [-] outermost-match still wins for nested real repositories"; PASS=$((PASS+1))
+  echo "  ok   [-] outermost-match still wins for nested real repositories"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL outermost-match regressed (got '$got')"; FAIL=$((FAIL+1)); fi
+  echo "  FAIL outermost-match regressed (got '$got')"
+  FAIL=$((FAIL + 1))
+fi
 
 # A `.git` SYMLINK TO A DIRECTORY must go through the -d + HEAD path. `-d` follows symlinks, so
 # this works — but only while the predicate is a branch chain. An implementer "simplifying" it
@@ -1365,13 +1816,16 @@ else
 # DIRECTORY: a symlink to a gitdir-pointer FILE exits at the non-directory branch instead, which
 # is a different path through the helper.
 mkdir -p "$WORK/symgit/realgit" "$WORK/symgit/sub"
-printf 'ref: refs/heads/main\n' > "$WORK/symgit/realgit/HEAD"
+printf 'ref: refs/heads/main\n' >"$WORK/symgit/realgit/HEAD"
 ln -s realgit "$WORK/symgit/.git"
 got=$(git_root_from "$WORK/symgit/sub")
 if [ "$got" = "$GITROOT_W/symgit" ]; then
-  echo "  ok   [-] a .git symlinked to a directory with HEAD is a root"; PASS=$((PASS+1))
+  echo "  ok   [-] a .git symlinked to a directory with HEAD is a root"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL a symlinked .git directory was rejected (got '$got')"; FAIL=$((FAIL+1)); fi
+  echo "  FAIL a symlinked .git directory was rejected (got '$got')"
+  FAIL=$((FAIL + 1))
+fi
 
 # An UNSEARCHABLE .git directory is treated as a repository. Returning "not a root" here would be
 # the dangerous answer: with no root, relay_assert_path_outside_repo takes its `|| return 0` and
@@ -1384,16 +1838,20 @@ else
 # The fixture is a sibling and never $WORK/.git, or every later case inherits it as a root.
 if [ "$(id -u)" != 0 ]; then
   mkdir -p "$WORK/noperm/.git/info" "$WORK/noperm/sub"
-  printf 'x\n' > "$WORK/noperm/.git/info/exclude"          # contents BEFORE the chmod
+  printf 'x\n' >"$WORK/noperm/.git/info/exclude" # contents BEFORE the chmod
   chmod 000 "$WORK/noperm/.git"
   got=$(git_root_from "$WORK/noperm/sub")
-  chmod 0755 "$WORK/noperm/.git"                            # restore before anything can exit
+  chmod 0755 "$WORK/noperm/.git" # restore before anything can exit
   if [ "$got" = "$GITROOT_W/noperm" ]; then
-    echo "  ok   [-] an unsearchable .git directory is still treated as a root"; PASS=$((PASS+1))
+    echo "  ok   [-] an unsearchable .git directory is still treated as a root"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL an unsearchable .git turned the guard off (got '$got')"; FAIL=$((FAIL+1)); fi
+    echo "  FAIL an unsearchable .git turned the guard off (got '$got')"
+    FAIL=$((FAIL + 1))
+  fi
 else
-  echo "  ok   [-] unsearchable .git case skipped (running as root)"; PASS=$((PASS+1))
+  echo "  ok   [-] unsearchable .git case skipped (running as root)"
+  PASS=$((PASS + 1))
 fi
 
 # The SECOND call site: the walk stops before "/", so the filesystem root is checked separately
@@ -1401,38 +1859,60 @@ fi
 # bug at the largest blast radius there is. Creating /.git in CI is not on, so assert the predicate
 # directly; on any machine without a /.git this must be false.
 if [ ! -e /.git ]; then
-  if ( set -u; . "$HERE/../lib-opencode.sh" 2>/dev/null; relay_is_git_root "" ); then
-    echo "  FAIL relay_is_git_root claimed / is a root with no /.git present"; FAIL=$((FAIL+1))
+  if (
+    set -u
+    . "$HERE/../lib-opencode.sh" 2>/dev/null
+    relay_is_git_root ""
+  ); then
+    echo "  FAIL relay_is_git_root claimed / is a root with no /.git present"
+    FAIL=$((FAIL + 1))
   else
-    echo "  ok   [-] the predicate says / is not a root when /.git is absent"; PASS=$((PASS+1)); fi
+    echo "  ok   [-] the predicate says / is not a root when /.git is absent"
+    PASS=$((PASS + 1))
+  fi
   # ...and that relay_worktree_root REACHES it there. The assertion above only tests the helper:
   # put the old `[ -e "/.git" ]` back on the root line and it still passes on a machine with no
   # /.git. So override the helper to succeed ONLY for the empty argument — the root call site's
   # argument — and require the walk to report "/". A root line that does not call the helper
   # cannot produce that. (codex)
-  got=$( cd "$WORK" 2>/dev/null && set -u && . "$HERE/../lib-opencode.sh" 2>/dev/null
-         relay_is_git_root() { [ -z "$1" ]; }
-         relay_worktree_root )
+  got=$(
+    cd "$WORK" 2>/dev/null && set -u && . "$HERE/../lib-opencode.sh" 2>/dev/null
+    relay_is_git_root() { [ -z "$1" ]; }
+    relay_worktree_root
+  )
   if [ "$got" = "/" ]; then
-    echo "  ok   [-] the / call site goes through the predicate"; PASS=$((PASS+1))
+    echo "  ok   [-] the / call site goes through the predicate"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL the / call site does not use relay_is_git_root (got '$got')"; FAIL=$((FAIL+1)); fi
+    echo "  FAIL the / call site does not use relay_is_git_root (got '$got')"
+    FAIL=$((FAIL + 1))
+  fi
 else
-  echo "  ok   [-] / call site cases skipped (this machine has a /.git)"; PASS=$((PASS+1))
-  echo "  ok   [-] / call site predicate case skipped (this machine has a /.git)"; PASS=$((PASS+1))
+  echo "  ok   [-] / call site cases skipped (this machine has a /.git)"
+  PASS=$((PASS + 1))
+  echo "  ok   [-] / call site predicate case skipped (this machine has a /.git)"
+  PASS=$((PASS + 1))
 fi
 unset got GITROOT_W
 
 # A RELATIVE TMPDIR makes mktemp return relative paths, which then resolve against
 # the attachment dir once opencode_review cds into it.
 mkdir -p "$WORK/reltmp"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
-( cd "$WORK" && env PATH="$BIN:$PATH" TMPDIR="reltmp" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+oc_reset
+(cd "$WORK" && env PATH="$BIN:$PATH" TMPDIR="reltmp" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then echo "  ok   [0] a relative TMPDIR still produces a usable review"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] relative TMPDIR broke the attachment paths"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
+  echo "  ok   [0] a relative TMPDIR still produces a usable review"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] relative TMPDIR broke the attachment paths"
+  FAIL=$((FAIL + 1))
+fi
 # The path left the argv with `-f`, so absoluteness is no longer observable there.
 # It still MATTERS: opencode_review cds into the attach dir, so a relative mktemp
 # path would make the redirect miss. Assert the consequence instead — without this
@@ -1444,66 +1924,113 @@ oc_stdin "a relative TMPDIR still delivers the diff on stdin" has "+change"
 # CDPATH match outside the repo while the shell still resolves commands from the
 # repo-local one. The guard must not be foolable that way.
 mkdir -p "$WORK/decoy/bin" "$WORK/dotpath/bin"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env CDPATH="$WORK/decoy" PATH="bin:$BIN2:/usr/bin:/bin" \
-    XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env CDPATH="$WORK/decoy" PATH="bin:$BIN2:/usr/bin:/bin" \
+  XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] CDPATH cannot steer the PATH containment check"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] CDPATH redirected the guard away from the repo"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] CDPATH cannot steer the PATH containment check"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] CDPATH redirected the guard away from the repo"
+  FAIL=$((FAIL + 1))
+fi
 
 # An EXPLICIT override inside the repo is refused, not just warned about...
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-cp "$BIN/opencode" "$WORK/dotpath/oc-inrepo"; chmod +x "$WORK/dotpath/oc-inrepo"
-( cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" PR_RELAY_OPENCODE_BIN="$WORK/dotpath/oc-inrepo" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+cp "$BIN/opencode" "$WORK/dotpath/oc-inrepo"
+chmod +x "$WORK/dotpath/oc-inrepo"
+(cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" PR_RELAY_OPENCODE_BIN="$WORK/dotpath/oc-inrepo" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] an explicit in-repo override is refused"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] explicit in-repo override only warned"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] an explicit in-repo override is refused"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] explicit in-repo override only warned"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...unless the user deliberately opts in.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
-( cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
-    GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
-    PR_RELAY_OPENCODE_ALLOW_IN_REPO=1 PR_RELAY_OPENCODE_BIN="$WORK/dotpath/oc-inrepo" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1 )
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+oc_reset
+(cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+  GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" \
+  PR_RELAY_OPENCODE_ALLOW_IN_REPO=1 PR_RELAY_OPENCODE_BIN="$WORK/dotpath/oc-inrepo" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then echo "  ok   [0] PR_RELAY_OPENCODE_ALLOW_IN_REPO=1 opts back in"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] the documented opt-in did not work"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
+  echo "  ok   [0] PR_RELAY_OPENCODE_ALLOW_IN_REPO=1 opts back in"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] the documented opt-in did not work"
+  FAIL=$((FAIL + 1))
+fi
 
 # TMPDIR inside the checkout must be refused for EVERY run, not only ones that
 # select opencode: errf, the comment body and the reviewer output all use it, so a
 # crash would leave PR data sitting in the repository.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 mkdir -p "$WORK/dotpath/intmp2"
-( cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" TMPDIR="$WORK/dotpath/intmp2" \
-    XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+(cd "$WORK/dotpath" && env PATH="$BIN2:/usr/bin:/bin" TMPDIR="$WORK/dotpath/intmp2" \
+  XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] TMPDIR in the repo is refused even without opencode"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] temp files would have landed in the repository"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] TMPDIR in the repo is refused even without opencode"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] temp files would have landed in the repository"
+  FAIL=$((FAIL + 1))
+fi
 
 # ".." through a SYMLINK: plain `cd` resolves it logically, so "link/../x" looks
 # like it lives beside the link when physically it lives inside the repo.
-mkdir -p "$WORK/dotpath/sub"; ln -sfn "$WORK/dotpath/sub" "$WORK/symlnk"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$WORK/dotpath" && env PATH="$WORK/symlnk/../future-bin:$BIN2:/usr/bin:/bin" \
-    XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1 )
+mkdir -p "$WORK/dotpath/sub"
+ln -sfn "$WORK/dotpath/sub" "$WORK/symlnk"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$WORK/dotpath" && env PATH="$WORK/symlnk/../future-bin:$BIN2:/usr/bin:/bin" \
+  XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1)
 rc=$?
-if [ "$rc" = 2 ]; then echo "  ok   [2] '..' through a symlink is resolved physically"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 2] logical '..' let a repo-local PATH entry through"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 2 ]; then
+  echo "  ok   [2] '..' through a symlink is resolved physically"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 2] logical '..' let a repo-local PATH entry through"
+  FAIL=$((FAIL + 1))
+fi
 
 # PR_RELAY_OPENCODE_BIN wins over both PATH and the stock location.
-BIN6="$WORK/bin6"; make_strict_opencode "$BIN6"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; oc_reset
+BIN6="$WORK/bin6"
+make_strict_opencode "$BIN6"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+oc_reset
 env PATH="$BIN5:/usr/bin:/bin" HOME="$FAKEHOME" XDG_CACHE_HOME="$WORK/cache" \
   GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_OPENCODE_BIN="$BIN6/opencode" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1
 rc=$?
-if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then echo "  ok   [0] PR_RELAY_OPENCODE_BIN override honoured"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] PR_RELAY_OPENCODE_BIN override ignored"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
+  echo "  ok   [0] PR_RELAY_OPENCODE_BIN override honoured"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] PR_RELAY_OPENCODE_BIN override ignored"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- review-local: same opencode contract ------------------------------------
 # review-local is a separate script that duplicates the opencode invocation, so it
@@ -1511,49 +2038,71 @@ else echo "  FAIL [got $rc] PR_RELAY_OPENCODE_BIN override ignored"; FAIL=$((FAI
 # which is exactly how the two fall out of sync.
 RL="$HERE/../review-local"
 if [ -f "$RL" ]; then
-  RLREPO="$WORK/rlrepo"; mkdir -p "$RLREPO"
+  RLREPO="$WORK/rlrepo"
+  mkdir -p "$RLREPO"
   (
     cd "$RLREPO" || exit 1
     git init -q . 2>/dev/null
-    git config user.email t@t; git config user.name t
-    echo base > f.txt; git add f.txt; git commit -qm base
+    git config user.email t@t
+    git config user.name t
+    echo base >f.txt
+    git add f.txt
+    git commit -qm base
     git branch -M mainline
     git checkout -qb feature
-    echo changed > f.txt; git add f.txt; git commit -qm change
+    echo changed >f.txt
+    git add f.txt
+    git commit -qm change
   ) >/dev/null 2>&1
   oc_reset
-  rlout=$( cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_OPENCODE_MODEL=oc-pin-1 \
-      bash "$RL" --base mainline --reviewers opencode 2>/dev/null )
+  rlout=$(cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" PR_RELAY_OPENCODE_MODEL=oc-pin-1 \
+    bash "$RL" --base mainline --reviewers opencode 2>/dev/null)
   rc=$?
   # review-local prints the same dispatch line as the relay, from the same helper.
-  if grep -qF -- '→ opencode reviewing… (model=oc-pin-1)' <<< "$rlout"; then
-    echo "  ok   [-] review-local's dispatch line shows the resolved model"; PASS=$((PASS+1))
-  else echo "  FAIL review-local dispatch line lacks the pin: $(grep 'reviewing' <<< "$rlout")"; FAIL=$((FAIL+1)); fi
-  if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
-    echo "  ok   [0] review-local dispatches opencode"; PASS=$((PASS+1))
+  if grep -qF -- '→ opencode reviewing… (model=oc-pin-1)' <<<"$rlout"; then
+    echo "  ok   [-] review-local's dispatch line shows the resolved model"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL [got $rc] review-local did not dispatch opencode"; FAIL=$((FAIL+1))
+    echo "  FAIL review-local dispatch line lacks the pin: $(grep 'reviewing' <<<"$rlout")"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ "$rc" = 0 ] && [ -s "$OC_ARGV" ]; then
+    echo "  ok   [0] review-local dispatches opencode"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc] review-local did not dispatch opencode"
+    FAIL=$((FAIL + 1))
   fi
   rl_assert() { # rl_assert <desc> <has|hasnt> <pattern> <file>
     local desc="$1" mode="$2" pat="$3" file="$4" got
     got="$(cat "$file" 2>/dev/null || true)"
     case "$mode" in
-      has)   if grep -q -- "$pat" <<< "$got"; then echo "  ok   [-] $desc"; PASS=$((PASS+1));
-             else echo "  FAIL $desc"; FAIL=$((FAIL+1)); fi;;
-      hasnt) if grep -q -- "$pat" <<< "$got"; then echo "  FAIL $desc"; FAIL=$((FAIL+1));
-             else echo "  ok   [-] $desc"; PASS=$((PASS+1)); fi;;
+      has) if grep -q -- "$pat" <<<"$got"; then
+        echo "  ok   [-] $desc"
+        PASS=$((PASS + 1))
+      else
+        echo "  FAIL $desc"
+        FAIL=$((FAIL + 1))
+      fi ;;
+      hasnt) if grep -q -- "$pat" <<<"$got"; then
+        echo "  FAIL $desc"
+        FAIL=$((FAIL + 1))
+      else
+        echo "  ok   [-] $desc"
+        PASS=$((PASS + 1))
+      fi ;;
     esac
   }
-  rl_assert "review-local: relay's own agent"   has   "--agent pr-review-relay-ro" "$OC_ARGV"
-  rl_assert "review-local: --pure"              has   "--pure"           "$OC_ARGV"
-  rl_assert "review-local: no -f attachment"    hasnt " -f "             "$OC_ARGV"
-  rl_assert "review-local: no legacy flag"      hasnt "--dangerously-skip-permissions" "$OC_ARGV"
+  rl_assert "review-local: relay's own agent" has "--agent pr-review-relay-ro" "$OC_ARGV"
+  rl_assert "review-local: --pure" has "--pure" "$OC_ARGV"
+  rl_assert "review-local: no -f attachment" hasnt " -f " "$OC_ARGV"
+  rl_assert "review-local: no legacy flag" hasnt "--dangerously-skip-permissions" "$OC_ARGV"
   rl_assert "review-local: says the diff is appended" has "APPENDED BELOW" "$OC_ARGV"
   # The two callers have drifted before, so pin the delivery here too and not only
   # on the relay side.
   rl_assert "review-local: delivers the diff on stdin" has "changed" "$OC_ARGV.stdin"
-  rl_assert "review-local: default-deny policy" has   '"\*":"deny"'     "$OC_ARGV.cfg"
-  rl_assert "review-local: never allows bash"   hasnt '"bash":"allow"'  "$OC_ARGV.cfg"
+  rl_assert "review-local: default-deny policy" has '"\*":"deny"' "$OC_ARGV.cfg"
+  rl_assert "review-local: never allows bash" hasnt '"bash":"allow"' "$OC_ARGV.cfg"
   rl_assert "review-local: defines its own agent" has '"pr-review-relay-ro"' "$OC_ARGV.cfg"
 
   # The same gate, the other caller. review-local posts nowhere, so its stdout banner
@@ -1565,49 +2114,61 @@ if [ -f "$RL" ]; then
   # Streams captured SEPARATELY. Merging them with 2>&1 cannot prove the documented
   # rule — a rejected body goes to stderr and never to stdout, which is the channel
   # the launching agent reads as the review.
-  _rlnr=$( cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" NONREVIEW=claude \
-      bash "$RL" --base mainline --reviewers claude 2>"$WORK/rl_err.log" )
+  _rlnr=$(cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" NONREVIEW=claude \
+    bash "$RL" --base mainline --reviewers claude 2>"$WORK/rl_err.log")
   _rlnr_rc=$?
   _rlnr_err=$(cat "$WORK/rl_err.log")
   # Exit 3, not merely non-zero: 1 and 2 are usage errors and 4 is a loop cap, so
   # "non-zero" would pass for three wrong reasons.
   if [ "$_rlnr_rc" = 3 ]; then
-    echo "  ok   [3] review-local fails on a non-review"; PASS=$((PASS+1))
+    echo "  ok   [3] review-local fails on a non-review"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL [got $_rlnr_rc, want 3] review-local exit code on a non-review"; FAIL=$((FAIL+1))
+    echo "  FAIL [got $_rlnr_rc, want 3] review-local exit code on a non-review"
+    FAIL=$((FAIL + 1))
   fi
-  if ! grep -q 'Reading the rest of the diff' <<< "$_rlnr"; then
-    echo "  ok   [-] review-local keeps the rejected body off stdout"; PASS=$((PASS+1))
+  if ! grep -q 'Reading the rest of the diff' <<<"$_rlnr"; then
+    echo "  ok   [-] review-local keeps the rejected body off stdout"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL review-local put the rejected body on stdout"; FAIL=$((FAIL+1))
+    echo "  FAIL review-local put the rejected body on stdout"
+    FAIL=$((FAIL + 1))
   fi
-  if ! grep -q '========== Claude review ==========' <<< "$_rlnr"; then
-    echo "  ok   [-] review-local does not print a non-review under the review banner"; PASS=$((PASS+1))
+  if ! grep -q '========== Claude review ==========' <<<"$_rlnr"; then
+    echo "  ok   [-] review-local does not print a non-review under the review banner"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL review-local printed a non-review as a review"; FAIL=$((FAIL+1))
+    echo "  FAIL review-local printed a non-review as a review"
+    FAIL=$((FAIL + 1))
   fi
-  if grep -q 'not a review' <<< "$_rlnr_err"; then
-    echo "  ok   [-] review-local says why it rejected the body"; PASS=$((PASS+1))
+  if grep -q 'not a review' <<<"$_rlnr_err"; then
+    echo "  ok   [-] review-local says why it rejected the body"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL review-local rejected silently"; FAIL=$((FAIL+1))
+    echo "  FAIL review-local rejected silently"
+    FAIL=$((FAIL + 1))
   fi
   # stderr IS the delivery for this caller — it posts nowhere — so the body has to be
   # visible there, or the gate deletes the evidence it rejected.
-  if grep -q 'Reading the rest of the diff' <<< "$_rlnr_err"; then
-    echo "  ok   [-] review-local shows the rejected body on stderr"; PASS=$((PASS+1))
+  if grep -q 'Reading the rest of the diff' <<<"$_rlnr_err"; then
+    echo "  ok   [-] review-local shows the rejected body on stderr"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL review-local swallowed the rejected body"; FAIL=$((FAIL+1))
+    echo "  FAIL review-local swallowed the rejected body"
+    FAIL=$((FAIL + 1))
   fi
   # Recovered body B, end to end, on THIS caller. The relay side pins it; review-local
   # did not, so a caller that wired the marked-stall path wrong kept the suite green.
-  _rlb=$( cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" NONREVIEW_STALL=claude \
-      bash "$RL" --base mainline --reviewers claude 2>"$WORK/rl_err_b.log" )
+  _rlb=$(cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" NONREVIEW_STALL=claude \
+    bash "$RL" --base mainline --reviewers claude 2>"$WORK/rl_err_b.log")
   _rlb_rc=$?
-  if [ "$_rlb_rc" = 3 ] && grep -q 'still reading' "$WORK/rl_err_b.log" \
-     && ! grep -q '========== Claude review ==========' <<< "$_rlb"; then
-    echo "  ok   [3] review-local rejects a stall that names Blocker"; PASS=$((PASS+1))
+  if [ "$_rlb_rc" = 3 ] && grep -q 'still reading' "$WORK/rl_err_b.log" &&
+    ! grep -q '========== Claude review ==========' <<<"$_rlb"; then
+    echo "  ok   [3] review-local rejects a stall that names Blocker"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL [got $_rlb_rc] review-local mishandled a marked stall"; FAIL=$((FAIL+1))
+    echo "  FAIL [got $_rlb_rc] review-local mishandled a marked stall"
+    FAIL=$((FAIL + 1))
   fi
   # From here on the runs must NOT dispatch opencode, so clear the recorded files:
   # asserting on them afterwards would be reading the successful run above.
@@ -1617,36 +2178,59 @@ if [ -f "$RL" ]; then
   # skip and exits 0, which reads as "reviewed".
   # HOME must be the fake one: on a machine that really has ~/.opencode/bin/opencode
   # the stock-path branch would resolve it and this test would run the real agent.
-  ( cd "$RLREPO" && env -u PR_RELAY_OPENCODE_BIN HOME="$WORK/nohome" PATH="$BIN5:/usr/bin:/bin" \
-      bash "$RL" --base mainline --reviewers opencode >/dev/null 2>&1 )
+  (cd "$RLREPO" && env -u PR_RELAY_OPENCODE_BIN HOME="$WORK/nohome" PATH="$BIN5:/usr/bin:/bin" \
+    bash "$RL" --base mainline --reviewers opencode >/dev/null 2>&1)
   rc=$?
-  if [ "$rc" = 3 ]; then echo "  ok   [3] review-local fails on an explicitly requested missing reviewer"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want 3] review-local silently skipped a missing reviewer"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = 3 ]; then
+    echo "  ok   [3] review-local fails on an explicitly requested missing reviewer"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want 3] review-local silently skipped a missing reviewer"
+    FAIL=$((FAIL + 1))
+  fi
   # The missing-reviewer run must not have invoked anything at all.
-  if [ ! -s "$OC_ARGV" ]; then echo "  ok   [-] review-local: nothing dispatched when the CLI is absent"; PASS=$((PASS+1))
-  else echo "  FAIL review-local dispatched a reviewer it reported as missing"; FAIL=$((FAIL+1)); fi
+  if [ ! -s "$OC_ARGV" ]; then
+    echo "  ok   [-] review-local: nothing dispatched when the CLI is absent"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL review-local dispatched a reviewer it reported as missing"
+    FAIL=$((FAIL + 1))
+  fi
   # Zero dispatched reviewers must not read as a clean review.
-  ( cd "$RLREPO" && env HOME="$WORK/nohome" PATH="/usr/bin:/bin" bash "$RL" --base mainline >/dev/null 2>&1 )
+  (cd "$RLREPO" && env HOME="$WORK/nohome" PATH="/usr/bin:/bin" bash "$RL" --base mainline >/dev/null 2>&1)
   rc=$?
-  if [ "$rc" = 3 ]; then echo "  ok   [3] review-local fails when no reviewer ran"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want 3] review-local reported success with zero reviewers"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = 3 ]; then
+    echo "  ok   [3] review-local fails when no reviewer ran"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want 3] review-local reported success with zero reviewers"
+    FAIL=$((FAIL + 1))
+  fi
   # Duplicates are deduped, and empty items tolerated, like the relay.
   oc_reset
-  ( cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" \
-      bash "$RL" --base mainline --reviewers 'opencode,,opencode' >/dev/null 2>&1 )
+  (cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" \
+    bash "$RL" --base mainline --reviewers 'opencode,,opencode' >/dev/null 2>&1)
   rc=$?
-  if [ "$rc" = 0 ]; then echo "  ok   [0] review-local dedupes and tolerates empty items"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want 0] duplicate/empty reviewer list mishandled"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = 0 ]; then
+    echo "  ok   [0] review-local dedupes and tolerates empty items"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want 0] duplicate/empty reviewer list mishandled"
+    FAIL=$((FAIL + 1))
+  fi
   # The same isolation the relay is asserted on: project config off, and launched
   # outside the repo. Checking only one call site is how the two drift.
   rl_assert "review-local: disables project config" has "1" "$OC_ARGV.projcfg"
   if [ -s "$OC_ARGV.cwd" ] && [ "$(cat "$OC_ARGV.cwd")" != "$RLREPO" ]; then
-    echo "  ok   [-] review-local: opencode is not launched inside the repo"; PASS=$((PASS+1))
+    echo "  ok   [-] review-local: opencode is not launched inside the repo"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL review-local: opencode ran in the repo cwd"; FAIL=$((FAIL+1))
+    echo "  FAIL review-local: opencode ran in the repo cwd"
+    FAIL=$((FAIL + 1))
   fi
 else
-  echo "  ok   [-] review-local not present (skip)"; PASS=$((PASS+1))
+  echo "  ok   [-] review-local not present (skip)"
+  PASS=$((PASS + 1))
 fi
 
 # --- qwen invocation contract ------------------------------------------------
@@ -1659,7 +2243,7 @@ fi
 QW_ARGV="$WORK/qw_argv"
 make_strict_qwen() { # $1 = dir to install the stub into
   mkdir -p "$1"
-  cat > "$1/qwen" <<'QW'
+  cat >"$1/qwen" <<'QW'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "${QW_ARGV_FILE:?}"
 case " $* " in *" --safe-mode "*) ;; *) echo "missing --safe-mode: $*" >&2; exit 64;; esac
@@ -1674,26 +2258,47 @@ QW
 # and claude as the co-reviewer). node must be reachable or the comment wrapper
 # fails and the relay returns 3 — green locally, red on CI (setup-node installs
 # outside /usr/bin). Symlink it in, as the opencode off-PATH test does.
-BINQW="$WORK/binqw"; mkdir -p "$BINQW"
+BINQW="$WORK/binqw"
+mkdir -p "$BINQW"
 for t in gh claude; do ln -sf "$BIN/$t" "$BINQW/$t"; done
 ln -sf "$(command -v node)" "$BINQW/node" 2>/dev/null
 make_strict_qwen "$BINQW"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter" "$QW_ARGV"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter" "$QW_ARGV"
 env PATH="$BINQW:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   QW_ARGV_FILE="$QW_ARGV" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,qwen >/dev/null 2>&1
 rc=$?
-if [ "$rc" = 0 ] && [ -s "$QW_ARGV" ]; then echo "  ok   [0] qwen dispatched with the enforced flags"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] qwen argv contract not met (argv empty=$([ -s "$QW_ARGV" ] || echo yes))"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && [ -s "$QW_ARGV" ]; then
+  echo "  ok   [0] qwen dispatched with the enforced flags"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] qwen argv contract not met (argv empty=$([ -s "$QW_ARGV" ] || echo yes))"
+  FAIL=$((FAIL + 1))
+fi
 qw_assert() { # <desc> <has|hasnt> <pattern>
-  local desc="$1" mode="$2" pat="$3" got; got="$(cat "$QW_ARGV" 2>/dev/null || true)"
+  local desc="$1" mode="$2" pat="$3" got
+  got="$(cat "$QW_ARGV" 2>/dev/null || true)"
   case "$mode" in
-    has)   if grep -q -- "$pat" <<< "$got"; then echo "  ok   [-] $desc"; PASS=$((PASS+1)); else echo "  FAIL $desc (argv: $got)"; FAIL=$((FAIL+1)); fi;;
-    hasnt) if grep -q -- "$pat" <<< "$got"; then echo "  FAIL $desc (argv: $got)"; FAIL=$((FAIL+1)); else echo "  ok   [-] $desc"; PASS=$((PASS+1)); fi;;
+    has) if grep -q -- "$pat" <<<"$got"; then
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL $desc (argv: $got)"
+      FAIL=$((FAIL + 1))
+    fi ;;
+    hasnt) if grep -q -- "$pat" <<<"$got"; then
+      echo "  FAIL $desc (argv: $got)"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  ok   [-] $desc"
+      PASS=$((PASS + 1))
+    fi ;;
   esac
 }
 qw_assert "disables checkout customizations with --safe-mode" has "--safe-mode"
-qw_assert "keeps gh via --approval-mode yolo (not plan)"      has "--approval-mode yolo"
+qw_assert "keeps gh via --approval-mode yolo (not plan)" has "--approval-mode yolo"
 qw_assert "never runs in the unconfined default approval mode" hasnt "--approval-mode default"
 
 # The same qwen contract for review-local: the two scripts drift exactly when a
@@ -1703,31 +2308,39 @@ if [ -f "$RL" ]; then
   # Reuse the RLREPO git fixture built in the review-local block above; rebuild it
   # if that block was skipped (review-local absent → we wouldn't be here anyway).
   if [ ! -d "${RLREPO:-}/.git" ]; then
-    RLREPO="$WORK/rlrepo"; mkdir -p "$RLREPO"
-    ( cd "$RLREPO" && git init -q . && git config user.email t@t && git config user.name t \
-        && echo base > f.txt && git add f.txt && git commit -qm base && git branch -M mainline \
-        && git checkout -qb feature && echo changed > f.txt && git add f.txt && git commit -qm change ) >/dev/null 2>&1
+    RLREPO="$WORK/rlrepo"
+    mkdir -p "$RLREPO"
+    (cd "$RLREPO" && git init -q . && git config user.email t@t && git config user.name t &&
+      echo base >f.txt && git add f.txt && git commit -qm base && git branch -M mainline &&
+      git checkout -qb feature && echo changed >f.txt && git add f.txt && git commit -qm change) >/dev/null 2>&1
   fi
   rm -f "$QW_ARGV"
-  ( cd "$RLREPO" && env PATH="$BINQW:/usr/bin:/bin" QW_ARGV_FILE="$QW_ARGV" \
-      bash "$RL" --base mainline --reviewers qwen >/dev/null 2>&1 )
+  (cd "$RLREPO" && env PATH="$BINQW:/usr/bin:/bin" QW_ARGV_FILE="$QW_ARGV" \
+    bash "$RL" --base mainline --reviewers qwen >/dev/null 2>&1)
   rc=$?
-  if [ "$rc" = 0 ] && [ -s "$QW_ARGV" ]; then echo "  ok   [0] review-local dispatches qwen with the enforced flags"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc] review-local qwen argv contract not met (argv empty=$([ -s "$QW_ARGV" ] || echo yes))"; FAIL=$((FAIL+1)); fi
-  qw_assert "review-local: qwen keeps --safe-mode"          has "--safe-mode"
+  if [ "$rc" = 0 ] && [ -s "$QW_ARGV" ]; then
+    echo "  ok   [0] review-local dispatches qwen with the enforced flags"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc] review-local qwen argv contract not met (argv empty=$([ -s "$QW_ARGV" ] || echo yes))"
+    FAIL=$((FAIL + 1))
+  fi
+  qw_assert "review-local: qwen keeps --safe-mode" has "--safe-mode"
   qw_assert "review-local: qwen keeps --approval-mode yolo" has "--approval-mode yolo"
 
   # review-local duplicates the antigravity invocation in its own review_with, so it needs its
   # own argv assertion: without one the two call sites drift silently, which is exactly how
   # review-local kept the defective command line while pr-review-relay was being fixed.
   rm -f "$WORK/argv.log"
-  ( cd "$RLREPO" && env PATH="$BIN:/usr/bin:/bin" ARGV_LOG="$WORK/argv.log" \
-      PR_RELAY_AGENT_TIMEOUT=900 bash "$RL" --base mainline --reviewers antigravity >/dev/null 2>&1 )
+  (cd "$RLREPO" && env PATH="$BIN:/usr/bin:/bin" ARGV_LOG="$WORK/argv.log" \
+    PR_RELAY_AGENT_TIMEOUT=900 bash "$RL" --base mainline --reviewers antigravity >/dev/null 2>&1)
   rl_agy_argv="$(grep '^agy ' "$WORK/argv.log" 2>/dev/null || true)"
-  if grep -q -- '--print-timeout 900s' <<< "$rl_agy_argv"; then
-    echo "  ok   [-] review-local gives agy the same --print-timeout"; PASS=$((PASS+1))
+  if grep -q -- '--print-timeout 900s' <<<"$rl_agy_argv"; then
+    echo "  ok   [-] review-local gives agy the same --print-timeout"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL review-local agy argv lacks '--print-timeout 900s': ${rl_agy_argv:-<no agy invocation recorded>}"; FAIL=$((FAIL+1))
+    echo "  FAIL review-local agy argv lacks '--print-timeout 900s': ${rl_agy_argv:-<no agy invocation recorded>}"
+    FAIL=$((FAIL + 1))
   fi
 fi
 
@@ -1739,10 +2352,11 @@ fi
 # reviewer's prompt tells it to read locally; a dirty or non-matching tree must fall back.
 # grep uses `<<<` not `printf | grep -q`: under pipefail a matched grep -q makes printf take
 # SIGPIPE and the pipeline reports 141, which reads as a failed assertion (see file header).
-LREPO="$WORK/localrepo"; git init -q -b main "$LREPO"
-( cd "$LREPO" && git config user.email t@t && git config user.name t \
-    && echo base > file.txt && git add file.txt && git commit -qm base \
-    && git checkout -qb feature && echo change >> file.txt && git add file.txt && git commit -qm feat )
+LREPO="$WORK/localrepo"
+git init -q -b main "$LREPO"
+(cd "$LREPO" && git config user.email t@t && git config user.name t &&
+  echo base >file.txt && git add file.txt && git commit -qm base &&
+  git checkout -qb feature && echo change >>file.txt && git add file.txt && git commit -qm feat)
 LHEAD=$(git -C "$LREPO" rev-parse HEAD)
 ln -sf "$(command -v node)" "$BIN/node" 2>/dev/null
 # reviewer stub that echoes the prompt it received, so we can see what it was told to do.
@@ -1750,95 +2364,135 @@ ln -sf "$(command -v node)" "$BIN/node" 2>/dev/null
 # the non-review gate rejects (it strips the prompt's own instruction sentences before
 # looking for a marker), so without it this stub fails the round and every assertion
 # below reads 3 instead of 0.
-printf '#!/usr/bin/env bash\nprintf "%%s" "$*"; cat\nprintf "\\nLGTM.\\n"\n' > "$BIN/claude"; chmod +x "$BIN/claude"
+printf '#!/usr/bin/env bash\nprintf "%%s" "$*"; cat\nprintf "\\nLGTM.\\n"\n' >"$BIN/claude"
+chmod +x "$BIN/claude"
 lc_run() { # sets $out/$rc; args: extra env assignments for the relay
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  out=$( cd "$LREPO" && env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-      "$@" bash "$RELAY" --pr 1 --author codex --reviewers claude 2>&1 ); rc=$?
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  out=$(cd "$LREPO" && env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+    "$@" bash "$RELAY" --pr 1 --author codex --reviewers claude 2>&1)
+  rc=$?
 }
 # clean checkout whose HEAD == the PR head → local-context reading, exit 0
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if [ "$rc" = 0 ] && grep -q 'reviewers read files locally' <<< "$out"; then
-  echo "  ok   [0] clean checkout at the PR head → reviewers read files locally"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc] local-context not engaged ($(grep -o 'reviewers [a-z ]*' <<< "$out" | head -1))"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ] && grep -q 'reviewers read files locally' <<<"$out"; then
+  echo "  ok   [0] clean checkout at the PR head → reviewers read files locally"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc] local-context not engaged ($(grep -o 'reviewers [a-z ]*' <<<"$out" | head -1))"
+  FAIL=$((FAIL + 1))
+fi
 # the reviewer's prompt must tell it the code is checked out here (and NOT to run gh itself)
-if grep -q 'CHECKED OUT in the current directory' <<< "$out"; then
-  echo "  ok   [-] the reviewer is told to read the local checkout"; PASS=$((PASS+1))
-else echo "  FAIL reviewer prompt did not point at the local checkout"; FAIL=$((FAIL+1)); fi
+if grep -q 'CHECKED OUT in the current directory' <<<"$out"; then
+  echo "  ok   [-] the reviewer is told to read the local checkout"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL reviewer prompt did not point at the local checkout"
+  FAIL=$((FAIL + 1))
+fi
 # a DIRTY worktree (matches HEAD but has uncommitted changes) must NOT go local — reviewers
 # would otherwise read files that aren't in the PR
-echo dirty >> "$LREPO/file.txt"
+echo dirty >>"$LREPO/file.txt"
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if grep -q 'reviewers fetch via gh' <<< "$out"; then
-  echo "  ok   [-] a dirty worktree falls back to gh (no local read)"; PASS=$((PASS+1))
-else echo "  FAIL dirty worktree still read locally"; FAIL=$((FAIL+1)); fi
-( cd "$LREPO" && git checkout -q -- file.txt )   # clean it back up
+if grep -q 'reviewers fetch via gh' <<<"$out"; then
+  echo "  ok   [-] a dirty worktree falls back to gh (no local read)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL dirty worktree still read locally"
+  FAIL=$((FAIL + 1))
+fi
+(cd "$LREPO" && git checkout -q -- file.txt) # clean it back up
 # a checkout whose HEAD does NOT match the PR head must fall back to gh
 lc_run GH_LOCAL_HEAD=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-if grep -q 'reviewers fetch via gh' <<< "$out"; then
-  echo "  ok   [-] a non-matching checkout falls back to gh"; PASS=$((PASS+1))
-else echo "  FAIL non-matching checkout did not fall back to gh"; FAIL=$((FAIL+1)); fi
+if grep -q 'reviewers fetch via gh' <<<"$out"; then
+  echo "  ok   [-] a non-matching checkout falls back to gh"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL non-matching checkout did not fall back to gh"
+  FAIL=$((FAIL + 1))
+fi
 # WHY it fell back has to be on screen. A silent downgrade still produces reviews, so nothing
 # connects the extra gh round-trips to the checkout you happened to be standing in — three PRs
 # of one app were reviewed that way in one session before anyone noticed.
 lc_run GH_LOCAL_HEAD=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-if grep -q 'local context off:' <<< "$out" && grep -q 'the PR head is deadbee' <<< "$out"; then
-  echo "  ok   [-] a non-matching checkout says so, and names both SHAs"; PASS=$((PASS+1))
-else echo "  FAIL fallback reason not reported ($(grep -o 'local context off:.*' <<< "$out" | head -1))"; FAIL=$((FAIL+1)); fi
+if grep -q 'local context off:' <<<"$out" && grep -q 'the PR head is deadbee' <<<"$out"; then
+  echo "  ok   [-] a non-matching checkout says so, and names both SHAs"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL fallback reason not reported ($(grep -o 'local context off:.*' <<<"$out" | head -1))"
+  FAIL=$((FAIL + 1))
+fi
 
 # ...and when a worktree IS on the PR head, name it: that is almost always where the caller meant
 # to be, and it is the difference between a diagnosis and an instruction.
 # Order matters: git refuses to put a branch in a second worktree while it is checked out here,
 # so this checkout has to move off `feature` BEFORE the worktree is created.
-( cd "$LREPO" && git checkout -q main )
+(cd "$LREPO" && git checkout -q main)
 git -C "$LREPO" worktree add -q "$WORK/lc-wt" feature
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if grep -q 'a worktree at' <<< "$out" && grep -q 'lc-wt' <<< "$out"; then
-  echo "  ok   [-] the worktree sitting on the PR head is named"; PASS=$((PASS+1))
-else echo "  FAIL worktree on the PR head not named ($(grep -o 'local context off:.*' <<< "$out" | head -1))"; FAIL=$((FAIL+1)); fi
+if grep -q 'a worktree at' <<<"$out" && grep -q 'lc-wt' <<<"$out"; then
+  echo "  ok   [-] the worktree sitting on the PR head is named"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL worktree on the PR head not named ($(grep -o 'local context off:.*' <<<"$out" | head -1))"
+  FAIL=$((FAIL + 1))
+fi
 # ...and back, in the order git allows: the worktree releases the branch, then this checkout can
 # take it again. Reversed, the checkout fails and every later case in this block runs on main.
 git -C "$LREPO" worktree remove --force "$WORK/lc-wt"
-( cd "$LREPO" && git checkout -q feature )
+(cd "$LREPO" && git checkout -q feature)
 
 # A worktree on the PR head that is DIRTY must not be advertised as the answer: running from it
 # lands in the same fallback by another road.
-( cd "$LREPO" && git checkout -q main )
+(cd "$LREPO" && git checkout -q main)
 git -C "$LREPO" worktree add -q "$WORK/lc-dirty-wt" feature
-echo scratch >> "$WORK/lc-dirty-wt/file.txt"
+echo scratch >>"$WORK/lc-dirty-wt/file.txt"
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if grep -q 'is on it but is dirty' <<< "$out"; then
-  echo "  ok   [-] a dirty worktree on the PR head is flagged, not recommended"; PASS=$((PASS+1))
-else echo "  FAIL dirty worktree advertised as usable ($(grep -o 'local context off:.*' <<< "$out" | head -1))"; FAIL=$((FAIL+1)); fi
+if grep -q 'is on it but is dirty' <<<"$out"; then
+  echo "  ok   [-] a dirty worktree on the PR head is flagged, not recommended"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL dirty worktree advertised as usable ($(grep -o 'local context off:.*' <<<"$out" | head -1))"
+  FAIL=$((FAIL + 1))
+fi
 git -C "$LREPO" worktree remove --force "$WORK/lc-dirty-wt"
-( cd "$LREPO" && git checkout -q feature )
+(cd "$LREPO" && git checkout -q feature)
 
 # ...and a worktree whose state cannot be read at all must say so rather than be recommended: an
 # errored `git status` leaves the same empty output a clean tree does, and reading that as clean
 # sends the caller somewhere that will fail them a second time.
-( cd "$LREPO" && git checkout -q main )
+(cd "$LREPO" && git checkout -q main)
 git -C "$LREPO" worktree add -q "$WORK/lc-gone-wt" feature
-rm -rf "$WORK/lc-gone-wt"          # the entry survives in git's metadata until pruned
+rm -rf "$WORK/lc-gone-wt" # the entry survives in git's metadata until pruned
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if grep -q 'its state could not be read' <<< "$out"; then
-  echo "  ok   [-] an unreadable worktree is reported, not recommended"; PASS=$((PASS+1))
-else echo "  FAIL unreadable worktree treated as usable ($(grep -o 'local context off:.*' <<< "$out" | head -1))"; FAIL=$((FAIL+1)); fi
+if grep -q 'its state could not be read' <<<"$out"; then
+  echo "  ok   [-] an unreadable worktree is reported, not recommended"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL unreadable worktree treated as usable ($(grep -o 'local context off:.*' <<<"$out" | head -1))"
+  FAIL=$((FAIL + 1))
+fi
 git -C "$LREPO" worktree prune
-( cd "$LREPO" && git checkout -q feature )
+(cd "$LREPO" && git checkout -q feature)
 
 # A CLEAN worktree wins over a dirty one that happens to come first: the message exists to save a
 # trip, and naming the dirty one while a usable one sits there costs exactly that trip.
-( cd "$LREPO" && git checkout -q main )
+(cd "$LREPO" && git checkout -q main)
 git -C "$LREPO" worktree add -q "$WORK/lc-wt-a" feature
 git -C "$LREPO" worktree add -q --detach "$WORK/lc-wt-b" feature
-echo scratch >> "$WORK/lc-wt-a/file.txt"          # the first one listed is the dirty one
+echo scratch >>"$WORK/lc-wt-a/file.txt" # the first one listed is the dirty one
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if grep -q 'lc-wt-b is on it; run from there' <<< "$out"; then
-  echo "  ok   [-] a clean worktree is preferred over a dirty one"; PASS=$((PASS+1))
-else echo "  FAIL dirty worktree named while a clean one existed ($(grep -o 'local context off:.*' <<< "$out" | head -1))"; FAIL=$((FAIL+1)); fi
+if grep -q 'lc-wt-b is on it; run from there' <<<"$out"; then
+  echo "  ok   [-] a clean worktree is preferred over a dirty one"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL dirty worktree named while a clean one existed ($(grep -o 'local context off:.*' <<<"$out" | head -1))"
+  FAIL=$((FAIL + 1))
+fi
 git -C "$LREPO" worktree remove --force "$WORK/lc-wt-a"
 git -C "$LREPO" worktree remove --force "$WORK/lc-wt-b"
-( cd "$LREPO" && git checkout -q feature )
+(cd "$LREPO" && git checkout -q feature)
 
 # grok raised this one as a live risk and it is already handled — so it gets a test rather than an
 # assurance. This script runs under `set -o pipefail`, so a failing `git worktree list` would make
@@ -1846,7 +2500,7 @@ git -C "$LREPO" worktree remove --force "$WORK/lc-wt-b"
 # abort inside the code whose only job is explaining a fallback.
 # The sed script goes through a variable: Bash 3.2 brace-expands "{/,/^}" inside a quoted $(...)
 # within double quotes, which hands sed two broken scripts and defines no function at all.
-_rsn_rc=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
+_rsn_rc=$(cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   set -eo pipefail
   HEAD_SHA=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
   _fns="/^local_context_reason() {/,/^}/p;/^worktrees_on_pr_head() {/,/^}/p;/^best_worktree_on_pr_head() {/,/^}/p"
@@ -1855,15 +2509,19 @@ _rsn_rc=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   export -f git 2>/dev/null || true
   reason=$(local_context_reason)
   echo ok
-' _ "$RELAY" 2>/dev/null )
+' _ "$RELAY" 2>/dev/null)
 if [ "$_rsn_rc" = ok ]; then
-  echo "  ok   [-] the helpers stay zero-status under set -e with pipefail"; PASS=$((PASS+1))
-else echo "  FAIL a failing git aborted local_context_reason under set -e"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] the helpers stay zero-status under set -e with pipefail"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL a failing git aborted local_context_reason under set -e"
+  FAIL=$((FAIL + 1))
+fi
 
 # The reason function must never return non-zero: the common case (wrong checkout, NO worktree on
 # the PR head) used to end on a failed test, which today only survives because the caller ignores
 # the status — an assignment under set -e would abort the run.
-_rsn_rc=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
+_rsn_rc=$(cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   set -e
   HEAD_SHA=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
   _fns="/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p"
@@ -1871,135 +2529,219 @@ _rsn_rc=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   reason=$(local_context_reason)
   echo "$reason" >/dev/null
   echo ok
-' _ "$RELAY" 2>/dev/null )
+' _ "$RELAY" 2>/dev/null)
 if [ "$_rsn_rc" = ok ]; then
-  echo "  ok   [-] the reason never returns non-zero (safe under set -e)"; PASS=$((PASS+1))
-else echo "  FAIL local_context_reason returned non-zero with no matching worktree"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] the reason never returns non-zero (safe under set -e)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL local_context_reason returned non-zero with no matching worktree"
+  FAIL=$((FAIL + 1))
+fi
 
 # Outside a git work tree it says that, rather than guessing about SHAs.
-_rsn=$( cd "$WORK" && env PATH="$BIN:$PATH" bash -c '
+_rsn=$(cd "$WORK" && env PATH="$BIN:$PATH" bash -c '
   HEAD_SHA=deadbeef
   _fns="/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p"
   eval "$(sed -n "$_fns" "$1")"
   local_context_reason
-' _ "$RELAY" 2>/dev/null )
+' _ "$RELAY" 2>/dev/null)
 case "$_rsn" in
-  *"not inside a git work tree"*) echo "  ok   [-] outside a repo, the reason says so"; PASS=$((PASS+1)) ;;
-  *) echo "  FAIL outside a repo the reason was: $_rsn"; FAIL=$((FAIL+1)) ;;
+  *"not inside a git work tree"*)
+    echo "  ok   [-] outside a repo, the reason says so"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "  FAIL outside a repo the reason was: $_rsn"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
 
 # With no PR head there is nothing to compare against, and the message must not print an empty SHA.
-_rsn=$( cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
+_rsn=$(cd "$LREPO" && env PATH="$BIN:$PATH" bash -c '
   HEAD_SHA=
   _fns="/^local_context_reason() {/,/^}/p;/^worktree_on_pr_head() {/,/^}/p"
   eval "$(sed -n "$_fns" "$1")"
   local_context_reason
-' _ "$RELAY" 2>/dev/null )
+' _ "$RELAY" 2>/dev/null)
 case "$_rsn" in
-  *"the PR head could not be read"*) echo "  ok   [-] an unreadable PR head says so, with no empty SHA"; PASS=$((PASS+1)) ;;
-  *) echo "  FAIL empty HEAD_SHA produced: $_rsn"; FAIL=$((FAIL+1)) ;;
+  *"the PR head could not be read"*)
+    echo "  ok   [-] an unreadable PR head says so, with no empty SHA"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "  FAIL empty HEAD_SHA produced: $_rsn"
+    FAIL=$((FAIL + 1))
+    ;;
 esac
 unset _rsn _rsn_rc
 
 # a dirty tree says THAT instead, and says how much — the other everyday cause.
-echo dirty >> "$LREPO/file.txt"
+echo dirty >>"$LREPO/file.txt"
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if grep -q 'the tree is dirty' <<< "$out"; then
-  echo "  ok   [-] a dirty tree names itself as the reason"; PASS=$((PASS+1))
-else echo "  FAIL dirty tree reason not reported"; FAIL=$((FAIL+1)); fi
-( cd "$LREPO" && git checkout -q -- file.txt )
+if grep -q 'the tree is dirty' <<<"$out"; then
+  echo "  ok   [-] a dirty tree names itself as the reason"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL dirty tree reason not reported"
+  FAIL=$((FAIL + 1))
+fi
+(cd "$LREPO" && git checkout -q -- file.txt)
 
 # and a clean run at the PR head must NOT print a reason at all.
 lc_run GH_LOCAL_HEAD="$LHEAD"
-if grep -q 'local context off:' <<< "$out"; then
-  echo "  FAIL a working local context still reported a reason"; FAIL=$((FAIL+1))
-else echo "  ok   [-] no reason is printed when local context is on"; PASS=$((PASS+1)); fi
+if grep -q 'local context off:' <<<"$out"; then
+  echo "  FAIL a working local context still reported a reason"
+  FAIL=$((FAIL + 1))
+else
+  echo "  ok   [-] no reason is printed when local context is on"
+  PASS=$((PASS + 1))
+fi
 
 # end-of-round re-check: if a reviewer dirties the working tree DURING the round (local
 # context was enabled on a clean tree), the reviews are stale → exit 3.
-printf '#!/usr/bin/env bash\necho scratch >> file.txt\necho "LGTM"\n' > "$BIN/claude"; chmod +x "$BIN/claude"
+printf '#!/usr/bin/env bash\necho scratch >> file.txt\necho "LGTM"\n' >"$BIN/claude"
+chmod +x "$BIN/claude"
 lc_run GH_LOCAL_HEAD="$LHEAD"
-[ "$rc" = 3 ] && { echo "  ok   [3] a mid-round working-tree change fails the round (stale)"; PASS=$((PASS+1)); } \
-             || { echo "  FAIL [got $rc, want 3] mid-round dirty tree not caught"; FAIL=$((FAIL+1)); }
-( cd "$LREPO" && git checkout -q -- file.txt )   # clean up the scratch write
-printf '#!/usr/bin/env bash\necho "LGTM"\n' > "$BIN/claude"; chmod +x "$BIN/claude"   # restore
-
+[ "$rc" = 3 ] && {
+  echo "  ok   [3] a mid-round working-tree change fails the round (stale)"
+  PASS=$((PASS + 1))
+} ||
+  {
+    echo "  FAIL [got $rc, want 3] mid-round dirty tree not caught"
+    FAIL=$((FAIL + 1))
+  }
+(cd "$LREPO" && git checkout -q -- file.txt) # clean up the scratch write
+printf '#!/usr/bin/env bash\necho "LGTM"\n' >"$BIN/claude"
+chmod +x "$BIN/claude" # restore
 
 # --- grok invocation contract ------------------------------------------------
 # Grok is opt-in (like opencode/qwen). It ignores stdin; the full diff must land
 # in --prompt-file. Runs from an isolated cwd under ATTACH_DIR with medium effort,
 # permission-mode plan, and sandbox read-only.
 mkdir -p "$WORK/home" "$WORK/xdg" "$WORK/tmp"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"
-PROMPT_FILE_LOG="$WORK/grok-prompt.log"; : > "$PROMPT_FILE_LOG"
-ARGV_LOG="$WORK/grok-argv.log"; : > "$ARGV_LOG"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+PROMPT_FILE_LOG="$WORK/grok-prompt.log"
+: >"$PROMPT_FILE_LOG"
+ARGV_LOG="$WORK/grok-argv.log"
+: >"$ARGV_LOG"
 rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" \
   GROK_REVIEW_MODEL= GROK_REVIEW_EFFORT= \
   ARGV_LOG="$ARGV_LOG" PROMPT_FILE_LOG="$PROMPT_FILE_LOG" \
-  bash "$RELAY" --pr 1 --author claude --reviewers grok 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers grok 2>&1)
 rc=$?
-if [ "$rc" = 0 ]; then echo "  ok   [0] grok reviewer runs and posts"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 0] grok reviewer: $out"; FAIL=$((FAIL+1)); fi
-if grep -q -- '--prompt-file' "$ARGV_LOG" && grep -q -- '-m grok-4.6' "$ARGV_LOG" \
-   && grep -q -- '--reasoning-effort medium' "$ARGV_LOG" \
-   && grep -q -- '--permission-mode plan' "$ARGV_LOG" \
-   && grep -q -- '--sandbox read-only' "$ARGV_LOG" \
-   && grep -qF -- "--deny *" "$ARGV_LOG" \
-   && grep -q -- '--verbatim' "$ARGV_LOG" \
-   && grep -q -- '--cwd' "$ARGV_LOG"; then
-  echo "  ok   [-] grok argv pins model/medium/plan/sandbox/deny/verbatim/cwd/prompt-file"; PASS=$((PASS+1))
-else echo "  FAIL grok argv missing required flags: $(cat "$ARGV_LOG" 2>/dev/null)"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ]; then
+  echo "  ok   [0] grok reviewer runs and posts"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 0] grok reviewer: $out"
+  FAIL=$((FAIL + 1))
+fi
+if grep -q -- '--prompt-file' "$ARGV_LOG" && grep -q -- '-m grok-4.6' "$ARGV_LOG" &&
+  grep -q -- '--reasoning-effort medium' "$ARGV_LOG" &&
+  grep -q -- '--permission-mode plan' "$ARGV_LOG" &&
+  grep -q -- '--sandbox read-only' "$ARGV_LOG" &&
+  grep -qF -- "--deny *" "$ARGV_LOG" &&
+  grep -q -- '--verbatim' "$ARGV_LOG" &&
+  grep -q -- '--cwd' "$ARGV_LOG"; then
+  echo "  ok   [-] grok argv pins model/medium/plan/sandbox/deny/verbatim/cwd/prompt-file"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL grok argv missing required flags: $(cat "$ARGV_LOG" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
+fi
 # The dispatch line shows what the seat resolved to — the same values the argv above carries.
-if grep -qF -- '→ grok reviewing… (model=grok-4.6, effort=medium)' <<< "$out"; then
-  echo "  ok   [-] grok's dispatch line shows its resolved model and effort"; PASS=$((PASS+1))
-else echo "  FAIL grok dispatch line lacks its pins: $(grep 'reviewing' <<< "$out")"; FAIL=$((FAIL+1)); fi
+if grep -qF -- '→ grok reviewing… (model=grok-4.6, effort=medium)' <<<"$out"; then
+  echo "  ok   [-] grok's dispatch line shows its resolved model and effort"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL grok dispatch line lacks its pins: $(grep 'reviewing' <<<"$out")"
+  FAIL=$((FAIL + 1))
+fi
 # …and so does --dry-run, which never reaches the dispatch line: it is how a pin is checked
 # without running a review.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-dout=$( env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+dout=$(env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
   TMPDIR="$WORK/tmp" GH_SHA_COUNTER="$WORK/sha_counter" GROK_REVIEW_MODEL=grok-9.9 GROK_REVIEW_EFFORT=low \
-  bash "$RELAY" --pr 1 --author claude --reviewers grok --dry-run 2>&1 )
-if grep -qF -- 'would run: grok (grok) (model=grok-9.9, effort=low)' <<< "$dout"; then
-  echo "  ok   [-] --dry-run's would-run line shows the resolved pins"; PASS=$((PASS+1))
-else echo "  FAIL --dry-run line lacks the pins: $(grep 'would run' <<< "$dout")"; FAIL=$((FAIL+1)); fi
+  bash "$RELAY" --pr 1 --author claude --reviewers grok --dry-run 2>&1)
+if grep -qF -- 'would run: grok (grok) (model=grok-9.9, effort=low)' <<<"$dout"; then
+  echo "  ok   [-] --dry-run's would-run line shows the resolved pins"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL --dry-run line lacks the pins: $(grep 'would run' <<<"$dout")"
+  FAIL=$((FAIL + 1))
+fi
 if grep -qF -- '+change' "$PROMPT_FILE_LOG" && grep -qF -- '--- DIFF ---' "$PROMPT_FILE_LOG"; then
-  echo "  ok   [-] grok prompt-file contains the full PR diff"; PASS=$((PASS+1))
-else echo "  FAIL grok prompt-file missing diff content (pl=$(wc -c < "$PROMPT_FILE_LOG" 2>/dev/null)B)"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] grok prompt-file contains the full PR diff"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL grok prompt-file missing diff content (pl=$(wc -c <"$PROMPT_FILE_LOG" 2>/dev/null)B)"
+  FAIL=$((FAIL + 1))
+fi
 # isolated cwd: process cds into iso-grok under TMPDIR/ATTACH
 if grep -q '^CWD=' "$PROMPT_FILE_LOG"; then
   gcwd=$(sed -n 's/^CWD=//p' "$PROMPT_FILE_LOG" | tail -1)
   case "$gcwd" in
-    *iso-grok*|"$WORK"/tmp/*) echo "  ok   [-] grok process cwd is the isolated temp dir"; PASS=$((PASS+1));;
-    *) echo "  FAIL grok cwd not isolated ($gcwd)"; FAIL=$((FAIL+1));;
+    *iso-grok* | "$WORK"/tmp/*)
+      echo "  ok   [-] grok process cwd is the isolated temp dir"
+      PASS=$((PASS + 1))
+      ;;
+    *)
+      echo "  FAIL grok cwd not isolated ($gcwd)"
+      FAIL=$((FAIL + 1))
+      ;;
   esac
-else echo "  FAIL grok CWD not recorded"; FAIL=$((FAIL+1)); fi
+else
+  echo "  FAIL grok CWD not recorded"
+  FAIL=$((FAIL + 1))
+fi
 # large-diff path: still must embed the complete diff for grok (threshold does not strip it)
-: > "$PROMPT_FILE_LOG"; : > "$ARGV_LOG"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$PROMPT_FILE_LOG"
+: >"$ARGV_LOG"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" LINK_DIFF_FALLBACK_MAX_BYTES=1 \
   ARGV_LOG="$ARGV_LOG" PROMPT_FILE_LOG="$PROMPT_FILE_LOG" \
-  bash "$RELAY" --pr 1 --author claude --reviewers grok 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers grok 2>&1)
 rc=$?
 if [ "$rc" = 0 ] && grep -q -- '+change' "$PROMPT_FILE_LOG"; then
-  echo "  ok   [0] grok still gets full diff when LINK_DIFF_FALLBACK_MAX_BYTES=1"; PASS=$((PASS+1))
-else echo "  FAIL grok lost diff under small link threshold (rc=$rc)"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [0] grok still gets full diff when LINK_DIFF_FALLBACK_MAX_BYTES=1"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL grok lost diff under small link threshold (rc=$rc)"
+  FAIL=$((FAIL + 1))
+fi
 # author skip — reset round-cap cache so a prior failed round doesn't yield exit 4
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" \
-  bash "$RELAY" --pr 1 --author grok --reviewers grok 2>&1 )
+  bash "$RELAY" --pr 1 --author grok --reviewers grok 2>&1)
 rc=$?
-if [ "$rc" = 3 ]; then echo "  ok   [3] grok-as-author with only self → no reviewers"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 3] grok author self-exclusion out=$out"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 3 ]; then
+  echo "  ok   [3] grok-as-author with only self → no reviewers"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 3] grok author self-exclusion out=$out"
+  FAIL=$((FAIL + 1))
+fi
 # missing binary when explicit — pruned PATH so a real ~/.local/bin/grok cannot mask it
-rm -f "$BIN/grok"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-BIN2="$WORK/bin2"; mkdir -p "$BIN2"
+rm -f "$BIN/grok"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+BIN2="$WORK/bin2"
+mkdir -p "$BIN2"
 cp -a "$BIN/gh" "$BIN2/gh"
 # coreutils the relay needs
 for b in bash timeout gtimeout mktemp cat tr sed head tail wc rm mkdir chmod node; do
@@ -2007,81 +2749,137 @@ for b in bash timeout gtimeout mktemp cat tr sed head tail wc rm mkdir chmod nod
   ln -sf "$src" "$BIN2/$b" 2>/dev/null || true
 done
 # wrap helper needs node + mjs next to relay - already via absolute RELAY path
-out=$( env PATH="$BIN2:/usr/bin:/bin" HOME="$WORK/home" \
+out=$(env PATH="$BIN2:/usr/bin:/bin" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" \
-  bash "$RELAY" --pr 1 --author claude --reviewers grok 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers grok 2>&1)
 rc=$?
-if [ "$rc" = 3 ]; then echo "  ok   [3] explicit grok missing binary → fail"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 3] missing grok not fail-closed out=$out"; FAIL=$((FAIL+1)); fi
-make_agent grok   # restore
+if [ "$rc" = 3 ]; then
+  echo "  ok   [3] explicit grok missing binary → fail"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 3] missing grok not fail-closed out=$out"
+  FAIL=$((FAIL + 1))
+fi
+make_agent grok # restore
 
 # review-local also dispatches grok
-: > "$PROMPT_FILE_LOG"; : > "$ARGV_LOG"
-RLREPO="$WORK/rlrepo"; rm -rf "$RLREPO"; mkdir -p "$RLREPO" "$WORK/tmp"
-( cd "$RLREPO" && git init -q && git config user.email t@t && git config user.name t \
-  && echo a > f && git add f && git commit -q -m i \
-  && echo b >> f && git add f && git commit -q -m c )
-out=$( cd "$RLREPO" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$PROMPT_FILE_LOG"
+: >"$ARGV_LOG"
+RLREPO="$WORK/rlrepo"
+rm -rf "$RLREPO"
+mkdir -p "$RLREPO" "$WORK/tmp"
+(cd "$RLREPO" && git init -q && git config user.email t@t && git config user.name t &&
+  echo a >f && git add f && git commit -q -m i &&
+  echo b >>f && git add f && git commit -q -m c)
+out=$(cd "$RLREPO" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   ARGV_LOG="$ARGV_LOG" PROMPT_FILE_LOG="$PROMPT_FILE_LOG" \
-  bash "$HERE/../review-local" --author claude --reviewers grok --base HEAD~1 2>&1 )
+  bash "$HERE/../review-local" --author claude --reviewers grok --base HEAD~1 2>&1)
 rc=$?
 if [ "$rc" = 0 ] && grep -q -- '--reasoning-effort medium' "$ARGV_LOG" && grep -qF -- '--- DIFF ---' "$PROMPT_FILE_LOG"; then
-  echo "  ok   [0] review-local dispatches grok with medium + full diff"; PASS=$((PASS+1))
-else echo "  FAIL review-local grok (rc=$rc) argv=$(cat "$ARGV_LOG" 2>/dev/null) pl=$(head -5 "$PROMPT_FILE_LOG" 2>/dev/null) out=$out"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [0] review-local dispatches grok with medium + full diff"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL review-local grok (rc=$rc) argv=$(cat "$ARGV_LOG" 2>/dev/null) pl=$(head -5 "$PROMPT_FILE_LOG" 2>/dev/null) out=$out"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- pi seats: the json stream reader (lib-pi.sh) ----------------------------
 # pi's exit code does not say whether a review came back: a `length` stop exits 0 in text mode, and
 # in json mode even an API error exits 0. The seat decides from the final assistant message, so the
 # reader IS the fail-closed rule. These run it directly on canned streams.
-PIR="$WORK/pi-reader"; mkdir -p "$PIR"
-PI_JS="$( . "$HERE/../lib-panel.sh"; . "$HERE/../lib-opencode.sh"; . "$HERE/../lib-pi.sh"; printf '%s' "$PI_FINAL_TEXT_JS" )"
+PIR="$WORK/pi-reader"
+mkdir -p "$PIR"
+PI_JS="$(
+  . "$HERE/../lib-panel.sh"
+  . "$HERE/../lib-opencode.sh"
+  . "$HERE/../lib-pi.sh"
+  printf '%s' "$PI_FINAL_TEXT_JS"
+)"
 pi_read() { # <stream file> → PIR_OUT, PIR_ERR, PIR_RC
-  node -e "$PI_JS" < "$1" > "$PIR/out" 2> "$PIR/err"; PIR_RC=$?
-  PIR_OUT="$(cat "$PIR/out")"; PIR_ERR="$(cat "$PIR/err")"
+  node -e "$PI_JS" <"$1" >"$PIR/out" 2>"$PIR/err"
+  PIR_RC=$?
+  PIR_OUT="$(cat "$PIR/out")"
+  PIR_ERR="$(cat "$PIR/err")"
 }
-pir_ok() { if [ "$2" = 0 ]; then echo "  ok   [-] pi reader: $1"; PASS=$((PASS+1)); else echo "  FAIL pi reader: $1 (rc=$PIR_RC out=$PIR_OUT err=$PIR_ERR)"; FAIL=$((FAIL+1)); fi; }
+pir_ok() { if [ "$2" = 0 ]; then
+  echo "  ok   [-] pi reader: $1"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL pi reader: $1 (rc=$PIR_RC out=$PIR_OUT err=$PIR_ERR)"
+  FAIL=$((FAIL + 1))
+fi; }
 PIR_USER='{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"the prompt"}]}}'
 printf '%s\n' '{"type":"session","version":3}' "$PIR_USER" \
   '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"Looks good."}],"usage":{"output":9}}}' \
-  '{"type":"agent_end"}' > "$PIR/s1"
-pi_read "$PIR/s1"; [ "$PIR_RC" = 0 ] && [ "$PIR_OUT" = "Looks good." ] && [ -z "$PIR_ERR" ]; pir_ok "stop + text → the text, exit 0, nothing on stderr" $?
-printf '%s\n' "$PIR_USER" '{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"half a revi"}],"usage":{"output":32000}}}' > "$PIR/s2"
-pi_read "$PIR/s2"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && [ "$PIR_ERR" = "pi: no usable review (stopReason=length, output tokens=32000, text chars=11)" ]; pir_ok "length + text → nothing on stdout, the reason, exit 3" $?
-printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"thinking","thinking":"..."}],"usage":{"output":45935}}}' > "$PIR/s3"
-pi_read "$PIR/s3"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=length, output tokens=45935, text chars=0' <<< "$PIR_ERR"; pir_ok "length without text → exit 3, text chars=0" $?
-printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[],"errorMessage":"400: {\"code\":\"1211\",\"message\":\"Unknown Model\"}"}}' > "$PIR/s4"
-pi_read "$PIR/s4"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=error, output tokens=?, text chars=0): 400: {"code":"1211","message":"Unknown Model"}' <<< "$PIR_ERR"; pir_ok "error stop → errorMessage on the reason line; a missing usage prints ?" $?
+  '{"type":"agent_end"}' >"$PIR/s1"
+pi_read "$PIR/s1"
+[ "$PIR_RC" = 0 ] && [ "$PIR_OUT" = "Looks good." ] && [ -z "$PIR_ERR" ]
+pir_ok "stop + text → the text, exit 0, nothing on stderr" $?
+printf '%s\n' "$PIR_USER" '{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"half a revi"}],"usage":{"output":32000}}}' >"$PIR/s2"
+pi_read "$PIR/s2"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && [ "$PIR_ERR" = "pi: no usable review (stopReason=length, output tokens=32000, text chars=11)" ]
+pir_ok "length + text → nothing on stdout, the reason, exit 3" $?
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"thinking","thinking":"..."}],"usage":{"output":45935}}}' >"$PIR/s3"
+pi_read "$PIR/s3"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=length, output tokens=45935, text chars=0' <<<"$PIR_ERR"
+pir_ok "length without text → exit 3, text chars=0" $?
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[],"errorMessage":"400: {\"code\":\"1211\",\"message\":\"Unknown Model\"}"}}' >"$PIR/s4"
+pi_read "$PIR/s4"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=error, output tokens=?, text chars=0): 400: {"code":"1211","message":"Unknown Model"}' <<<"$PIR_ERR"
+pir_ok "error stop → errorMessage on the reason line; a missing usage prints ?" $?
 # A failure can come AFTER some text (the connection drops mid-answer): the text must not rescue it.
-printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"Half a review"}],"errorMessage":"socket hang up"}}' > "$PIR/s4b"
-pi_read "$PIR/s4b"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=error, output tokens=?, text chars=13): socket hang up' <<< "$PIR_ERR"; pir_ok "an error stop WITH text → exit 3, the partial text not printed" $?
-printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"aborted","content":[{"type":"text","text":"Half"}]}}' > "$PIR/s4c"
-pi_read "$PIR/s4c"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=aborted' <<< "$PIR_ERR"; pir_ok "an aborted stop with text → exit 3" $?
-printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[],"errorMessage":"429: {\n  \"error\": \"Weekly/Monthly Limit Exhausted\"\r\n}"}}' > "$PIR/s5"
-pi_read "$PIR/s5"; [ "$PIR_RC" = 3 ] && [ "$(printf '%s\n' "$PIR_ERR" | wc -l | tr -d ' ')" = 1 ] && grep -qF 'Weekly/Monthly Limit Exhausted' <<< "$PIR_ERR"; pir_ok "a multi-line errorMessage stays ONE stderr line" $?
-printf '%s\n' '{"type":"session","version":3}' "$PIR_USER" '{"type":"agent_end"}' > "$PIR/s6"
-pi_read "$PIR/s6"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && [ "$PIR_ERR" = "pi: the event stream ended without a final assistant message" ]; pir_ok "no final assistant message (only the prompt echo) → exit 3" $?
-: > "$PIR/s7"; pi_read "$PIR/s7"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ]; pir_ok "an empty stream → exit 3" $?
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"Half a review"}],"errorMessage":"socket hang up"}}' >"$PIR/s4b"
+pi_read "$PIR/s4b"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=error, output tokens=?, text chars=13): socket hang up' <<<"$PIR_ERR"
+pir_ok "an error stop WITH text → exit 3, the partial text not printed" $?
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"aborted","content":[{"type":"text","text":"Half"}]}}' >"$PIR/s4c"
+pi_read "$PIR/s4c"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && grep -qF 'stopReason=aborted' <<<"$PIR_ERR"
+pir_ok "an aborted stop with text → exit 3" $?
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[],"errorMessage":"429: {\n  \"error\": \"Weekly/Monthly Limit Exhausted\"\r\n}"}}' >"$PIR/s5"
+pi_read "$PIR/s5"
+[ "$PIR_RC" = 3 ] && [ "$(printf '%s\n' "$PIR_ERR" | wc -l | tr -d ' ')" = 1 ] && grep -qF 'Weekly/Monthly Limit Exhausted' <<<"$PIR_ERR"
+pir_ok "a multi-line errorMessage stays ONE stderr line" $?
+printf '%s\n' '{"type":"session","version":3}' "$PIR_USER" '{"type":"agent_end"}' >"$PIR/s6"
+pi_read "$PIR/s6"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ] && [ "$PIR_ERR" = "pi: the event stream ended without a final assistant message" ]
+pir_ok "no final assistant message (only the prompt echo) → exit 3" $?
+: >"$PIR/s7"
+pi_read "$PIR/s7"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ]
+pir_ok "an empty stream → exit 3" $?
 printf '%s\n' 'Warning: something pi printed' '{not json' \
-  '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Review."}],"usage":{"output":3}}}' > "$PIR/s8"
-pi_read "$PIR/s8"; [ "$PIR_RC" = 0 ] && [ "$PIR_OUT" = "Review." ] && [ -z "$PIR_ERR" ]; pir_ok "lines that are not JSON are skipped, not fatal" $?
+  '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Review."}],"usage":{"output":3}}}' >"$PIR/s8"
+pi_read "$PIR/s8"
+[ "$PIR_RC" = 0 ] && [ "$PIR_OUT" = "Review." ] && [ -z "$PIR_ERR" ]
+pir_ok "lines that are not JSON are skipped, not fatal" $?
 printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"first turn"}]}}' \
-  '{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"cut"}]}}' > "$PIR/s9"
-pi_read "$PIR/s9"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ]; pir_ok "only the LAST assistant message counts (an earlier stop does not rescue a final length)" $?
+  '{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"cut"}]}}' >"$PIR/s9"
+pi_read "$PIR/s9"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ]
+pir_ok "only the LAST assistant message counts (an earlier stop does not rescue a final length)" $?
 printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"cut"}]}}' \
-  '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"second"}]}}' > "$PIR/s10"
-pi_read "$PIR/s10"; [ "$PIR_RC" = 0 ] && [ "$PIR_OUT" = "second" ]; pir_ok "…and the last one is printed alone" $?
-printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"  \n "}]}}' > "$PIR/s11"
-pi_read "$PIR/s11"; [ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ]; pir_ok "stop with blank text → exit 3" $?
-printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}' > "$PIR/s12"
-pi_read "$PIR/s12"; [ "$PIR_RC" = 3 ] && [ "$(printf '%s\n' "$PIR_ERR" | wc -l | tr -d ' ')" = 1 ] && grep -qF 'text chars=0' <<< "$PIR_ERR"; pir_ok "no content at all → one reason line, never a stack trace" $?
+  '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"second"}]}}' >"$PIR/s10"
+pi_read "$PIR/s10"
+[ "$PIR_RC" = 0 ] && [ "$PIR_OUT" = "second" ]
+pir_ok "…and the last one is printed alone" $?
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"  \n "}]}}' >"$PIR/s11"
+pi_read "$PIR/s11"
+[ "$PIR_RC" = 3 ] && [ -z "$PIR_OUT" ]
+pir_ok "stop with blank text → exit 3" $?
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}' >"$PIR/s12"
+pi_read "$PIR/s12"
+[ "$PIR_RC" = 3 ] && [ "$(printf '%s\n' "$PIR_ERR" | wc -l | tr -d ' ')" = 1 ] && grep -qF 'text chars=0' <<<"$PIR_ERR"
+pir_ok "no content at all → one reason line, never a stack trace" $?
 
 # --- pi seats: pi_review itself, under set -u ----------------------------------
 # The PIPESTATUS capture is the line most likely to be "simplified" wrong later: assign
 # PIPESTATUS[0] to a variable and PIPESTATUS[1] is gone, which is an unbound variable under set -u.
-PID="$WORK/pi-direct"; mkdir -p "$PID/bin" "$PID/att"
-cat > "$PID/bin/pi" <<'STUB'
+PID="$WORK/pi-direct"
+mkdir -p "$PID/bin" "$PID/att"
+cat >"$PID/bin/pi" <<'STUB'
 #!/usr/bin/env bash
 [ -n "${PID_CALLS:-}" ] && echo "$*" >> "$PID_CALLS"
 cat > /dev/null
@@ -2093,40 +2891,48 @@ exit 0
 STUB
 chmod +x "$PID/bin/pi"
 pid_run() { # env assignments... → PID_RC, PID_OUT, PID_ERR
-  : > "$PID/err"; : > "$PID/calls"
-  PID_OUT="$( env PATH="$PID/bin:$PATH" PID_CALLS="$PID/calls" "$@" bash -uo pipefail -c '
+  : >"$PID/err"
+  : >"$PID/calls"
+  PID_OUT="$(env PATH="$PID/bin:$PATH" PID_CALLS="$PID/calls" "$@" bash -uo pipefail -c '
     . "$1/lib-panel.sh"; . "$1/lib-opencode.sh"; . "$1/lib-pi.sh"
     PI_BIN="$2/bin/pi"
-    pi_review pi_glm "$2/att" "+change" "" "a test diff" "$2/err" 20' _ "$HERE/.." "$PID" 2>&1 )"; PID_RC=$?
+    pi_review pi_glm "$2/att" "+change" "" "a test diff" "$2/err" 20' _ "$HERE/.." "$PID" 2>&1)"
+  PID_RC=$?
   PID_ERR="$(cat "$PID/err")"
 }
 pid_run PID_MODE=ok
-[ "$PID_RC" = 0 ] && [ "$PID_OUT" = "direct review" ]; pir_ok "pi_review under set -u: a review → rc 0, the text" $?
+[ "$PID_RC" = 0 ] && [ "$PID_OUT" = "direct review" ]
+pir_ok "pi_review under set -u: a review → rc 0, the text" $?
 pid_run PID_MODE=124
-[ "$PID_RC" = 124 ]; pir_ok "pi_review under set -u: pi's 124 wins over the reader's 3 (got $PID_RC)" $?
+[ "$PID_RC" = 124 ]
+pir_ok "pi_review under set -u: pi's 124 wins over the reader's 3 (got $PID_RC)" $?
 pid_run PID_MODE=ok PI_GLM_REVIEW_EFFORT=banana
-[ "$PID_RC" = 1 ] && [ ! -s "$PID/calls" ] && grep -qF "pi: invalid effort 'banana' for pi_glm (EFFORT_pi_glm / PI_GLM_REVIEW_EFFORT); valid: off minimal low medium high xhigh max" <<< "$PID_ERR"
+[ "$PID_RC" = 1 ] && [ ! -s "$PID/calls" ] && grep -qF "pi: invalid effort 'banana' for pi_glm (EFFORT_pi_glm / PI_GLM_REVIEW_EFFORT); valid: off minimal low medium high xhigh max" <<<"$PID_ERR"
 pir_ok "an effort pi does not know is refused before pi starts (pi only warns and runs at another level)" $?
 # The value is config text: two levels in one, or a glob, must not pass as a level.
 for _bad in 'low medium' 'medium high' '*' 'l?w' '?high' '[lm]ow'; do
   pid_run PID_MODE=ok PI_GLM_REVIEW_EFFORT="$_bad"
-  [ "$PID_RC" = 1 ] && [ ! -s "$PID/calls" ] && grep -qF "pi: invalid effort '$_bad' for pi_glm" <<< "$PID_ERR"
+  [ "$PID_RC" = 1 ] && [ ! -s "$PID/calls" ] && grep -qF "pi: invalid effort '$_bad' for pi_glm" <<<"$PID_ERR"
   pir_ok "effort '$_bad' is refused before pi starts (rc $PID_RC)" $?
 done
 # Every level the message lists is accepted, so the check and PI_EFFORT_LEVELS cannot drift apart.
 for _lvl in $(. "$HERE/../lib-pi.sh" && printf '%s' "$PI_EFFORT_LEVELS"); do
   pid_run PID_MODE=ok PI_GLM_REVIEW_EFFORT="$_lvl"
-  [ "$PID_RC" = 0 ] && [ -s "$PID/calls" ]; pir_ok "listed effort '$_lvl' is accepted and reaches pi (rc $PID_RC)" $?
+  [ "$PID_RC" = 0 ] && [ -s "$PID/calls" ]
+  pir_ok "listed effort '$_lvl' is accepted and reaches pi (rc $PID_RC)" $?
 done
 # No node → no reader → the model call must not start at all.
 mkdir -p "$PID/nonode"
 for b in timeout mktemp wc tr dirname basename cat; do _s=$(command -v "$b") && ln -sf "$_s" "$PID/nonode/$b"; done
-: > "$PID/err"; : > "$PID/calls"
-_o="$( env PATH="$PID/nonode" PID_CALLS="$PID/calls" "$BASH" -uo pipefail -c '
+: >"$PID/err"
+: >"$PID/calls"
+_o="$(env PATH="$PID/nonode" PID_CALLS="$PID/calls" "$BASH" -uo pipefail -c '
   . "$1/lib-panel.sh"; . "$1/lib-opencode.sh"; . "$1/lib-pi.sh"
   PI_BIN="$2/bin/pi"
-  pi_review pi_glm "$2/att" "+change" "" "a test diff" "$2/err" 20' _ "$HERE/.." "$PID" 2>&1 )"; _rc=$?
-[ "$_rc" = 1 ] && [ ! -s "$PID/calls" ] && grep -qF 'pi: node not found' "$PID/err"; pir_ok "no node on PATH → refused with the reason, pi never called (rc=$_rc)" $?
+  pi_review pi_glm "$2/att" "+change" "" "a test diff" "$2/err" 20' _ "$HERE/.." "$PID" 2>&1)"
+_rc=$?
+[ "$_rc" = 1 ] && [ ! -s "$PID/calls" ] && grep -qF 'pi: node not found' "$PID/err"
+pir_ok "no node on PATH → refused with the reason, pi never called (rc=$_rc)" $?
 
 # --- pi seats: the relay contract ----------------------------------------------
 # A stand-in for pi 1.1.0 in `-p --mode json`: one json event per line, the final assistant message
@@ -2134,7 +2940,7 @@ _o="$( env PATH="$PID/nonode" PID_CALLS="$PID/calls" "$BASH" -uo pipefail -c '
 # xai/* → pi_grok), not its basename. The final message is built with JSON.stringify, so a text
 # with quotes, backslashes and newlines is still one valid JSON line.
 make_pi_agent() { # <dir>
-  cat > "$1/pi" <<'PI'
+  cat >"$1/pi" <<'PI'
 #!/usr/bin/env bash
 model=""; prev=""
 for a in "$@"; do [ "$prev" = --model ] && model="$a"; prev="$a"; done
@@ -2166,63 +2972,82 @@ PI
   chmod +x "$1/pi"
 }
 make_pi_agent "$BIN"
-PIW="$WORK/pi-seat"; mkdir -p "$PIW" "$WORK/home" "$WORK/xdg" "$WORK/tmp"
+PIW="$WORK/pi-seat"
+mkdir -p "$PIW" "$WORK/home" "$WORK/xdg" "$WORK/tmp"
 QB="$WORK/cache/pr-review-relay/benched"
 # pi_relay <env assignments...> -- <relay args...> → PI_RC, PI_OUT; posted bodies in $PIW/b/bodies
 pi_relay() {
   local envs=()
-  while [ $# -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    envs+=("$1")
+    shift
+  done
   [ "${1:-}" = -- ] && shift
-  rm -rf "$WORK/cache" "$PIW/b"; mkdir -p "$WORK/cache" "$PIW/b"; rm -f "$WORK/sha_counter"
-  : > "$PIW/argv"; : > "$PIW/stdin"; : > "$PIW/cwd"
-  PI_OUT="$( env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
-      TMPDIR="$WORK/tmp" GH_SHA_COUNTER="$WORK/sha_counter" GH_BODY_DIR="$PIW/b" \
-      ARGV_LOG="$PIW/argv" STDIN_LOG="$PIW/stdin" PI_CWD_LOG="$PIW/cwd" \
-      PI_GLM_REVIEW_MODEL= PI_GLM_REVIEW_EFFORT= PI_GROK_REVIEW_MODEL= PI_GROK_REVIEW_EFFORT= \
-      ${envs[@]+"${envs[@]}"} bash "$RELAY" --pr 1 --author "${PI_AUTHOR:-claude}" "$@" 2>&1 )"; PI_RC=$?
+  rm -rf "$WORK/cache" "$PIW/b"
+  mkdir -p "$WORK/cache" "$PIW/b"
+  rm -f "$WORK/sha_counter"
+  : >"$PIW/argv"
+  : >"$PIW/stdin"
+  : >"$PIW/cwd"
+  PI_OUT="$(env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
+    TMPDIR="$WORK/tmp" GH_SHA_COUNTER="$WORK/sha_counter" GH_BODY_DIR="$PIW/b" \
+    ARGV_LOG="$PIW/argv" STDIN_LOG="$PIW/stdin" PI_CWD_LOG="$PIW/cwd" \
+    PI_GLM_REVIEW_MODEL= PI_GLM_REVIEW_EFFORT= PI_GROK_REVIEW_MODEL= PI_GROK_REVIEW_EFFORT= \
+    ${envs[@]+"${envs[@]}"} bash "$RELAY" --pr 1 --author "${PI_AUTHOR:-claude}" "$@" 2>&1)"
+  PI_RC=$?
 }
-pis_ok() { if [ "$2" = 0 ]; then echo "  ok   [$PI_RC] $1"; PASS=$((PASS+1)); else echo "  FAIL [rc=$PI_RC] $1: $(tail -6 <<< "$PI_OUT")"; FAIL=$((FAIL+1)); fi; }
+pis_ok() { if [ "$2" = 0 ]; then
+  echo "  ok   [$PI_RC] $1"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [rc=$PI_RC] $1: $(tail -6 <<<"$PI_OUT")"
+  FAIL=$((FAIL + 1))
+fi; }
 pi_posted() { grep -qF -- "$1" "$PIW/b/bodies" 2>/dev/null; }
 PI_FLAGS="--no-tools --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve --no-session --offline"
 
 for _seat in pi_glm pi_grok; do
-  case "$_seat" in pi_glm) _m=zai/glm-5.3;; pi_grok) _m=xai/grok-4.7;; esac
+  case "$_seat" in pi_glm) _m=zai/glm-5.3 ;; pi_grok) _m=xai/grok-4.7 ;; esac
   pi_relay -- --reviewers "$_seat"
-  [ "$PI_RC" = 0 ] && pi_posted "LGTM from $_seat."; pis_ok "$_seat runs and its review is posted" $?
+  [ "$PI_RC" = 0 ] && pi_posted "LGTM from $_seat."
+  pis_ok "$_seat runs and its review is posted" $?
   [ "$(grep "^$_seat " "$PIW/argv")" = "$_seat -p --mode json --model $_m --thinking low $PI_FLAGS" ]
   pis_ok "$_seat argv is exactly the pinned one: -p, json, $_m, low, every isolation flag" $?
-  case "$(sed -n "s/^$_seat //p" "$PIW/cwd")" in */iso-pi.*) true;; *) false;; esac
+  case "$(sed -n "s/^$_seat //p" "$PIW/cwd")" in */iso-pi.*) true ;; *) false ;; esac
   pis_ok "$_seat runs from an empty iso-pi.* directory, not the checkout" $?
-  grep -qF -- '+change' "$PIW/stdin" && grep -qF -- '--- DIFF ---' "$PIW/stdin" \
-    && grep -qF 'You have no checkout, no tools and no network' "$PIW/stdin" && grep -qF 'Blocker / Should-fix / Nit' "$PIW/stdin"
+  grep -qF -- '+change' "$PIW/stdin" && grep -qF -- '--- DIFF ---' "$PIW/stdin" &&
+    grep -qF 'You have no checkout, no tools and no network' "$PIW/stdin" && grep -qF 'Blocker / Should-fix / Nit' "$PIW/stdin"
   pis_ok "$_seat gets the instructions and the full diff on stdin" $?
-  grep -qF -- "  → $_seat reviewing… (model=$_m, effort=low)" <<< "$PI_OUT"
+  grep -qF -- "  → $_seat reviewing… (model=$_m, effort=low)" <<<"$PI_OUT"
   pis_ok "$_seat's dispatch line shows the model and effort it runs" $?
 done
 
 # Pins. The would-run tool token is the absolute PI_BIN (opencode's shape, not grok's bare name).
 pi_relay PI_GLM_REVIEW_MODEL=zai/glm-9 PI_GLM_REVIEW_EFFORT=high -- --reviewers pi_glm --dry-run
-grep -qE 'would run: pi_glm \(/[^)]*/pi\) \(model=zai/glm-9, effort=high\)' <<< "$PI_OUT"
+grep -qE 'would run: pi_glm \(/[^)]*/pi\) \(model=zai/glm-9, effort=high\)' <<<"$PI_OUT"
 pis_ok "--dry-run shows pi_glm's env pins and the absolute pi path" $?
-printf 'MODEL_pi_grok=xai/grok-9\nEFFORT_pi_grok=medium\n' > "$PIW/cfg"
+printf 'MODEL_pi_grok=xai/grok-9\nEFFORT_pi_grok=medium\n' >"$PIW/cfg"
 pi_relay PR_RELAY_CONFIG="$PIW/cfg" -- --reviewers pi_grok
-grep -q -- "^pi_grok -p --mode json --model xai/grok-9 --thinking medium " "$PIW/argv" && ! grep -q 'no reviewer seat named' <<< "$PI_OUT"
+grep -q -- "^pi_grok -p --mode json --model xai/grok-9 --thinking medium " "$PIW/argv" && ! grep -q 'no reviewer seat named' <<<"$PI_OUT"
 pis_ok "MODEL_pi_grok / EFFORT_pi_grok from the config reach argv, with no unknown-seat warning" $?
 pi_relay PR_RELAY_CONFIG="$PIW/cfg" PI_GROK_REVIEW_EFFORT=minimal -- --reviewers pi_grok
-grep -q -- "--thinking minimal " "$PIW/argv"; pis_ok "the env beats the config for the effort" $?
-printf 'EFFORT_pi_glm=banana\n' > "$PIW/cfg-bad"
+grep -q -- "--thinking minimal " "$PIW/argv"
+pis_ok "the env beats the config for the effort" $?
+printf 'EFFORT_pi_glm=banana\n' >"$PIW/cfg-bad"
 pi_relay PR_RELAY_CONFIG="$PIW/cfg-bad" -- --reviewers pi_glm
-[ "$PI_RC" = 3 ] && ! grep -q '^pi_glm ' "$PIW/argv" && grep -qF "invalid effort 'banana' for pi_glm" <<< "$PI_OUT"
+[ "$PI_RC" = 3 ] && ! grep -q '^pi_glm ' "$PIW/argv" && grep -qF "invalid effort 'banana' for pi_glm" <<<"$PI_OUT"
 pis_ok "EFFORT_pi_glm=banana → the seat fails with the reason, pi is never called" $?
 pi_relay PI_GROK_REVIEW_EFFORT=banana -- --reviewers pi_grok
-[ "$PI_RC" = 3 ] && ! grep -q '^pi_grok ' "$PIW/argv" && grep -qF "invalid effort 'banana' for pi_grok (EFFORT_pi_grok / PI_GROK_REVIEW_EFFORT)" <<< "$PI_OUT"
+[ "$PI_RC" = 3 ] && ! grep -q '^pi_grok ' "$PIW/argv" && grep -qF "invalid effort 'banana' for pi_grok (EFFORT_pi_grok / PI_GROK_REVIEW_EFFORT)" <<<"$PI_OUT"
 pis_ok "PI_GROK_REVIEW_EFFORT=banana → the same, from the env" $?
 
 # Fail-closed: anything but a `stop` with text is a failed seat, with its reason, and nothing posted.
 pi_fc() { # <desc> <reason substring> <env assignments...>
-  local desc="$1" why="$2"; shift 2
+  local desc="$1" why="$2"
+  shift 2
   pi_relay "$@" -- --reviewers pi_glm
-  [ "$PI_RC" = 3 ] && ! pi_posted 'LGTM from pi_glm' && grep -qF -- "$why" <<< "$PI_OUT"; pis_ok "$desc" $?
+  [ "$PI_RC" = 3 ] && ! pi_posted 'LGTM from pi_glm' && grep -qF -- "$why" <<<"$PI_OUT"
+  pis_ok "$desc" $?
 }
 pi_fc "a length stop with text → round not clean, the cut review is NOT posted" "stopReason=length, output tokens=42, text chars=17" PI_STOP=length
 pi_fc "a length stop without text → round not clean" "stopReason=length, output tokens=42, text chars=0" PI_STOP=length PI_TEXT=
@@ -2232,83 +3057,106 @@ pi_fc "a stop with an empty text → round not clean" "stopReason=stop, output t
 pi_fc "no final assistant message → round not clean" "ended without a final assistant message" PI_NO_FINAL=1
 pi_fc "a timeout → reported as a timeout: pi's 124 wins over the reader's 3" "timed out after 1s" SLEEP_KEYS=pi_glm PR_RELAY_AGENT_TIMEOUT=1
 pi_relay PI_RC=1 -- --reviewers pi_glm
-[ "$PI_RC" = 3 ] && pi_posted 'LGTM from pi_glm.' && grep -qF 'pi_glm: exited with code 1' <<< "$PI_OUT"
+[ "$PI_RC" = 3 ] && pi_posted 'LGTM from pi_glm.' && grep -qF 'pi_glm: exited with code 1' <<<"$PI_OUT"
 pis_ok "pi exits 1 after a valid review → posted, round not clean (the relay's rule for every seat)" $?
 
 # The bench. A benched seat does not count as "ran", so each case keeps a second seat that succeeds.
 pi_relay PI_STOP=error PI_TEXT= "PI_ERROR=429: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-20 10:00:00" -- --reviewers codex,pi_glm
-[ "$PI_RC" = 0 ] && grep -qF 'pi_glm: out of quota — benched until' <<< "$PI_OUT" && grep -q "^pi_glm	" "$QB" && pi_posted 'LGTM from codex.'
+[ "$PI_RC" = 0 ] && grep -qF 'pi_glm: out of quota — benched until' <<<"$PI_OUT" && grep -q "^pi_glm	" "$QB" && pi_posted 'LGTM from codex.'
 pis_ok "z.ai's weekly/monthly limit → pi_glm benched, codex posted, round clean" $?
 pi_relay PI_STOP=error PI_TEXT= "PI_ERROR=429: Weekly/Monthly Limit Exhausted." -- --reviewers pi_glm
-[ "$PI_RC" = 3 ] && grep -qF 'No reviewers ran' <<< "$PI_OUT" && grep -qF '1 reviewer(s) are benched' <<< "$PI_OUT" && grep -q "^pi_glm	" "$QB"
+[ "$PI_RC" = 3 ] && grep -qF 'No reviewers ran' <<<"$PI_OUT" && grep -qF '1 reviewer(s) are benched' <<<"$PI_OUT" && grep -q "^pi_glm	" "$QB"
 pis_ok "a lone benched pi seat → bench entry written, round 3: a benched seat is not a pass" $?
 pi_relay QUOTA_XAI=grok -- --reviewers codex,grok
-[ "$PI_RC" = 0 ] && grep -qF 'grok: out of quota — benched until' <<< "$PI_OUT" && grep -q "^grok	" "$QB"
+[ "$PI_RC" = 0 ] && grep -qF 'grok: out of quota — benched until' <<<"$PI_OUT" && grep -q "^grok	" "$QB"
 pis_ok "xAI's 'usage balance exhausted' → grok benched, round clean" $?
 pi_relay "PI_TEXT=Looks good. The limit exhausted branch is handled." -- --reviewers pi_glm
 [ "$PI_RC" = 0 ] && pi_posted 'limit exhausted branch' && [ ! -s "$QB" ]
 pis_ok "a review that says 'limit exhausted' and exits 0 is posted, not benched" $?
 for _e in "rate limit exhausted, retry later" "context limit exhausted"; do
   pi_relay PI_STOP=error PI_TEXT= "PI_ERROR=$_e" -- --reviewers codex,pi_glm
-  [ "$PI_RC" = 3 ] && ! grep -q "^pi_glm	" "$QB" 2>/dev/null && grep -qF -- "$_e" <<< "$PI_OUT"
+  [ "$PI_RC" = 3 ] && ! grep -q "^pi_glm	" "$QB" 2>/dev/null && grep -qF -- "$_e" <<<"$PI_OUT"
   pis_ok "'$_e' fails the round and benches nothing" $?
 done
 
 pi_relay LINK_DIFF_FALLBACK_MAX_BYTES=1 -- --reviewers pi_glm
-[ "$PI_RC" = 0 ] && grep -qF -- '+change' "$PIW/stdin"; pis_ok "LINK_DIFF_FALLBACK_MAX_BYTES=1: pi_glm still gets the full diff" $?
+[ "$PI_RC" = 0 ] && grep -qF -- '+change' "$PIW/stdin"
+pis_ok "LINK_DIFF_FALLBACK_MAX_BYTES=1: pi_glm still gets the full diff" $?
 PI_AUTHOR=pi_glm pi_relay -- --reviewers pi_glm
-[ "$PI_RC" = 3 ] && ! grep -q '^pi_glm ' "$PIW/argv"; pis_ok "--author pi_glm --reviewers pi_glm → no reviewers, round 3" $?
+[ "$PI_RC" = 3 ] && ! grep -q '^pi_glm ' "$PIW/argv"
+pis_ok "--author pi_glm --reviewers pi_glm → no reviewers, round 3" $?
 
 # Not installed but named → the round fails (grok's path), never exit 2.
-PINOBIN="$WORK/pi-nobin"; mkdir -p "$PINOBIN"
+PINOBIN="$WORK/pi-nobin"
+mkdir -p "$PINOBIN"
 for _t in gh codex claude; do ln -sf "$BIN/$_t" "$PINOBIN/$_t"; done
 ln -sf "$(command -v node)" "$PINOBIN/node"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-PI_OUT=$( env PATH="$PINOBIN:/usr/bin:/bin" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
-  TMPDIR="$WORK/tmp" GH_SHA_COUNTER="$WORK/sha_counter" bash "$RELAY" --pr 1 --author claude --reviewers pi_glm 2>&1 ); PI_RC=$?
-[ "$PI_RC" = 3 ] && grep -qF 'pi not installed but explicitly requested → fail' <<< "$PI_OUT"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+PI_OUT=$(env PATH="$PINOBIN:/usr/bin:/bin" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
+  TMPDIR="$WORK/tmp" GH_SHA_COUNTER="$WORK/sha_counter" bash "$RELAY" --pr 1 --author claude --reviewers pi_glm 2>&1)
+PI_RC=$?
+[ "$PI_RC" = 3 ] && grep -qF 'pi not installed but explicitly requested → fail' <<<"$PI_OUT"
 pis_ok "pi not on PATH but named → the round fails (3), not exit 2" $?
 
 # Containment, on the trusted-directory shape: every PATH entry is OUTSIDE the checkout, so
 # relay_assert_path_outside_repo passes and only the binary check can catch `pi -> <checkout>/…`.
 # One link only, so this exercises the pi message, not the 40-link bound.
-mkdir -p "$WORK/trustedpi"; ln -sf "$WORK/dotpath/malicious" "$WORK/trustedpi/pi"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"; : > "$PIW/argv"
-PI_OUT=$( cd "$WORK/dotpath" && env PATH="$WORK/trustedpi:$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
+mkdir -p "$WORK/trustedpi"
+ln -sf "$WORK/dotpath/malicious" "$WORK/trustedpi/pi"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+: >"$PIW/argv"
+PI_OUT=$(cd "$WORK/dotpath" && env PATH="$WORK/trustedpi:$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$WORK/cache" \
   GH_SHA_COUNTER="$WORK/sha_counter" ARGV_LOG="$PIW/argv" \
-  bash "$RELAY" --pr 1 --author claude --reviewers codex,pi_glm 2>&1 ); PI_RC=$?
-[ "$PI_RC" = 2 ] && [ ! -s "$PIW/argv" ] && grep -qF 'refusing to run pi' <<< "$PI_OUT" \
-  && grep -qF 'dotpath/malicious' <<< "$PI_OUT" && ! grep -q 'PR_RELAY_OPENCODE_BIN' <<< "$PI_OUT"
+  bash "$RELAY" --pr 1 --author claude --reviewers codex,pi_glm 2>&1)
+PI_RC=$?
+[ "$PI_RC" = 2 ] && [ ! -s "$PIW/argv" ] && grep -qF 'refusing to run pi' <<<"$PI_OUT" &&
+  grep -qF 'dotpath/malicious' <<<"$PI_OUT" && ! grep -q 'PR_RELAY_OPENCODE_BIN' <<<"$PI_OUT"
 pis_ok "a pi that resolves into the checkout stops the relay (2) before any seat, with a pi message" $?
 
 # review-local: the same seats, the same reader.
-PIRL="$WORK/pirl"; rm -rf "$PIRL"; mkdir -p "$PIRL"
-( cd "$PIRL" && git init -q && git config user.email t@t && git config user.name t \
-  && echo a > f && git add f && git commit -q -m i && echo pi-local-change >> f && git add f && git commit -q -m c )
+PIRL="$WORK/pirl"
+rm -rf "$PIRL"
+mkdir -p "$PIRL"
+(cd "$PIRL" && git init -q && git config user.email t@t && git config user.name t &&
+  echo a >f && git add f && git commit -q -m i && echo pi-local-change >>f && git add f && git commit -q -m c)
 pi_local() { # <env assignments...> -- <review-local args...>
   local envs=()
-  while [ $# -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    envs+=("$1")
+    shift
+  done
   [ "${1:-}" = -- ] && shift
-  : > "$PIW/argv"; : > "$PIW/stdin"; : > "$PIW/cwd"
-  PI_OUT="$( cd "$PIRL" && env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
-      TMPDIR="$WORK/tmp" ARGV_LOG="$PIW/argv" STDIN_LOG="$PIW/stdin" PI_CWD_LOG="$PIW/cwd" \
-      PI_GLM_REVIEW_MODEL= PI_GLM_REVIEW_EFFORT= ${envs[@]+"${envs[@]}"} \
-      bash "$HERE/../review-local" --author claude --base HEAD~1 "$@" 2>&1 )"; PI_RC=$?
+  : >"$PIW/argv"
+  : >"$PIW/stdin"
+  : >"$PIW/cwd"
+  PI_OUT="$(cd "$PIRL" && env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" \
+    TMPDIR="$WORK/tmp" ARGV_LOG="$PIW/argv" STDIN_LOG="$PIW/stdin" PI_CWD_LOG="$PIW/cwd" \
+    PI_GLM_REVIEW_MODEL= PI_GLM_REVIEW_EFFORT= ${envs[@]+"${envs[@]}"} \
+    bash "$HERE/../review-local" --author claude --base HEAD~1 "$@" 2>&1)"
+  PI_RC=$?
 }
 pi_local -- --reviewers pi_glm
-[ "$PI_RC" = 0 ] && [ "$(grep '^pi_glm ' "$PIW/argv")" = "pi_glm -p --mode json --model zai/glm-5.3 --thinking low $PI_FLAGS" ] \
-  && grep -qF -- '+pi-local-change' "$PIW/stdin" && grep -qF 'LGTM from pi_glm.' <<< "$PI_OUT"
+[ "$PI_RC" = 0 ] && [ "$(grep '^pi_glm ' "$PIW/argv")" = "pi_glm -p --mode json --model zai/glm-5.3 --thinking low $PI_FLAGS" ] &&
+  grep -qF -- '+pi-local-change' "$PIW/stdin" && grep -qF 'LGTM from pi_glm.' <<<"$PI_OUT"
 pis_ok "review-local runs pi_glm with the pinned argv and the branch diff on stdin" $?
-case "$(sed -n 's/^pi_glm //p' "$PIW/cwd")" in */iso-pi.*) true;; *) false;; esac
+case "$(sed -n 's/^pi_glm //p' "$PIW/cwd")" in */iso-pi.*) true ;; *) false ;; esac
 pis_ok "review-local runs pi_glm from an iso-pi.* directory" $?
 pi_local PI_STOP=length -- --reviewers pi_glm
-[ "$PI_RC" = 3 ] && ! grep -qF 'LGTM from pi_glm.' <<< "$PI_OUT" && grep -qF 'stopReason=length' <<< "$PI_OUT"
+[ "$PI_RC" = 3 ] && ! grep -qF 'LGTM from pi_glm.' <<<"$PI_OUT" && grep -qF 'stopReason=length' <<<"$PI_OUT"
 pis_ok "review-local: a length stop is a failed seat, the cut review is not printed as one" $?
-printf '#!/usr/bin/env bash\necho PWNED\n' > "$PIRL/malicious"; chmod +x "$PIRL/malicious"
-mkdir -p "$WORK/trustedpi2"; ln -sf "$PIRL/malicious" "$WORK/trustedpi2/pi"; : > "$PIW/argv"
-PI_OUT=$( cd "$PIRL" && env PATH="$WORK/trustedpi2:$BIN:/usr/bin:/bin" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" \
-  TMPDIR="$WORK/tmp" ARGV_LOG="$PIW/argv" bash "$HERE/../review-local" --author claude --reviewers codex,pi_glm --base HEAD~1 2>&1 ); PI_RC=$?
-[ "$PI_RC" = 2 ] && [ ! -s "$PIW/argv" ] && grep -qF 'refusing to run pi' <<< "$PI_OUT" && ! grep -q 'PR_RELAY_OPENCODE_BIN' <<< "$PI_OUT"
+printf '#!/usr/bin/env bash\necho PWNED\n' >"$PIRL/malicious"
+chmod +x "$PIRL/malicious"
+mkdir -p "$WORK/trustedpi2"
+ln -sf "$PIRL/malicious" "$WORK/trustedpi2/pi"
+: >"$PIW/argv"
+PI_OUT=$(cd "$PIRL" && env PATH="$WORK/trustedpi2:$BIN:/usr/bin:/bin" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" \
+  TMPDIR="$WORK/tmp" ARGV_LOG="$PIW/argv" bash "$HERE/../review-local" --author claude --reviewers codex,pi_glm --base HEAD~1 2>&1)
+PI_RC=$?
+[ "$PI_RC" = 2 ] && [ ! -s "$PIW/argv" ] && grep -qF 'refusing to run pi' <<<"$PI_OUT" && ! grep -q 'PR_RELAY_OPENCODE_BIN' <<<"$PI_OUT"
 pis_ok "review-local: a pi inside the checkout stops it at startup (2)" $?
 rm -f "$PIRL/malicious"
 
@@ -2321,34 +3169,51 @@ rm -f "$PIRL/malicious"
 # these pass by accident.
 cur_model_assert() { # <label> <argv-file>
   if grep -q -- '--model composer-2.5' "$2" 2>/dev/null; then
-    echo "  ok   [-] $1"; PASS=$((PASS+1))
+    echo "  ok   [-] $1"
+    PASS=$((PASS + 1))
   else
-    echo "  FAIL $1 — argv: $(grep '^cursor-agent ' "$2" 2>/dev/null || echo '<no cursor-agent invocation recorded>')"; FAIL=$((FAIL+1))
+    echo "  FAIL $1 — argv: $(grep '^cursor-agent ' "$2" 2>/dev/null || echo '<no cursor-agent invocation recorded>')"
+    FAIL=$((FAIL + 1))
   fi
 }
 CUR_ARGV="$WORK/cursor-argv.log"
 # link mode (the default) and diff mode are separate branches of the case, so both need cover.
 for cur_mode in link diff; do
-  : > "$CUR_ARGV"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-  out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+  : >"$CUR_ARGV"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
     XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
     GH_SHA_COUNTER="$WORK/sha_counter" CURSOR_REVIEW_MODEL= ARGV_LOG="$CUR_ARGV" \
-    bash "$RELAY" --pr 1 --author claude --reviewers cursor "--$cur_mode" 2>&1 )
+    bash "$RELAY" --pr 1 --author claude --reviewers cursor "--$cur_mode" 2>&1)
   rc=$?
-  if [ "$rc" = 0 ]; then echo "  ok   [0] relay dispatches cursor in $cur_mode mode"; PASS=$((PASS+1))
-  else echo "  FAIL [got $rc, want 0] relay cursor $cur_mode mode: $out"; FAIL=$((FAIL+1)); fi
+  if [ "$rc" = 0 ]; then
+    echo "  ok   [0] relay dispatches cursor in $cur_mode mode"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL [got $rc, want 0] relay cursor $cur_mode mode: $out"
+    FAIL=$((FAIL + 1))
+  fi
   cur_model_assert "relay pins the cursor model in $cur_mode mode" "$CUR_ARGV"
 done
 # The override is the documented recovery path if Cursor ever retires the model id, so it is
 # part of the contract, not a convenience.
-: > "$CUR_ARGV"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CUR_ARGV"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" CURSOR_REVIEW_MODEL=cursor-grok-4.5-high ARGV_LOG="$CUR_ARGV" \
-  bash "$RELAY" --pr 1 --author claude --reviewers cursor 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers cursor 2>&1)
 if grep -q -- '--model cursor-grok-4.5-high' "$CUR_ARGV" 2>/dev/null; then
-  echo "  ok   [-] CURSOR_REVIEW_MODEL overrides the pinned default"; PASS=$((PASS+1))
-else echo "  FAIL CURSOR_REVIEW_MODEL ignored — argv: $(cat "$CUR_ARGV" 2>/dev/null)"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] CURSOR_REVIEW_MODEL overrides the pinned default"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL CURSOR_REVIEW_MODEL ignored — argv: $(cat "$CUR_ARGV" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
+fi
 # --- codex / antigravity model overrides -------------------------------------
 # Asserted at ALL THREE call sites (relay here, review-local below, distill in
 # test-distill.sh): the overrides are duplicated across the three scripts, and this
@@ -2363,54 +3228,76 @@ AGY_ARGV="$WORK/agy-argv.log"
 # The guard itself, run under a shell that emulates the 3.2 failure: `set -u`
 # plus the bare expansion is exactly what used to abort.
 if bash -c 'set -u; A=(); printf "%s" ${A[@]+"${A[@]}"}; exit 0' >/dev/null 2>&1; then
-  echo "  ok   [-] empty override array expands safely under set -u"; PASS=$((PASS+1))
+  echo "  ok   [-] empty override array expands safely under set -u"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL empty override array aborts under set -u"; FAIL=$((FAIL+1))
+  echo "  FAIL empty override array aborts under set -u"
+  FAIL=$((FAIL + 1))
 fi
 
 # Unset overrides must add NO argv at all — not an empty string argument.
-: > "$CODEX_ARGV"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CODEX_ARGV"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" CODEX_REVIEW_MODEL= CODEX_REVIEW_EFFORT= ARGV_LOG="$CODEX_ARGV" \
-  bash "$RELAY" --pr 1 --author claude --reviewers codex 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers codex 2>&1)
 if grep -q -- '-m ' "$CODEX_ARGV" 2>/dev/null || grep -q -- 'model_reasoning_effort' "$CODEX_ARGV" 2>/dev/null; then
-  echo "  FAIL unset codex overrides still added argv: $(cat "$CODEX_ARGV")"; FAIL=$((FAIL+1))
+  echo "  FAIL unset codex overrides still added argv: $(cat "$CODEX_ARGV")"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] unset codex overrides add no argv"; PASS=$((PASS+1))
+  echo "  ok   [-] unset codex overrides add no argv"
+  PASS=$((PASS + 1))
 fi
 
-: > "$CODEX_ARGV"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CODEX_ARGV"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" CODEX_REVIEW_MODEL=gpt-5.6-sol CODEX_REVIEW_EFFORT=high ARGV_LOG="$CODEX_ARGV" \
-  bash "$RELAY" --pr 1 --author claude --reviewers codex 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers codex 2>&1)
 if grep -q -- '-m gpt-5.6-sol' "$CODEX_ARGV" 2>/dev/null && grep -q 'model_reasoning_effort' "$CODEX_ARGV" 2>/dev/null; then
-  echo "  ok   [-] CODEX_REVIEW_MODEL/EFFORT reach codex argv"; PASS=$((PASS+1))
+  echo "  ok   [-] CODEX_REVIEW_MODEL/EFFORT reach codex argv"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL codex overrides ignored — argv: $(cat "$CODEX_ARGV" 2>/dev/null)"; FAIL=$((FAIL+1))
+  echo "  FAIL codex overrides ignored — argv: $(cat "$CODEX_ARGV" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
 fi
 
-: > "$AGY_ARGV"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$AGY_ARGV"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" AGY_REVIEW_MODEL= ARGV_LOG="$AGY_ARGV" \
-  bash "$RELAY" --pr 1 --author claude --reviewers antigravity 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers antigravity 2>&1)
 if grep -q -- '--model' "$AGY_ARGV" 2>/dev/null; then
-  echo "  FAIL unset AGY_REVIEW_MODEL still added --model: $(cat "$AGY_ARGV")"; FAIL=$((FAIL+1))
+  echo "  FAIL unset AGY_REVIEW_MODEL still added --model: $(cat "$AGY_ARGV")"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] unset AGY_REVIEW_MODEL adds no argv"; PASS=$((PASS+1))
+  echo "  ok   [-] unset AGY_REVIEW_MODEL adds no argv"
+  PASS=$((PASS + 1))
 fi
 
-: > "$AGY_ARGV"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-out=$( env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$AGY_ARGV"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+out=$(env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" AGY_REVIEW_MODEL=gemini-3.1-pro-high ARGV_LOG="$AGY_ARGV" \
-  bash "$RELAY" --pr 1 --author claude --reviewers antigravity 2>&1 )
+  bash "$RELAY" --pr 1 --author claude --reviewers antigravity 2>&1)
 if grep -q -- '--model gemini-3.1-pro-high' "$AGY_ARGV" 2>/dev/null; then
-  echo "  ok   [-] AGY_REVIEW_MODEL reaches agy argv"; PASS=$((PASS+1))
+  echo "  ok   [-] AGY_REVIEW_MODEL reaches agy argv"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL AGY_REVIEW_MODEL ignored — argv: $(cat "$AGY_ARGV" 2>/dev/null)"; FAIL=$((FAIL+1))
+  echo "  FAIL AGY_REVIEW_MODEL ignored — argv: $(cat "$AGY_ARGV" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
 fi
 
 # review-local carries its own copy of the codex/agy overrides too. Codex flagged that the
@@ -2418,81 +3305,102 @@ fi
 # repo has been bitten by drift between these copies before.
 CODEX_ARGV_RL="$WORK/codex-argv-rl.log"
 AGY_ARGV_RL="$WORK/agy-argv-rl.log"
-RLREPO2="$WORK/rlrepo2"; rm -rf "$RLREPO2"; mkdir -p "$RLREPO2" "$WORK/tmp"
-( cd "$RLREPO2" && git init -q && git config user.email t@t && git config user.name t \
-  && echo a > f && git add f && git commit -q -m i \
-  && echo b >> f && git add f && git commit -q -m c )
+RLREPO2="$WORK/rlrepo2"
+rm -rf "$RLREPO2"
+mkdir -p "$RLREPO2" "$WORK/tmp"
+(cd "$RLREPO2" && git init -q && git config user.email t@t && git config user.name t &&
+  echo a >f && git add f && git commit -q -m i &&
+  echo b >>f && git add f && git commit -q -m c)
 
-: > "$CODEX_ARGV_RL"
-out=$( cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CODEX_ARGV_RL"
+out=$(cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   CODEX_REVIEW_MODEL= CODEX_REVIEW_EFFORT= ARGV_LOG="$CODEX_ARGV_RL" \
-  bash "$RL" --author claude --reviewers codex --base HEAD~1 2>&1 )
+  bash "$RL" --author claude --reviewers codex --base HEAD~1 2>&1)
 if grep -qE -- '(^| )-m ( |$)|model_reasoning_effort' "$CODEX_ARGV_RL" 2>/dev/null; then
-  echo "  FAIL review-local added codex argv with overrides unset: $(cat "$CODEX_ARGV_RL")"; FAIL=$((FAIL+1))
+  echo "  FAIL review-local added codex argv with overrides unset: $(cat "$CODEX_ARGV_RL")"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] review-local adds no codex argv when unset"; PASS=$((PASS+1))
+  echo "  ok   [-] review-local adds no codex argv when unset"
+  PASS=$((PASS + 1))
 fi
 
-: > "$CODEX_ARGV_RL"
-out=$( cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CODEX_ARGV_RL"
+out=$(cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   CODEX_REVIEW_MODEL=gpt-5.6-sol CODEX_REVIEW_EFFORT=high ARGV_LOG="$CODEX_ARGV_RL" \
-  bash "$RL" --author claude --reviewers codex --base HEAD~1 2>&1 )
+  bash "$RL" --author claude --reviewers codex --base HEAD~1 2>&1)
 if grep -q -- '-m gpt-5.6-sol' "$CODEX_ARGV_RL" 2>/dev/null && grep -q 'model_reasoning_effort' "$CODEX_ARGV_RL" 2>/dev/null; then
-  echo "  ok   [-] review-local honours the codex overrides"; PASS=$((PASS+1))
+  echo "  ok   [-] review-local honours the codex overrides"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL review-local ignored the codex overrides — argv: $(cat "$CODEX_ARGV_RL" 2>/dev/null)"; FAIL=$((FAIL+1))
+  echo "  FAIL review-local ignored the codex overrides — argv: $(cat "$CODEX_ARGV_RL" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
 fi
 
-: > "$AGY_ARGV_RL"
-out=$( cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$AGY_ARGV_RL"
+out=$(cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   AGY_REVIEW_MODEL= ARGV_LOG="$AGY_ARGV_RL" \
-  bash "$RL" --author claude --reviewers antigravity --base HEAD~1 2>&1 )
+  bash "$RL" --author claude --reviewers antigravity --base HEAD~1 2>&1)
 if grep -q -- '--model' "$AGY_ARGV_RL" 2>/dev/null; then
-  echo "  FAIL review-local added --model with AGY_REVIEW_MODEL unset: $(cat "$AGY_ARGV_RL")"; FAIL=$((FAIL+1))
+  echo "  FAIL review-local added --model with AGY_REVIEW_MODEL unset: $(cat "$AGY_ARGV_RL")"
+  FAIL=$((FAIL + 1))
 else
-  echo "  ok   [-] review-local adds no agy argv when unset"; PASS=$((PASS+1))
+  echo "  ok   [-] review-local adds no agy argv when unset"
+  PASS=$((PASS + 1))
 fi
 
-: > "$AGY_ARGV_RL"
-out=$( cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$AGY_ARGV_RL"
+out=$(cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   AGY_REVIEW_MODEL=gemini-3.1-pro-high ARGV_LOG="$AGY_ARGV_RL" \
-  bash "$RL" --author claude --reviewers antigravity --base HEAD~1 2>&1 )
+  bash "$RL" --author claude --reviewers antigravity --base HEAD~1 2>&1)
 if grep -q -- '--model gemini-3.1-pro-high' "$AGY_ARGV_RL" 2>/dev/null; then
-  echo "  ok   [-] review-local honours AGY_REVIEW_MODEL"; PASS=$((PASS+1))
+  echo "  ok   [-] review-local honours AGY_REVIEW_MODEL"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL review-local ignored AGY_REVIEW_MODEL — argv: $(cat "$AGY_ARGV_RL" 2>/dev/null)"; FAIL=$((FAIL+1))
+  echo "  FAIL review-local ignored AGY_REVIEW_MODEL — argv: $(cat "$AGY_ARGV_RL" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
 fi
 
 # review-local has its own copy of the cursor invocation. Without this assertion the two
 # drift silently — the same failure mode the antigravity argv test above was written for.
-: > "$CUR_ARGV"
-RLREPO="$WORK/rlrepo"; rm -rf "$RLREPO"; mkdir -p "$RLREPO" "$WORK/tmp"
-( cd "$RLREPO" && git init -q && git config user.email t@t && git config user.name t \
-  && echo a > f && git add f && git commit -q -m i \
-  && echo b >> f && git add f && git commit -q -m c )
-out=$( cd "$RLREPO" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CUR_ARGV"
+RLREPO="$WORK/rlrepo"
+rm -rf "$RLREPO"
+mkdir -p "$RLREPO" "$WORK/tmp"
+(cd "$RLREPO" && git init -q && git config user.email t@t && git config user.name t &&
+  echo a >f && git add f && git commit -q -m i &&
+  echo b >>f && git add f && git commit -q -m c)
+out=$(cd "$RLREPO" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   CURSOR_REVIEW_MODEL= ARGV_LOG="$CUR_ARGV" \
-  bash "$RL" --author claude --reviewers cursor --base HEAD~1 2>&1 )
+  bash "$RL" --author claude --reviewers cursor --base HEAD~1 2>&1)
 rc=$?
-if [ "$rc" = 0 ]; then echo "  ok   [0] review-local dispatches cursor"; PASS=$((PASS+1))
-else echo "  FAIL [got $rc, want 0] review-local cursor: $out"; FAIL=$((FAIL+1)); fi
+if [ "$rc" = 0 ]; then
+  echo "  ok   [0] review-local dispatches cursor"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL [got $rc, want 0] review-local cursor: $out"
+  FAIL=$((FAIL + 1))
+fi
 cur_model_assert "review-local pins the cursor model too" "$CUR_ARGV"
 # ...and honours the override, like the relay and distill paths. A call site that respects the
 # default but ignores the escape hatch would leave the documented recovery path broken on one
 # of the three scripts, which no default-only assertion would ever notice.
-: > "$CUR_ARGV"
-out=$( cd "$RLREPO" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CUR_ARGV"
+out=$(cd "$RLREPO" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   CURSOR_REVIEW_MODEL=cursor-grok-4.5-high ARGV_LOG="$CUR_ARGV" \
-  bash "$RL" --author claude --reviewers cursor --base HEAD~1 2>&1 )
+  bash "$RL" --author claude --reviewers cursor --base HEAD~1 2>&1)
 if grep -q -- '--model cursor-grok-4.5-high' "$CUR_ARGV" 2>/dev/null; then
-  echo "  ok   [-] review-local honours CURSOR_REVIEW_MODEL"; PASS=$((PASS+1))
-else echo "  FAIL review-local ignored CURSOR_REVIEW_MODEL — argv: $(cat "$CUR_ARGV" 2>/dev/null)"; FAIL=$((FAIL+1)); fi
+  echo "  ok   [-] review-local honours CURSOR_REVIEW_MODEL"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL review-local ignored CURSOR_REVIEW_MODEL — argv: $(cat "$CUR_ARGV" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- SCRIPT_DIR follows the script's own symlink to find the sibling lib ------------
 # Regression: invoked through a symlink whose directory has NO lib-opencode.sh next to it
@@ -2502,38 +3410,51 @@ else echo "  FAIL review-local ignored CURSOR_REVIEW_MODEL — argv: $(cat "$CUR
 # "missing lib-opencode.sh" for every symlinked install — it broke the tool for anyone
 # not running it from the repo. `--help` sources the lib (relay_print_header lives there)
 # and exits 0 without touching gh, so it's a clean probe.
-SLINK_BIN="$WORK/slinkbin"; mkdir -p "$SLINK_BIN"
+SLINK_BIN="$WORK/slinkbin"
+mkdir -p "$SLINK_BIN"
 ln -s "$RELAY" "$SLINK_BIN/pr-review-relay"
 if out=$(bash "$SLINK_BIN/pr-review-relay" --help 2>&1) && ! printf '%s' "$out" | grep -qE 'missing.*lib-(opencode|grok|pi)'; then
-  echo "  ok   [-] absolute symlink invocation resolves the sibling lib"; PASS=$((PASS+1))
+  echo "  ok   [-] absolute symlink invocation resolves the sibling lib"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL absolute symlink invocation could not find lib-opencode.sh"; FAIL=$((FAIL+1))
+  echo "  FAIL absolute symlink invocation could not find lib-opencode.sh"
+  FAIL=$((FAIL + 1))
 fi
 # A RELATIVE symlink target must resolve against the LINK's directory, not the cwd.
-REALD="$WORK/real"; mkdir -p "$REALD"
+REALD="$WORK/real"
+mkdir -p "$REALD"
 cp "$RELAY" "$HERE/../lib-opencode.sh" "$HERE/../lib-grok.sh" "$HERE/../lib-pi.sh" "$HERE/../lib-panel.sh" "$HERE/../lib-argv.sh" "$HERE/../wrap-collapsed-pr-comment.mjs" "$REALD/" 2>/dev/null
-LINKD="$WORK/linkbin"; mkdir -p "$LINKD"
-( cd "$LINKD" && ln -s "../real/pr-review-relay" pr-review-relay )
-if out=$( cd "$WORK" && bash "$LINKD/pr-review-relay" --help 2>&1) && ! printf '%s' "$out" | grep -qE 'missing.*lib-(opencode|grok|pi)'; then
-  echo "  ok   [-] relative symlink resolves against the link's own dir"; PASS=$((PASS+1))
+LINKD="$WORK/linkbin"
+mkdir -p "$LINKD"
+(cd "$LINKD" && ln -s "../real/pr-review-relay" pr-review-relay)
+if out=$(cd "$WORK" && bash "$LINKD/pr-review-relay" --help 2>&1) && ! printf '%s' "$out" | grep -qE 'missing.*lib-(opencode|grok|pi)'; then
+  echo "  ok   [-] relative symlink resolves against the link's own dir"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL relative symlink did not resolve the lib"; FAIL=$((FAIL+1))
+  echo "  FAIL relative symlink did not resolve the lib"
+  FAIL=$((FAIL + 1))
 fi
 # Invoked as a BARE filename from the link's own dir (`bash pr-review-relay`): $_self has no
 # slash, so the relative-target branch must resolve against the cwd, not build a bogus
 # "pr-review-relay/../real/..." path. Regression for the no-slash case.
-if out=$( cd "$LINKD" && bash pr-review-relay --help 2>&1) && ! printf '%s' "$out" | grep -qE 'missing.*lib-(opencode|grok|pi)|cannot resolve'; then
-  echo "  ok   [-] bare-filename relative symlink resolves (no-slash \$_self)"; PASS=$((PASS+1))
+if out=$(cd "$LINKD" && bash pr-review-relay --help 2>&1) && ! printf '%s' "$out" | grep -qE 'missing.*lib-(opencode|grok|pi)|cannot resolve'; then
+  echo "  ok   [-] bare-filename relative symlink resolves (no-slash \$_self)"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL bare-filename relative symlink broke (no-slash case): $(printf '%s' "$out" | head -1)"; FAIL=$((FAIL+1))
+  echo "  FAIL bare-filename relative symlink broke (no-slash case): $(printf '%s' "$out" | head -1)"
+  FAIL=$((FAIL + 1))
 fi
 # The same bootstrap lives in review-local; symlink it too so the two can't drift.
 cp "$HERE/../review-local" "$REALD/" 2>/dev/null
-RLINK="$WORK/rlinkbin"; mkdir -p "$RLINK"; ln -s "$REALD/review-local" "$RLINK/review-local"
+RLINK="$WORK/rlinkbin"
+mkdir -p "$RLINK"
+ln -s "$REALD/review-local" "$RLINK/review-local"
 if out=$(bash "$RLINK/review-local" --help 2>&1) && ! printf '%s' "$out" | grep -qE 'missing.*lib-(opencode|grok|pi)'; then
-  echo "  ok   [-] review-local resolves the sibling lib through a symlink"; PASS=$((PASS+1))
+  echo "  ok   [-] review-local resolves the sibling lib through a symlink"
+  PASS=$((PASS + 1))
 else
-  echo "  FAIL review-local symlink did not resolve the lib"; FAIL=$((FAIL+1))
+  echo "  FAIL review-local symlink did not resolve the lib"
+  FAIL=$((FAIL + 1))
 fi
 # The other sibling-locating entry points (pr-review-consensus / -collapse-comments) got the
 # same bootstrap; through a symlink they must not die at SCRIPT_DIR resolution. They fail
@@ -2541,12 +3462,15 @@ fi
 cp "$HERE/../pr-review-consensus" "$HERE/../pr-review-collapse-comments" "$REALD/" 2>/dev/null
 for s in pr-review-consensus pr-review-collapse-comments; do
   ln -sf "$REALD/$s" "$RLINK/$s"
-  err=$( PATH="$BIN:$PATH" bash "$RLINK/$s" 2>&1 || true )
-  if ! grep -q 'cannot resolve' <<< "$err"; then
-    echo "  ok   [-] $s resolves its own symlink (no SCRIPT_DIR error)"; PASS=$((PASS+1))
-  else echo "  FAIL $s failed to resolve its symlink"; FAIL=$((FAIL+1)); fi
+  err=$(PATH="$BIN:$PATH" bash "$RLINK/$s" 2>&1 || true)
+  if ! grep -q 'cannot resolve' <<<"$err"; then
+    echo "  ok   [-] $s resolves its own symlink (no SCRIPT_DIR error)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $s failed to resolve its symlink"
+    FAIL=$((FAIL + 1))
+  fi
 done
-
 
 # --- claude invocation contract ----------------------------------------------
 # Earlier tests replace $BIN/claude with minimal stubs (one writes a file to prove plan
@@ -2565,16 +3489,31 @@ CL_STDIN="$WORK/claude-stdin.log"
 cl_argv_has() { grep -q -- "$1" "$CL_ARGV" 2>/dev/null; }
 cl_assert() { # <label> <flag> <want: has|hasnot>
   if [ "$3" = has ]; then
-    if cl_argv_has "$2"; then echo "  ok   [-] $1"; PASS=$((PASS+1))
-    else echo "  FAIL $1 — argv: $(grep '^claude ' "$CL_ARGV" 2>/dev/null | head -1 || echo '<no claude invocation recorded>')"; FAIL=$((FAIL+1)); fi
+    if cl_argv_has "$2"; then
+      echo "  ok   [-] $1"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL $1 — argv: $(grep '^claude ' "$CL_ARGV" 2>/dev/null | head -1 || echo '<no claude invocation recorded>')"
+      FAIL=$((FAIL + 1))
+    fi
   else
-    if cl_argv_has "$2"; then echo "  FAIL $1 — argv: $(grep '^claude ' "$CL_ARGV" 2>/dev/null | head -1)"; FAIL=$((FAIL+1))
-    else echo "  ok   [-] $1"; PASS=$((PASS+1)); fi
+    if cl_argv_has "$2"; then
+      echo "  FAIL $1 — argv: $(grep '^claude ' "$CL_ARGV" 2>/dev/null | head -1)"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  ok   [-] $1"
+      PASS=$((PASS + 1))
+    fi
   fi
 }
 _cl_relay() { # <mode> [env assignments...]
-  local mode="$1"; shift
-  : > "$CL_ARGV"; : > "$CL_STDIN"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+  local mode="$1"
+  shift
+  : >"$CL_ARGV"
+  : >"$CL_STDIN"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
   env PATH="$BIN:$PATH" HOME="$WORK/home" \
     XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
     GH_SHA_COUNTER="$WORK/sha_counter" ARGV_LOG="$CL_ARGV" STDIN_LOG="$CL_STDIN" "$@" \
@@ -2584,12 +3523,12 @@ _cl_relay() { # <mode> [env assignments...]
 # link and diff are separate branches of the case statement, so both need cover.
 for cl_mode in link diff; do
   _cl_relay "$cl_mode" CLAUDE_REVIEW_MODEL= CLAUDE_REVIEW_EFFORT= CLAUDE_REVIEW_FALLBACK_MODEL=
-  cl_assert "relay pins the claude model in $cl_mode mode"        '--model opus'             has
-  cl_assert "relay sets the claude fallback in $cl_mode mode"     '--fallback-model sonnet'  has
-  cl_assert "relay holds claude in plan mode in $cl_mode mode"    '--permission-mode plan'   has
-  cl_assert "relay adds --safe-mode for claude in $cl_mode mode"  '--safe-mode'              has
+  cl_assert "relay pins the claude model in $cl_mode mode" '--model opus' has
+  cl_assert "relay sets the claude fallback in $cl_mode mode" '--fallback-model sonnet' has
+  cl_assert "relay holds claude in plan mode in $cl_mode mode" '--permission-mode plan' has
+  cl_assert "relay adds --safe-mode for claude in $cl_mode mode" '--safe-mode' has
   # Effort is the one opt-in knob: unset it must add NO argument, not an empty string.
-  cl_assert "unset CLAUDE_REVIEW_EFFORT adds no argv in $cl_mode mode" '--effort'           hasnot
+  cl_assert "unset CLAUDE_REVIEW_EFFORT adds no argv in $cl_mode mode" '--effort' hasnot
 done
 
 # An unavailable model does NOT fail loudly: measured on claude 2.1.220 it prints
@@ -2599,24 +3538,24 @@ done
 # spent. --fallback-model turns a guaranteed-wasted round into a real review, which makes
 # it part of the contract rather than a convenience — hence asserted above, overridden here.
 _cl_relay link CLAUDE_REVIEW_MODEL=sonnet CLAUDE_REVIEW_EFFORT=high CLAUDE_REVIEW_FALLBACK_MODEL=haiku
-cl_assert "CLAUDE_REVIEW_MODEL overrides the pinned default"   '--model sonnet'          has
-cl_assert "CLAUDE_REVIEW_EFFORT reaches claude argv"           '--effort high'           has
-cl_assert "CLAUDE_REVIEW_FALLBACK_MODEL reaches claude argv"   '--fallback-model haiku'  has
+cl_assert "CLAUDE_REVIEW_MODEL overrides the pinned default" '--model sonnet' has
+cl_assert "CLAUDE_REVIEW_EFFORT reaches claude argv" '--effort high' has
+cl_assert "CLAUDE_REVIEW_FALLBACK_MODEL reaches claude argv" '--fallback-model haiku' has
 
 # review-local deliberately does NOT get plan/safe mode: it reviews YOUR OWN branch, so
 # --safe-mode would only disable your own CLAUDE.md, hooks and MCP for your own review.
 # The asymmetry is the decision; assert it, or a later "make the two consistent" pass
 # will quietly undo it.
-: > "$CL_ARGV"
-( cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CL_ARGV"
+(cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   CLAUDE_REVIEW_MODEL= CLAUDE_REVIEW_EFFORT= CLAUDE_REVIEW_FALLBACK_MODEL= ARGV_LOG="$CL_ARGV" \
-  bash "$RL" --author codex --reviewers claude --base HEAD~1 >/dev/null 2>&1 )
-cl_assert "review-local pins the claude model"              '--model opus'            has
-cl_assert "review-local sets the claude fallback"           '--fallback-model sonnet' has
-cl_assert "review-local adds no --effort when unset"        '--effort'                hasnot
-cl_assert "review-local does NOT add --permission-mode"     '--permission-mode'       hasnot
-cl_assert "review-local does NOT add --safe-mode"           '--safe-mode'             hasnot
+  bash "$RL" --author codex --reviewers claude --base HEAD~1 >/dev/null 2>&1)
+cl_assert "review-local pins the claude model" '--model opus' has
+cl_assert "review-local sets the claude fallback" '--fallback-model sonnet' has
+cl_assert "review-local adds no --effort when unset" '--effort' hasnot
+cl_assert "review-local does NOT add --permission-mode" '--permission-mode' hasnot
+cl_assert "review-local does NOT add --safe-mode" '--safe-mode' hasnot
 
 # --- review prompt contract --------------------------------------------------
 # The criteria live in six prompt strings across four files. They drift: this repo has
@@ -2626,33 +3565,44 @@ cl_assert "review-local does NOT add --safe-mode"           '--safe-mode'       
 # findings about a file they cannot see.
 pr_assert() { # <label> <file> <needle> <want: has|hasnot>
   if grep -qF -- "$3" "$2" 2>/dev/null; then
-    [ "$4" = has ] && { echo "  ok   [-] $1"; PASS=$((PASS+1)); return; }
-    echo "  FAIL $1 — '$3' present in $2"; FAIL=$((FAIL+1)); return
+    [ "$4" = has ] && {
+      echo "  ok   [-] $1"
+      PASS=$((PASS + 1))
+      return
+    }
+    echo "  FAIL $1 — '$3' present in $2"
+    FAIL=$((FAIL + 1))
+    return
   fi
-  [ "$4" = hasnot ] && { echo "  ok   [-] $1"; PASS=$((PASS+1)); return; }
-  echo "  FAIL $1 — '$3' missing from $2"; FAIL=$((FAIL+1))
+  [ "$4" = hasnot ] && {
+    echo "  ok   [-] $1"
+    PASS=$((PASS + 1))
+    return
+  }
+  echo "  FAIL $1 — '$3' missing from $2"
+  FAIL=$((FAIL + 1))
 }
 # All six prompts carry the criteria.
 pr_criteria() { # <label> <file>
-  pr_assert "$1 asks about regressions"        "$2" 'regressions'                    has
-  pr_assert "$1 asks about missing tests"      "$2" 'inadequate tests'               has
-  pr_assert "$1 asks for file/line references" "$2" 'Give a file and line reference'  has
+  pr_assert "$1 asks about regressions" "$2" 'regressions' has
+  pr_assert "$1 asks about missing tests" "$2" 'inadequate tests' has
+  pr_assert "$1 asks for file/line references" "$2" 'Give a file and line reference' has
   pr_assert "$1 pins the missing-test severity" "$2" 'Report missing tests as Should-fix' has
   # The severity buckets are what ship-feature's loop-termination rule keys off, and
   # "do not modify" is the only instruction standing between a reviewer and the tree.
-  pr_assert "$1 keeps the severity buckets"    "$2" 'Blocker / Should-fix / Nit'      has
+  pr_assert "$1 keeps the severity buckets" "$2" 'Blocker / Should-fix / Nit' has
 }
 for cl_mode in link diff; do
   _cl_relay "$cl_mode"
   pr_criteria "relay/$cl_mode prompt" "$CL_STDIN"
   pr_assert "relay/$cl_mode prompt asks for conventions" "$CL_STDIN" 'AGENTS.md, CLAUDE.md' has
-  pr_assert "relay/$cl_mode prompt keeps do-not-modify"  "$CL_STDIN" 'modify anything'      has
-  pr_assert "relay/$cl_mode prompt is NOT in argv"       "$CL_ARGV"  'regressions'          hasnot
+  pr_assert "relay/$cl_mode prompt keeps do-not-modify" "$CL_STDIN" 'modify anything' has
+  pr_assert "relay/$cl_mode prompt is NOT in argv" "$CL_ARGV" 'regressions' hasnot
 done
-: > "$CL_ARGV"
-( cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
+: >"$CL_ARGV"
+(cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
-  ARGV_LOG="$CL_ARGV" bash "$RL" --author codex --reviewers claude --base HEAD~1 >/dev/null 2>&1 )
+  ARGV_LOG="$CL_ARGV" bash "$RL" --author codex --reviewers claude --base HEAD~1 >/dev/null 2>&1)
 pr_criteria "review-local prompt" "$CL_ARGV"
 pr_assert "review-local prompt asks for conventions" "$CL_ARGV" 'AGENTS.md, CLAUDE.md' has
 # This clause said "the opencode reviewer receives it as an attached file" for as
@@ -2665,10 +3615,14 @@ pr_assert "review-local prompt never claims an attachment" "$CL_ARGV" 'attached'
 # checkout as the PR head. Codex flagged that --link and --diff alone leave it uncovered, which is
 # how a prompt variant gets edited in source and never exercised. Reuses the local-context repo
 # built above; unlike lc_run, ARGV_LOG is set so the argv-logging stub records the prompt.
-: > "$CL_ARGV"; : > "$CL_STDIN"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
-( cd "$LREPO" && env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" \
+: >"$CL_ARGV"
+: >"$CL_STDIN"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+(cd "$LREPO" && env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" \
   GH_SHA_COUNTER="$WORK/sha_counter" GH_LOCAL_HEAD="$LHEAD" ARGV_LOG="$CL_ARGV" STDIN_LOG="$CL_STDIN" \
-  bash "$RELAY" --pr 1 --author codex --reviewers claude >/dev/null 2>&1 )
+  bash "$RELAY" --pr 1 --author codex --reviewers claude >/dev/null 2>&1)
 pr_assert "the local-context prompt is the one under test" "$CL_STDIN" 'CHECKED OUT in the current directory' has
 pr_criteria "relay/local-context prompt" "$CL_STDIN"
 pr_assert "relay/local-context prompt asks for conventions" "$CL_STDIN" 'AGENTS.md, CLAUDE.md' has
@@ -2677,8 +3631,12 @@ pr_assert "relay/local-context prompt asks for conventions" "$CL_STDIN" 'AGENTS.
 # the generic agent stub is never reached, because the relay resolves the opencode binary
 # itself rather than taking it off PATH. grok: only via --prompt-file, stdin is ignored.
 OC_PROMPT_ARGV="$WORK/oc-prompt-argv.log"
-BIN_OCP="$WORK/bin-ocp"; make_strict_opencode "$BIN_OCP"
-oc_reset "$OC_PROMPT_ARGV"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+BIN_OCP="$WORK/bin-ocp"
+make_strict_opencode "$BIN_OCP"
+oc_reset "$OC_PROMPT_ARGV"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" OC_ARGV_FILE="$OC_PROMPT_ARGV" \
@@ -2688,7 +3646,10 @@ pr_criteria "opencode prompt" "$OC_PROMPT_ARGV"
 pr_assert "opencode prompt does NOT ask for conventions" "$OC_PROMPT_ARGV" 'AGENTS.md' hasnot
 
 GK_PROMPT="$WORK/grok-prompt-contract.log"
-: > "$GK_PROMPT"; rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+: >"$GK_PROMPT"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
 env PATH="$BIN:$PATH" HOME="$WORK/home" \
   XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
   GH_SHA_COUNTER="$WORK/sha_counter" PROMPT_FILE_LOG="$GK_PROMPT" \
@@ -2705,16 +3666,30 @@ pr_assert "grok prompt does NOT ask for conventions" "$GK_PROMPT" 'AGENTS.md' ha
 echo "per-SHA round accounting:"
 SCACHE="$WORK/scache"
 SRF="$SCACHE/pr-review-relay/owner_repo#1.round"
-s_reset() { rm -rf "$SCACHE"; mkdir -p "$SCACHE/pr-review-relay"; rm -f "$WORK/sha_counter"; }
+s_reset() {
+  rm -rf "$SCACHE"
+  mkdir -p "$SCACHE/pr-review-relay"
+  rm -f "$WORK/sha_counter"
+}
 s_run() { # s_run <sha> [extra env...] -- [relay args...]; echoes the exit code
-  local sha="$1"; shift
+  local sha="$1"
+  shift
   local -a envs=() args=()
-  while [ $# -gt 0 ]; do case "$1" in --) shift; args=("$@"); break;; *) envs+=("$1"); shift;; esac; done
+  while [ $# -gt 0 ]; do case "$1" in --)
+    shift
+    args=("$@")
+    break
+    ;;
+  *)
+    envs+=("$1")
+    shift
+    ;;
+  esac done
   rm -f "$WORK/sha_counter"
   env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
     GH_FIXED_SHA="$sha" ${envs[@]+"${envs[@]}"} \
     bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex \
-      ${args[@]+"${args[@]}"} >/dev/null 2>&1
+    ${args[@]+"${args[@]}"} >/dev/null 2>&1
   echo $?
 }
 s_state() { cat "$SRF" 2>/dev/null || echo "<missing>"; }
@@ -2724,10 +3699,16 @@ s_state() { cat "$SRF" 2>/dev/null || echo "<missing>"; }
 # is arbitrary. That is only harmless while exactly one exists — and s_reset does not run between
 # every pair of runs here, so more than one regularly does. Sorting by time makes "the run I just
 # made" unambiguous.
-latest_log()  { ls -t "$SCACHE"/pr-review-relay/*.run.???????? 2>/dev/null | head -1; }
+latest_log() { ls -t "$SCACHE"/pr-review-relay/*.run.???????? 2>/dev/null | head -1; }
 latest_side() { ls -t "$SCACHE"/pr-review-relay/*.k_claude.review 2>/dev/null | head -1; }
 ok_if() { # ok_if <cond-result 0/1> <desc> <detail>
-  if [ "$1" = 0 ]; then echo "  ok   [-] $2"; PASS=$((PASS+1)); else echo "  FAIL $2 ($3)"; FAIL=$((FAIL+1)); fi
+  if [ "$1" = 0 ]; then
+    echo "  ok   [-] $2"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $2 ($3)"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
 SHA_A=1111111111111111111111111111111111111111
@@ -2736,96 +3717,134 @@ SHA_C=3333333333333333333333333333333333333333
 
 # Same SHA twice: the round counter must NOT move; only the same-SHA counter does. This is the
 # whole point of the change — splitting a panel across invocations must be free.
-s_reset; rc1=$(s_run "$SHA_A"); rc2=$(s_run "$SHA_A")
-read -r _s _r _m < "$SRF" 2>/dev/null || true
-[ "$_r" = 1 ] && [ "$_m" = 2 ] && [ "$_s" = "$SHA_A" ]; ok_if $? "same SHA twice → rounds stay 1, same-SHA goes 2" "state=$(s_state) rc=$rc1/$rc2"
+s_reset
+rc1=$(s_run "$SHA_A")
+rc2=$(s_run "$SHA_A")
+read -r _s _r _m <"$SRF" 2>/dev/null || true
+[ "$_r" = 1 ] && [ "$_m" = 2 ] && [ "$_s" = "$SHA_A" ]
+ok_if $? "same SHA twice → rounds stay 1, same-SHA goes 2" "state=$(s_state) rc=$rc1/$rc2"
 
 # A new SHA is a new round, and the same-SHA counter restarts.
 rc3=$(s_run "$SHA_B")
-read -r _s _r _m < "$SRF" 2>/dev/null || true
-[ "$_r" = 2 ] && [ "$_m" = 1 ] && [ "$_s" = "$SHA_B" ]; ok_if $? "new SHA → round 2, same-SHA resets to 1" "state=$(s_state) rc=$rc3"
+read -r _s _r _m <"$SRF" 2>/dev/null || true
+[ "$_r" = 2 ] && [ "$_m" = 1 ] && [ "$_s" = "$SHA_B" ]
+ok_if $? "new SHA → round 2, same-SHA resets to 1" "state=$(s_state) rc=$rc3"
 
 # The same-SHA cap fires with its OWN message, and only after the allowance is spent.
 s_reset
-rcs=""; for _i in 1 2 3; do rcs="$rcs$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=2)"; done
-[ "$rcs" = "004" ]; ok_if $? "same-SHA cap → exit 4 on the 3rd dispatch (cap 2)" "rcs=$rcs state=$(s_state)"
-s_reset; s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=1 >/dev/null
+rcs=""
+for _i in 1 2 3; do rcs="$rcs$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=2)"; done
+[ "$rcs" = "004" ]
+ok_if $? "same-SHA cap → exit 4 on the 3rd dispatch (cap 2)" "rcs=$rcs state=$(s_state)"
+s_reset
+s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=1 >/dev/null
 _msg=$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" PR_RELAY_MAX_SAME_SHA=1 \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex 2>&1 >/dev/null)
-grep -q "Same-SHA dispatch cap" <<< "$_msg"; ok_if $? "same-SHA cap names itself (not the round cap)" "msg=${_msg:0:80}"
+grep -q "Same-SHA dispatch cap" <<<"$_msg"
+ok_if $? "same-SHA cap names itself (not the round cap)" "msg=${_msg:0:80}"
 
 # A head that MOVED must not be refused by the same-SHA cap: the predicate has to be conditional on
 # the stored SHA still matching. Written as a bare "same >= max" this is where it breaks, and it
 # would block a genuine fix push.
 _rc=$(s_run "$SHA_B" PR_RELAY_MAX_SAME_SHA=1)
-[ "$_rc" = 0 ]; ok_if $? "new SHA is NOT blocked by a spent same-SHA allowance" "rc=$_rc state=$(s_state)"
+[ "$_rc" = 0 ]
+ok_if $? "new SHA is NOT blocked by a spent same-SHA allowance" "rc=$_rc state=$(s_state)"
 
 # Distinct SHAs still hit the round cap, with the round-cap message.
 s_reset
-rcs=""; for _sha in "$SHA_A" "$SHA_B" "$SHA_C"; do rcs="$rcs$(s_run "$_sha" -- --max-rounds 2)"; done
-[ "$rcs" = "004" ]; ok_if $? "3 distinct SHAs with --max-rounds 2 → exit 4 on the 3rd" "rcs=$rcs state=$(s_state)"
+rcs=""
+for _sha in "$SHA_A" "$SHA_B" "$SHA_C"; do rcs="$rcs$(s_run "$_sha" -- --max-rounds 2)"; done
+[ "$rcs" = "004" ]
+ok_if $? "3 distinct SHAs with --max-rounds 2 → exit 4 on the 3rd" "rcs=$rcs state=$(s_state)"
 
 # Legacy state (a bare integer, what every pre-upgrade cache holds).
-s_reset; printf '2' > "$SRF"
+s_reset
+printf '2' >"$SRF"
 _rc=$(s_run "$SHA_A" -- --max-rounds 3)
-read -r _s _r _m < "$SRF" 2>/dev/null || true
-[ "$_rc" = 0 ] && [ "$_r" = 2 ] && [ "$_m" = 1 ] && [ "$_s" = "$SHA_A" ]; ok_if $? "legacy below cap → adopts the SHA WITHOUT spending a round" "rc=$_rc state=$(s_state)"
+read -r _s _r _m <"$SRF" 2>/dev/null || true
+[ "$_rc" = 0 ] && [ "$_r" = 2 ] && [ "$_m" = 1 ] && [ "$_s" = "$SHA_A" ]
+ok_if $? "legacy below cap → adopts the SHA WITHOUT spending a round" "rc=$_rc state=$(s_state)"
 # ...and the retries it was upgraded to keep actually work (the point of not incrementing).
 _rc=$(s_run "$SHA_A" -- --max-rounds 3)
-[ "$_rc" = 0 ]; ok_if $? "legacy at max-1 still allows same-SHA retries after upgrade" "rc=$_rc state=$(s_state)"
+[ "$_rc" = 0 ]
+ok_if $? "legacy at max-1 still allows same-SHA retries after upgrade" "rc=$_rc state=$(s_state)"
 # A legacy file already AT the cap keeps its old meaning: stop.
-s_reset; printf '3' > "$SRF"
+s_reset
+printf '3' >"$SRF"
 _rc=$(s_run "$SHA_A" -- --max-rounds 3)
-[ "$_rc" = 4 ]; ok_if $? "legacy already at the cap → still exit 4" "rc=$_rc"
+[ "$_rc" = 4 ]
+ok_if $? "legacy already at the cap → still exit 4" "rc=$_rc"
 
 # Corrupt state must fail SAFE (treated as zero), never crash the relay.
-s_reset; printf 'garbage here\n' > "$SRF"
+s_reset
+printf 'garbage here\n' >"$SRF"
 _rc=$(s_run "$SHA_A")
-[ "$_rc" = 0 ]; ok_if $? "corrupt state (2 tokens) → treated as zero, run proceeds" "rc=$_rc state=$(s_state)"
-s_reset; printf '%s notanumber 1\n' "$SHA_A" > "$SRF"
+[ "$_rc" = 0 ]
+ok_if $? "corrupt state (2 tokens) → treated as zero, run proceeds" "rc=$_rc state=$(s_state)"
+s_reset
+printf '%s notanumber 1\n' "$SHA_A" >"$SRF"
 _rc=$(s_run "$SHA_A")
-[ "$_rc" = 0 ]; ok_if $? "corrupt state (non-numeric counter) → treated as zero" "rc=$_rc state=$(s_state)"
+[ "$_rc" = 0 ]
+ok_if $? "corrupt state (non-numeric counter) → treated as zero" "rc=$_rc state=$(s_state)"
 
 # Env validation, matching --max-rounds exactly: it ACCEPTS 0 (always at cap), rejects non-numeric.
-s_reset; _rc=$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=nope)
-[ "$_rc" = 2 ]; ok_if $? "non-numeric PR_RELAY_MAX_SAME_SHA → usage error" "rc=$_rc"
-s_reset; _rc=$(s_run "$SHA_A" PR_RELAY_LOG_MAX_BYTES=nope)
-[ "$_rc" = 2 ]; ok_if $? "non-numeric PR_RELAY_LOG_MAX_BYTES → usage error" "rc=$_rc"
-s_reset; _rc=$(s_run "$SHA_A" PR_RELAY_LOG_MAX_BYTES=0)
-[ "$_rc" = 2 ]; ok_if $? "zero PR_RELAY_LOG_MAX_BYTES → usage error (a 0-byte cap captures nothing)" "rc=$_rc"
+s_reset
+_rc=$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=nope)
+[ "$_rc" = 2 ]
+ok_if $? "non-numeric PR_RELAY_MAX_SAME_SHA → usage error" "rc=$_rc"
+s_reset
+_rc=$(s_run "$SHA_A" PR_RELAY_LOG_MAX_BYTES=nope)
+[ "$_rc" = 2 ]
+ok_if $? "non-numeric PR_RELAY_LOG_MAX_BYTES → usage error" "rc=$_rc"
+s_reset
+_rc=$(s_run "$SHA_A" PR_RELAY_LOG_MAX_BYTES=0)
+[ "$_rc" = 2 ]
+ok_if $? "zero PR_RELAY_LOG_MAX_BYTES → usage error (a 0-byte cap captures nothing)" "rc=$_rc"
 
 # A preflight-only failure still advances nothing — the two-pass split has to preserve this, which
 # the old single loop got for free by writing the state late.
 s_reset
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers bogus >/dev/null 2>&1
-[ ! -f "$SRF" ]; ok_if $? "preflight-only failure still advances no state" "state=$(s_state)"
+[ ! -f "$SRF" ]
+ok_if $? "preflight-only failure still advances no state" "state=$(s_state)"
 s_reset
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --dry-run >/dev/null 2>&1
-[ ! -f "$SRF" ]; ok_if $? "dry run advances no state" "state=$(s_state)"
+[ ! -f "$SRF" ]
+ok_if $? "dry run advances no state" "state=$(s_state)"
 
 echo "run evidence:"
 # The run log and the per-reviewer sidecars.
-s_reset; s_run "$SHA_A" >/dev/null
+s_reset
+s_run "$SHA_A" >/dev/null
 _log=$(latest_log)
-[ -n "$_log" ] && [ -s "$_log" ]; ok_if $? "a run log is created" "log=${_log:-<none>}"
-grep -q "^.* start pr=1 " "$_log" 2>/dev/null; ok_if $? "run log records the start line" "$(head -1 "$_log" 2>/dev/null)"
-grep -q "pgid=" "$_log" 2>/dev/null; ok_if $? "run log records pid/pgid for kill forensics" "-"
-grep -q "state .* (written before dispatch)" "$_log" 2>/dev/null; ok_if $? "run log records the pre-dispatch state write" "-"
-grep -q "dispatch claude" "$_log" 2>/dev/null && grep -q "dispatch codex" "$_log" 2>/dev/null; ok_if $? "run log records one dispatch line per reviewer" "-"
+[ -n "$_log" ] && [ -s "$_log" ]
+ok_if $? "a run log is created" "log=${_log:-<none>}"
+grep -q "^.* start pr=1 " "$_log" 2>/dev/null
+ok_if $? "run log records the start line" "$(head -1 "$_log" 2>/dev/null)"
+grep -q "pgid=" "$_log" 2>/dev/null
+ok_if $? "run log records pid/pgid for kill forensics" "-"
+grep -q "state .* (written before dispatch)" "$_log" 2>/dev/null
+ok_if $? "run log records the pre-dispatch state write" "-"
+grep -q "dispatch claude" "$_log" 2>/dev/null && grep -q "dispatch codex" "$_log" 2>/dev/null
+ok_if $? "run log records one dispatch line per reviewer" "-"
 
-grep -q "verdict exit=0" "$_log" 2>/dev/null; ok_if $? "run log records the final verdict" "$(tail -1 "$_log" 2>/dev/null)"
+grep -q "verdict exit=0" "$_log" 2>/dev/null
+ok_if $? "run log records the final verdict" "$(tail -1 "$_log" 2>/dev/null)"
 
 _side=$(latest_side)
-grep -q "LGTM from claude" "$_side" 2>/dev/null; ok_if $? "the reviewer's body is in its own sidecar" "side=${_side:-<none>}"
+grep -q "LGTM from claude" "$_side" 2>/dev/null
+ok_if $? "the reviewer's body is in its own sidecar" "side=${_side:-<none>}"
 
 # The kill case this whole feature exists for: the review is on disk BEFORE the post is attempted,
 # so a failure (or a kill) between the two still leaves the text.
-s_reset; s_run "$SHA_A" GH_POST_FAIL=1 >/dev/null
+s_reset
+s_run "$SHA_A" GH_POST_FAIL=1 >/dev/null
 _side=$(latest_side)
-grep -q "LGTM from claude" "$_side" 2>/dev/null; ok_if $? "sidecar holds the review even when posting fails" "side=${_side:-<none>}"
+grep -q "LGTM from claude" "$_side" 2>/dev/null
+ok_if $? "sidecar holds the review even when posting fails" "side=${_side:-<none>}"
 
 # Placed after the sidecar checks: _pmode runs the relay five times, and those checks read the
 # NEWEST sidecar, which must be the run they were written for.
@@ -2833,19 +3852,30 @@ echo "parallel by default:"
 # The run log's start line records the mode that actually ran. No flag is PARALLEL since 2026-09-25;
 # --sequential opts out; --parallel is still accepted; of the two, the last one wins.
 _pmode() { # _pmode <args...> → the parallel= value from the run's start line
-  s_reset; s_run "$SHA_A" -- "$@" >/dev/null
+  s_reset
+  s_run "$SHA_A" -- "$@" >/dev/null
   sed -n 's/.* start .*parallel=\([01]\).*/\1/p' "$(latest_log)" 2>/dev/null | head -1
 }
-_m=$(_pmode);                          [ "$_m" = 1 ]; ok_if $? "no flag → parallel" "parallel=$_m"
-_m=$(_pmode --sequential);             [ "$_m" = 0 ]; ok_if $? "--sequential → one at a time" "parallel=$_m"
-_m=$(_pmode --parallel);               [ "$_m" = 1 ]; ok_if $? "--parallel is still accepted" "parallel=$_m"
-_m=$(_pmode --sequential --parallel);  [ "$_m" = 1 ]; ok_if $? "--sequential --parallel → last wins (parallel)" "parallel=$_m"
-_m=$(_pmode --parallel --sequential);  [ "$_m" = 0 ]; ok_if $? "--parallel --sequential → last wins (sequential)" "parallel=$_m"
+_m=$(_pmode)
+[ "$_m" = 1 ]
+ok_if $? "no flag → parallel" "parallel=$_m"
+_m=$(_pmode --sequential)
+[ "$_m" = 0 ]
+ok_if $? "--sequential → one at a time" "parallel=$_m"
+_m=$(_pmode --parallel)
+[ "$_m" = 1 ]
+ok_if $? "--parallel is still accepted" "parallel=$_m"
+_m=$(_pmode --sequential --parallel)
+[ "$_m" = 1 ]
+ok_if $? "--sequential --parallel → last wins (parallel)" "parallel=$_m"
+_m=$(_pmode --parallel --sequential)
+[ "$_m" = 0 ]
+ok_if $? "--parallel --sequential → last wins (sequential)" "parallel=$_m"
 unset _m
 # No `grep -q`: it exits at the first match, the relay takes SIGPIPE, and under pipefail the
 # pipeline fails although the text is there.
-bash "$RELAY" --help 2>/dev/null | grep -- '--sequential' >/dev/null \
-  && bash "$RELAY" --help 2>/dev/null | grep -- '--parallel' >/dev/null
+bash "$RELAY" --help 2>/dev/null | grep -- '--sequential' >/dev/null &&
+  bash "$RELAY" --help 2>/dev/null | grep -- '--parallel' >/dev/null
 ok_if $? "pr-review-relay --help names --sequential and --parallel" "-"
 
 # Every terminal path logs a verdict, including the failure ones — a log that only recorded
@@ -2854,7 +3884,8 @@ s_reset
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_SHA_DRIFT=1 \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex >/dev/null 2>&1
 _log=$(latest_log)
-grep -q "verdict exit=3 head moved" "$_log" 2>/dev/null; ok_if $? "a post-dispatch exit-3 path logs its verdict" "$(tail -1 "$_log" 2>/dev/null)"
+grep -q "verdict exit=3 head moved" "$_log" 2>/dev/null
+ok_if $? "a post-dispatch exit-3 path logs its verdict" "$(tail -1 "$_log" 2>/dev/null)"
 
 # Under --parallel each reviewer owns its own file, so nothing interleaves. Distinct sidecars, each
 # containing exactly its own reviewer's output, is what proves it.
@@ -2872,39 +3903,49 @@ for _f in "$SCACHE"/pr-review-relay/*.review; do
     grep -q "LGTM from $_o" "$_f" && _bad=1
   done
 done
-[ "$_n" = 3 ] && [ "$_bad" = 0 ]; ok_if $? "--parallel: 3 sidecars, no cross-contamination" "n=$_n bad=$_bad"
+[ "$_n" = 3 ] && [ "$_bad" = 0 ]
+ok_if $? "--parallel: 3 sidecars, no cross-contamination" "n=$_n bad=$_bad"
 
 # Truncation is a bound on the WRITE path (a runaway agent must not fill the disk), and it must not
 # be mistaken for a reviewer failure — a merely long review would otherwise fail the round.
-cat > "$BIN2/verbose-claude" <<'VB'
+cat >"$BIN2/verbose-claude" <<'VB'
 #!/usr/bin/env bash
 head -c 200000 /dev/zero | tr '\0' 'x'
 VB
 chmod +x "$BIN2/verbose-claude" 2>/dev/null
-BINV="$WORK/binv"; mkdir -p "$BINV"
+BINV="$WORK/binv"
+mkdir -p "$BINV"
 for t in gh codex; do ln -sf "$BIN/$t" "$BINV/$t"; done
 ln -sf "$(command -v node)" "$BINV/node" 2>/dev/null
 cp "$BIN2/verbose-claude" "$BINV/claude"
 s_reset
-_rc=$(env PATH="$BINV:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
-  GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 \
-  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1; echo $?)
+_rc=$(
+  env PATH="$BINV:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
+    GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1
+  echo $?
+)
 _side=$(latest_side)
-_sz=$(wc -c < "$_side" 2>/dev/null || echo 0)
+_sz=$(wc -c <"$_side" 2>/dev/null || echo 0)
 # A truncated review is an INCOMPLETE one, so the round must NOT be clean: the findings that did
 # not fit are indistinguishable from findings that do not exist, and exit 0 claims every reviewer
 # "produced and posted a review". The text is still posted, and the round reports 3.
-[ "$_rc" = 3 ]; ok_if $? "an oversized (truncated) review makes the round NOT clean" "rc=$_rc"
-[ "$_sz" -le 6000 ]; ok_if $? "oversized review is bounded on disk by the write path" "size=$_sz"
-grep -q "truncated at 4096 bytes" "$_side" 2>/dev/null; ok_if $? "truncation is marked in the body" "-"
-grep -q "INCOMPLETE" "$_side" 2>/dev/null; ok_if $? "the marker says the review is incomplete" "-"
+[ "$_rc" = 3 ]
+ok_if $? "an oversized (truncated) review makes the round NOT clean" "rc=$_rc"
+[ "$_sz" -le 6000 ]
+ok_if $? "oversized review is bounded on disk by the write path" "size=$_sz"
+grep -q "truncated at 4096 bytes" "$_side" 2>/dev/null
+ok_if $? "truncation is marked in the body" "-"
+grep -q "INCOMPLETE" "$_side" 2>/dev/null
+ok_if $? "the marker says the review is incomplete" "-"
 
 # --reset (and the 6h staleness path it shares) must clear the WHOLE family. A fresh counter next to
 # a stale transcript would make the forensics describe the wrong session.
 # Asserted by IDENTITY, not by counting: a --reset run creates a fresh log family of its own, so
 # "the file count did not grow" passes just as happily when nothing was deleted. Capture the old
 # run's actual path and require THAT to be gone.
-s_reset; s_run "$SHA_A" >/dev/null
+s_reset
+s_run "$SHA_A" >/dev/null
 _oldlog=$(latest_log)
 _oldside=$(latest_side)
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
@@ -2914,22 +3955,27 @@ ok_if $? "--reset removes the previous run's log AND sidecars (by path)" "log=${
 
 # The 6h staleness path shares relay_forget_key with --reset, so it must clear the same family.
 # Backdate the state file rather than waiting: the relay compares its mtime against 21600s.
-s_reset; s_run "$SHA_A" >/dev/null
+s_reset
+s_run "$SHA_A" >/dev/null
 _oldlog=$(latest_log)
 touch -d "8 hours ago" "$SRF" 2>/dev/null || touch -A -080000 "$SRF" 2>/dev/null
 s_run "$SHA_A" >/dev/null
-[ -n "$_oldlog" ] && [ ! -e "$_oldlog" ]; ok_if $? "6h staleness clears the old run family too" "log=${_oldlog:-<none>}"
+[ -n "$_oldlog" ] && [ ! -e "$_oldlog" ]
+ok_if $? "6h staleness clears the old run family too" "log=${_oldlog:-<none>}"
 # ...and it really did start a fresh session rather than continuing the old counters.
-read -r _s _r _m < "$SRF" 2>/dev/null || true
-[ "$_r" = 1 ] && [ "$_m" = 1 ]; ok_if $? "6h staleness restarts the counters" "state=$(s_state)"
+read -r _s _r _m <"$SRF" 2>/dev/null || true
+[ "$_r" = 1 ] && [ "$_m" = 1 ]
+ok_if $? "6h staleness restarts the counters" "state=$(s_state)"
 
 # The atomic state write leaves <key>.state.XXXXXXXX temps if killed mid-write; --reset must sweep
 # those too, or they accumulate forever.
-s_reset; s_run "$SHA_A" >/dev/null
-: > "$SCACHE/pr-review-relay/owner_repo#1.state.DEADBEEF"
+s_reset
+s_run "$SHA_A" >/dev/null
+: >"$SCACHE/pr-review-relay/owner_repo#1.state.DEADBEEF"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --reset >/dev/null 2>&1
-[ ! -e "$SCACHE/pr-review-relay/owner_repo#1.state.DEADBEEF" ]; ok_if $? "--reset sweeps orphaned state temps" "-"
+[ ! -e "$SCACHE/pr-review-relay/owner_repo#1.state.DEADBEEF" ]
+ok_if $? "--reset sweeps orphaned state temps" "-"
 
 # --- orphaned log families ---------------------------------------------------
 # The 6h path above is reached only when a ROUND_FILE exists. State is written only when
@@ -2944,10 +3990,11 @@ s_reset
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --dry-run >/dev/null 2>&1
 _orphan=$(latest_log)
-: > "$_orphan.k_claude.review"     # a sidecar of the same family, to prove both go together
-[ ! -f "$SRF" ]; ok_if $? "the orphan fixture really has no state file" "state=$(s_state)"
-touch -d "7 hours ago" "$_orphan" "$_orphan.k_claude.review" 2>/dev/null \
-  || touch -A -070000 "$_orphan" "$_orphan.k_claude.review" 2>/dev/null
+: >"$_orphan.k_claude.review" # a sidecar of the same family, to prove both go together
+[ ! -f "$SRF" ]
+ok_if $? "the orphan fixture really has no state file" "state=$(s_state)"
+touch -d "7 hours ago" "$_orphan" "$_orphan.k_claude.review" 2>/dev/null ||
+  touch -A -070000 "$_orphan" "$_orphan.k_claude.review" 2>/dev/null
 s_run "$SHA_A" >/dev/null
 [ -n "$_orphan" ] && [ ! -e "$_orphan" ] && [ ! -e "$_orphan.k_claude.review" ]
 ok_if $? "an orphaned log family expires after 6h, sidecars included" "log=${_orphan:-<none>}"
@@ -2956,19 +4003,20 @@ ok_if $? "an orphaned log family expires after 6h, sidecars included" "log=${_or
 # <key>.state.XXXXXXXX behind, and relay_forget_key only ever runs with a .round file present.
 # A backdated one, with no .round file, must go the same way. A fresh one must not.
 s_reset
-: > "$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1"
-: > "$SCACHE/pr-review-relay/owner_repo#1.state.FRESHTMP"
-touch -d "7 hours ago" "$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1" 2>/dev/null \
-  || touch -A -070000 "$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1" 2>/dev/null
+: >"$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1"
+: >"$SCACHE/pr-review-relay/owner_repo#1.state.FRESHTMP"
+touch -d "7 hours ago" "$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1" 2>/dev/null ||
+  touch -A -070000 "$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1" 2>/dev/null
 s_run "$SHA_A" >/dev/null
-[ ! -e "$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1" ] \
-  && [ -e "$SCACHE/pr-review-relay/owner_repo#1.state.FRESHTMP" ]
+[ ! -e "$SCACHE/pr-review-relay/owner_repo#1.state.OLDTEMP1" ] &&
+  [ -e "$SCACHE/pr-review-relay/owner_repo#1.state.FRESHTMP" ]
 ok_if $? "an orphaned state temp expires after 6h, a fresh one survives" "-"
 
 # The other half of the rule, and the one a naive fix breaks: a session that IS alive keeps its
 # history. Round 1's log is legitimately older than 6h on a long session, and deleting it would
 # destroy the forensics of a run still in progress. Live is defined by the state file, not by age.
-s_reset; s_run "$SHA_A" >/dev/null
+s_reset
+s_run "$SHA_A" >/dev/null
 _livelog=$(latest_log)
 touch -d "7 hours ago" "$_livelog" 2>/dev/null || touch -A -070000 "$_livelog" 2>/dev/null
 s_run "$SHA_A" >/dev/null
@@ -2979,7 +4027,8 @@ ok_if $? "a live session's own old log is NOT swept" "log=${_livelog:-<none>}"
 # alive is not collected either, because the sweep is gated on the state file being absent. It waits
 # for --reset or for the session itself to go stale. Documented in the README; pinned here so a
 # later "just always sweep by age" cannot quietly take the live-session guarantee away with it.
-s_reset; s_run "$SHA_A" >/dev/null          # a session with state
+s_reset
+s_run "$SHA_A" >/dev/null # a session with state
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex --dry-run >/dev/null 2>&1
 _dryorphan=$(latest_log)
@@ -2993,9 +4042,11 @@ ok_if $? "an orphan born inside a live session waits for --reset (known limit)" 
 # kill during either left no evidence at all — while the README promised every run leaves some. The
 # relay now opens the log as soon as REPO and PR are known. Killing it mid-diff is the proof.
 # Same shape as the SIGKILL test below: own process group, bounded wait, reap.
-if ( set -m ) 2>/dev/null; then
-  ( set -m
-    s_reset; rm -f "$WORK/hangmark"
+if (set -m) 2>/dev/null; then
+  (
+    set -m
+    s_reset
+    rm -f "$WORK/hangmark"
     env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
       GH_FIXED_SHA="$SHA_A" GH_DIFF_HANG=1 GH_HANG_MARK="$WORK/hangmark" \
       bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex >/dev/null 2>&1 &
@@ -3006,7 +4057,10 @@ if ( set -m ) 2>/dev/null; then
     # Wait for the STUB to say it is inside the call, not merely for the log file to exist:
     # mktemp creates the log before the start line is written, so the latter would race.
     _w=0
-    while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do sleep 0.1; _w=$((_w+1)); done
+    while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do
+      sleep 0.1
+      _w=$((_w + 1))
+    done
     kill -9 -"$_pgid" 2>/dev/null || kill -9 "$_kid" 2>/dev/null
     wait "$_kid" 2>/dev/null || true
   )
@@ -3022,8 +4076,10 @@ if ( set -m ) 2>/dev/null; then
 
   # The other half of the promise. The head-SHA read runs before the diff, so hanging the diff
   # alone never proved the log beats it.
-  ( set -m
-    s_reset; rm -f "$WORK/hangmark"
+  (
+    set -m
+    s_reset
+    rm -f "$WORK/hangmark"
     env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
       GH_SHA_HANG=1 GH_HANG_MARK="$WORK/hangmark" \
       bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex >/dev/null 2>&1 &
@@ -3032,7 +4088,10 @@ if ( set -m ) 2>/dev/null; then
     # Wait for the STUB to say it is inside the call, not merely for the log file to exist:
     # mktemp creates the log before the start line is written, so the latter would race.
     _w=0
-    while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do sleep 0.1; _w=$((_w+1)); done
+    while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do
+      sleep 0.1
+      _w=$((_w + 1))
+    done
     kill -9 -"$_pgid" 2>/dev/null || kill -9 "$_kid" 2>/dev/null
     wait "$_kid" 2>/dev/null || true
   )
@@ -3048,7 +4107,7 @@ else
   # Five assertions live in that block; counting them individually keeps the summary honest
   # about how much of the suite a shell without job control actually ran.
   echo "  skip [-] mid-diff and head-SHA kill tests: no job control (set -m) available in this shell"
-  SKIP=$((SKIP+5))
+  SKIP=$((SKIP + 5))
 fi
 
 # --- every terminal path under an open log writes its verdict ----------------
@@ -3101,7 +4160,9 @@ ok_if $? "an unreadable head SHA at start logs its verdict" "$(tail -1 "$_slog" 
 # the repair branch that has to fire. Pointing only the parent at 0777 would assert nothing: the
 # relay would create a fresh child already at 700 and the test would pass without testing.
 _hard="$WORK/hardcache"
-rm -rf "$_hard"; mkdir -p "$_hard/pr-review-relay"; chmod 0777 "$_hard/pr-review-relay"
+rm -rf "$_hard"
+mkdir -p "$_hard/pr-review-relay"
+chmod 0777 "$_hard/pr-review-relay"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$_hard" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex >/dev/null 2>&1
 _hmode="$(stat -c %a "$_hard/pr-review-relay" 2>/dev/null || stat -f %Lp "$_hard/pr-review-relay" 2>/dev/null || echo '')"
@@ -3113,7 +4174,8 @@ ok_if $? "a pre-existing state dir left 0777 is repaired to 700" "mode=${_hmode:
 # the XDG branch too, not only on the /tmp fallback. A planted link is how someone else's directory
 # ends up holding this PR's review text.
 _link="$WORK/linkcache"
-rm -rf "$_link" "$WORK/linktarget"; mkdir -p "$_link" "$WORK/linktarget"
+rm -rf "$_link" "$WORK/linktarget"
+mkdir -p "$_link" "$WORK/linktarget"
 ln -s "$WORK/linktarget" "$_link/pr-review-relay"
 _lout=$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$_link" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex 2>&1)
@@ -3137,14 +4199,15 @@ ok_if $? "a symlinked state dir is refused on the XDG branch too" "rc=$_lrc"
 # that can still write, race these assertions, or hang the suite's EXIT trap.
 # `set -m` gives the background job its own PGID and works where `setsid` is absent (macOS).
 s_reset
-if ( set -m ) 2>/dev/null; then
-  ( set -m
+if (set -m) 2>/dev/null; then
+  (
+    set -m
     env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
       GH_FIXED_SHA="$SHA_A" SLEEP_KEYS=codex PR_RELAY_AGENT_TIMEOUT=60 \
       bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex >/dev/null 2>&1 &
     _kid=$!
     _pgid=$(ps -o pgid= -p "$_kid" 2>/dev/null | tr -d ' ')
-    printf '%s' "$_pgid" > "$WORK/killed_pgid"
+    printf '%s' "$_pgid" >"$WORK/killed_pgid"
     # Wait, bounded, for the evidence we are about to assert on to exist — never a fixed sleep.
     # Wait for the sidecar's CONTENT, not merely its existence. The sidecar is created (header
     # first) before the agent is launched, so "the file is there" is true almost immediately and
@@ -3152,21 +4215,29 @@ if ( set -m ) 2>/dev/null; then
     _w=0
     while [ "$_w" -lt 200 ]; do
       [ -f "$SRF" ] && grep -q "LGTM from claude" "$SCACHE"/pr-review-relay/*.k_claude.review 2>/dev/null && break
-      sleep 0.1; _w=$((_w+1))
+      sleep 0.1
+      _w=$((_w + 1))
     done
     [ -n "$_pgid" ] && kill -9 -- -"$_pgid" 2>/dev/null
     # ...and bounded-wait for the group to actually be gone before asserting.
     _w=0
-    while [ "$_w" -lt 100 ] && kill -0 "$_kid" 2>/dev/null; do sleep 0.1; _w=$((_w+1)); done
+    while [ "$_w" -lt 100 ] && kill -0 "$_kid" 2>/dev/null; do
+      sleep 0.1
+      _w=$((_w + 1))
+    done
     wait "$_kid" 2>/dev/null
   )
   _pgid=$(cat "$WORK/killed_pgid" 2>/dev/null)
   _log=$(latest_log)
   _side=$(latest_side)
-  [ -n "$_log" ] && grep -q " start pr=1 " "$_log" 2>/dev/null; ok_if $? "SIGKILL: the start line survived" "log=${_log:-<none>}"
-  grep -q "state .* (written before dispatch)" "$_log" 2>/dev/null; ok_if $? "SIGKILL: the pre-dispatch state write survived" "-"
-  [ -f "$SRF" ]; ok_if $? "SIGKILL: the round state file exists (the loop stays bounded)" "state=$(s_state)"
-  [ -n "$_side" ] && grep -q "LGTM from claude" "$_side" 2>/dev/null; ok_if $? "SIGKILL: the finished reviewer's output survived" "side=${_side:-<none>}"
+  [ -n "$_log" ] && grep -q " start pr=1 " "$_log" 2>/dev/null
+  ok_if $? "SIGKILL: the start line survived" "log=${_log:-<none>}"
+  grep -q "state .* (written before dispatch)" "$_log" 2>/dev/null
+  ok_if $? "SIGKILL: the pre-dispatch state write survived" "-"
+  [ -f "$SRF" ]
+  ok_if $? "SIGKILL: the round state file exists (the loop stays bounded)" "state=$(s_state)"
+  [ -n "$_side" ] && grep -q "LGTM from claude" "$_side" 2>/dev/null
+  ok_if $? "SIGKILL: the finished reviewer's output survived" "side=${_side:-<none>}"
   # And no orphan is left behind to write after we asserted. Scoped to the process GROUP we killed:
   # `pgrep -f SLEEP_KEYS` scanned the whole machine and matched any unrelated process whose command
   # line happened to contain that string — including the cross-review agents reading this very diff,
@@ -3176,11 +4247,15 @@ if ( set -m ) 2>/dev/null; then
   # it, and the stderr drain stays alive while anything still holds the write end. Both go away on
   # their own within the stub's sleep. Asserting immediately made this flake.
   _w=0
-  while [ "$_w" -lt 120 ] && kill -0 -"$_pgid" 2>/dev/null; do sleep 0.1; _w=$((_w+1)); done
-  ! kill -0 -"$_pgid" 2>/dev/null; ok_if $? "SIGKILL: the whole process group is gone, no orphans" "pgid=$_pgid waited=${_w}00ms"
+  while [ "$_w" -lt 120 ] && kill -0 -"$_pgid" 2>/dev/null; do
+    sleep 0.1
+    _w=$((_w + 1))
+  done
+  ! kill -0 -"$_pgid" 2>/dev/null
+  ok_if $? "SIGKILL: the whole process group is gone, no orphans" "pgid=$_pgid waited=${_w}00ms"
 else
   echo "  skip [-] SIGKILL test: no job control (set -m) available in this shell"
-  SKIP=$((SKIP+1))
+  SKIP=$((SKIP + 1))
 fi
 
 # --- a SIGTERM still kills the relay, and the handler still cleans up -----------------------------
@@ -3190,25 +4265,34 @@ fi
 # measured on bash 5.2, a TERM'd shell dies of the signal whatever its EXIT trap does. TERM the
 # relay alone while the stub sits in `gh pr diff`, after both dirs exist, and WAIT for it so the
 # handler has finished; the group KILL after that only reaps the stub left hanging.
-if ( set -m ) 2>/dev/null; then
-  s_reset; rm -f "$WORK/hangmark" "$WORK/kstatus" "$WORK/kbefore"; rm -rf "$WORK/ktmp"; mkdir -p "$WORK/ktmp"
-  ( set -m
+if (set -m) 2>/dev/null; then
+  s_reset
+  rm -f "$WORK/hangmark" "$WORK/kstatus" "$WORK/kbefore"
+  rm -rf "$WORK/ktmp"
+  mkdir -p "$WORK/ktmp"
+  (
+    set -m
     env PATH="$BIN:$PATH" TMPDIR="$WORK/ktmp" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
       GH_FIXED_SHA="$SHA_A" GH_DIFF_HANG=1 GH_HANG_MARK="$WORK/hangmark" \
       bash "$RELAY" --pr 1 --author antigravity --reviewers claude,grok >/dev/null 2>&1 &
     _kid=$!
     _pgid=$(ps -o pgid= -p "$_kid" 2>/dev/null | tr -d ' ')
     _w=0
-    while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do sleep 0.1; _w=$((_w+1)); done
+    while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do
+      sleep 0.1
+      _w=$((_w + 1))
+    done
     # What the handler has to remove, counted before the TERM: an empty TMPDIR afterwards proves
     # nothing unless both dirs were there to begin with.
-    ls -A "$WORK/ktmp" 2>/dev/null | wc -l | tr -d ' ' > "$WORK/kbefore"
+    ls -A "$WORK/ktmp" 2>/dev/null | wc -l | tr -d ' ' >"$WORK/kbefore"
     kill -TERM "$_kid" 2>/dev/null
-    wait "$_kid" 2>/dev/null; echo "$?" > "$WORK/kstatus"
+    wait "$_kid" 2>/dev/null
+    echo "$?" >"$WORK/kstatus"
     kill -9 -"$_pgid" 2>/dev/null || kill -9 "$_kid" 2>/dev/null
     wait "$_kid" 2>/dev/null || true
   )
-  [ -e "$WORK/hangmark" ]; ok_if $? "SIGTERM: the relay was inside \`gh pr diff\` when it was killed" "-"
+  [ -e "$WORK/hangmark" ]
+  ok_if $? "SIGTERM: the relay was inside \`gh pr diff\` when it was killed" "-"
   [ "$(cat "$WORK/kstatus" 2>/dev/null)" = 143 ]
   ok_if $? "SIGTERM: the relay still dies of the signal (status 143)" "status=$(cat "$WORK/kstatus" 2>/dev/null)"
   [ "$(cat "$WORK/kbefore" 2>/dev/null)" = 2 ]
@@ -3217,7 +4301,7 @@ if ( set -m ) 2>/dev/null; then
   ok_if $? "SIGTERM: the handler removed STATUS_DIR and ATTACH_DIR" "left: $(ls -A "$WORK/ktmp" 2>/dev/null | tr '\n' ' ')"
 else
   echo "  skip [-] SIGTERM test: no job control (set -m) available in this shell"
-  SKIP=$((SKIP+4))
+  SKIP=$((SKIP + 4))
 fi
 
 # --- the cleanup trap is armed as soon as STATUS_DIR exists ---------------------------------------
@@ -3226,8 +4310,9 @@ fi
 # path has no `rm` of its own, so if the trap were set any later, STATUS_DIR would stay in TMPDIR.
 # The stub fails the 2nd `mktemp -d` and hands every other call to the real mktemp.
 _real_mktemp="$(command -v mktemp)"
-_mb="$WORK/mktemp-bin"; mkdir -p "$_mb"
-cat > "$_mb/mktemp" <<MK
+_mb="$WORK/mktemp-bin"
+mkdir -p "$_mb"
+cat >"$_mb/mktemp" <<MK
 #!/usr/bin/env bash
 case " \$* " in *" -d "*)
   n=\$(( \$(cat "$WORK/mk.count" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$WORK/mk.count"
@@ -3236,7 +4321,10 @@ esac
 exec "$_real_mktemp" "\$@"
 MK
 chmod +x "$_mb/mktemp"
-s_reset; rm -rf "$WORK/ttmp"; mkdir -p "$WORK/ttmp"; rm -f "$WORK/mk.count"
+s_reset
+rm -rf "$WORK/ttmp"
+mkdir -p "$WORK/ttmp"
+rm -f "$WORK/mk.count"
 env PATH="$_mb:$BIN:$PATH" TMPDIR="$WORK/ttmp" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" bash "$RELAY" --pr 1 --author antigravity --reviewers claude,grok >/dev/null 2>"$WORK/mk.err"
 _mrc=$?
@@ -3262,120 +4350,245 @@ echo "hermeticity:"
 # 1. A planted ambient commit.gpgsign is defeated, asserted at COMMIT level as exactly %G? = N.
 #    Not "not G": a signature that fails verification reports E/B/R, which would slip past a
 #    denylist while still meaning isolation failed.
-( H="$WORK/herm1"; mkdir -p "$H"; cd "$H" || exit 1
+(
+  H="$WORK/herm1"
+  mkdir -p "$H"
+  cd "$H" || exit 1
   git init -q . 2>/dev/null
   export GIT_CONFIG_PARAMETERS="'commit.gpgsign=true'"
-  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || { echo PLANT_DEAD; exit 3; }
+  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   relay_isolate_git "$WORK"
-  git commit -q --allow-empty -m one 2>/dev/null || { echo COMMIT_DEAD; exit 4; }
-  git log -1 --format='%G?' 2>/dev/null | tail -1 ) > "$WORK/herm1.out" 2>/dev/null
-hr=$?; hv="$(tail -1 "$WORK/herm1.out" 2>/dev/null)"
-[ "$hr" = 0 ] && [ "$hv" = "N" ] \
-  && { echo "  ok   [-] a planted ambient commit.gpgsign is defeated (%G? = N)"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: planted signing survived (rc=$hr out='$hv')"; FAIL=$((FAIL+1)); }
+  git commit -q --allow-empty -m one 2>/dev/null || {
+    echo COMMIT_DEAD
+    exit 4
+  }
+  git log -1 --format='%G?' 2>/dev/null | tail -1
+) >"$WORK/herm1.out" 2>/dev/null
+hr=$?
+hv="$(tail -1 "$WORK/herm1.out" 2>/dev/null)"
+[ "$hr" = 0 ] && [ "$hv" = "N" ] &&
+  {
+    echo "  ok   [-] a planted ambient commit.gpgsign is defeated (%G? = N)"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: planted signing survived (rc=$hr out='$hv')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 2. GIT_CONFIG_PARAMETERS OVERRIDES GIT_CONFIG_COUNT, so the clearing must come first. Deleting the
 #    unset loop while keeping the exports is the regression this pins.
-( cd "$WORK" || exit 1
+(
+  cd "$WORK" || exit 1
   export GIT_CONFIG_PARAMETERS="'commit.gpgsign=true'"
   export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
-  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || { echo PLANT_DEAD; exit 3; }
+  [ "$(git config --get commit.gpgsign 2>/dev/null)" = "true" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   relay_isolate_git "$WORK"
-  [ -z "${GIT_CONFIG_PARAMETERS:-}" ] || { echo STILL_SET; exit 4; }
-  git config --get commit.gpgsign 2>/dev/null | tail -1 ) > "$WORK/herm2.out" 2>/dev/null
-hr=$?; hv="$(tail -1 "$WORK/herm2.out" 2>/dev/null)"
-[ "$hr" = 0 ] && [ "$hv" = "false" ] \
-  && { echo "  ok   [-] GIT_CONFIG_PARAMETERS is cleared before the controlled values are set"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: GIT_CONFIG_PARAMETERS override survived (rc=$hr out='$hv')"; FAIL=$((FAIL+1)); }
+  [ -z "${GIT_CONFIG_PARAMETERS:-}" ] || {
+    echo STILL_SET
+    exit 4
+  }
+  git config --get commit.gpgsign 2>/dev/null | tail -1
+) >"$WORK/herm2.out" 2>/dev/null
+hr=$?
+hv="$(tail -1 "$WORK/herm2.out" 2>/dev/null)"
+[ "$hr" = 0 ] && [ "$hv" = "false" ] &&
+  {
+    echo "  ok   [-] GIT_CONFIG_PARAMETERS is cleared before the controlled values are set"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: GIT_CONFIG_PARAMETERS override survived (rc=$hr out='$hv')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 3. The one that corrupted this repository: a planted GIT_DIR outranks the `cd`, so a fixture's
 #    commit lands in the decoy. The control proves the decoy really would have taken it.
-( DECOY="$WORK/decoy"; FIX="$WORK/fixt"; rm -rf "$DECOY" "$FIX"; mkdir -p "$DECOY" "$FIX"
-  git init -q "$DECOY" 2>/dev/null; git init -q "$FIX" 2>/dev/null
+(
+  DECOY="$WORK/decoy"
+  FIX="$WORK/fixt"
+  rm -rf "$DECOY" "$FIX"
+  mkdir -p "$DECOY" "$FIX"
+  git init -q "$DECOY" 2>/dev/null
+  git init -q "$FIX" 2>/dev/null
   before=$(git -C "$DECOY" rev-list --all --count 2>/dev/null || echo 0)
-  ( cd "$FIX" && GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" git commit -q --allow-empty -m captured 2>/dev/null )
+  (cd "$FIX" && GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" git commit -q --allow-empty -m captured 2>/dev/null)
   mid=$(git -C "$DECOY" rev-list --all --count 2>/dev/null || echo 0)
-  [ "$mid" -gt "$before" ] || { echo PLANT_DEAD; exit 3; }
-  ( cd "$FIX" && export GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" \
-    && relay_isolate_git "$WORK" && git commit -q --allow-empty -m isolated 2>/dev/null )
+  [ "$mid" -gt "$before" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
+  (cd "$FIX" && export GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" &&
+    relay_isolate_git "$WORK" && git commit -q --allow-empty -m isolated 2>/dev/null)
   after=$(git -C "$DECOY" rev-list --all --count 2>/dev/null || echo 0)
   fixn=$(git -C "$FIX" rev-list --all --count 2>/dev/null || echo 0)
-  [ "$after" = "$mid" ] && [ "$fixn" -ge 1 ] && echo OK || echo "LEAKED:$mid->$after fixture=$fixn" ) > "$WORK/herm3.out" 2>/dev/null
-[ "$(tail -1 "$WORK/herm3.out" 2>/dev/null)" = "OK" ] \
-  && { echo "  ok   [-] a planted GIT_DIR cannot capture a fixture's commit"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: GIT_DIR capture ($(tail -1 "$WORK/herm3.out" 2>/dev/null))"; FAIL=$((FAIL+1)); }
+  [ "$after" = "$mid" ] && [ "$fixn" -ge 1 ] && echo OK || echo "LEAKED:$mid->$after fixture=$fixn"
+) >"$WORK/herm3.out" 2>/dev/null
+[ "$(tail -1 "$WORK/herm3.out" 2>/dev/null)" = "OK" ] &&
+  {
+    echo "  ok   [-] a planted GIT_DIR cannot capture a fixture's commit"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: GIT_DIR capture ($(tail -1 "$WORK/herm3.out" 2>/dev/null))"
+    FAIL=$((FAIL + 1))
+  }
 
 # 4. core.excludesFile: a global ignore rule makes a fixture's file invisible to `git add`, and the
 #    test that needed it then fails for a reason nobody would guess.
-( H="$WORK/herm4"; IG="$WORK/herm4.ignore"; mkdir -p "$H"; cd "$H" || exit 1
-  printf '*.dat\n' > "$IG"
+(
+  H="$WORK/herm4"
+  IG="$WORK/herm4.ignore"
+  mkdir -p "$H"
+  cd "$H" || exit 1
+  printf '*.dat\n' >"$IG"
   export GIT_CONFIG_PARAMETERS="'core.excludesFile=$IG'"
-  git init -q . 2>/dev/null; : > payload.dat
+  git init -q . 2>/dev/null
+  : >payload.dat
   git add payload.dat 2>/dev/null
-  git diff --cached --name-only 2>/dev/null | grep -q payload.dat && { echo PLANT_DEAD; exit 3; }
+  git diff --cached --name-only 2>/dev/null | grep -q payload.dat && {
+    echo PLANT_DEAD
+    exit 3
+  }
   relay_isolate_git "$WORK"
   git add payload.dat 2>/dev/null
-  git diff --cached --name-only 2>/dev/null | grep -q payload.dat || { echo STILL_IGNORED; exit 4; }
-  echo OK ) > "$WORK/herm4.out" 2>/dev/null
-[ "$(tail -1 "$WORK/herm4.out" 2>/dev/null)" = "OK" ] \
-  && { echo "  ok   [-] a planted core.excludesFile cannot hide a fixture's file"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: excludesFile ($(tail -1 "$WORK/herm4.out" 2>/dev/null))"; FAIL=$((FAIL+1)); }
+  git diff --cached --name-only 2>/dev/null | grep -q payload.dat || {
+    echo STILL_IGNORED
+    exit 4
+  }
+  echo OK
+) >"$WORK/herm4.out" 2>/dev/null
+[ "$(tail -1 "$WORK/herm4.out" 2>/dev/null)" = "OK" ] &&
+  {
+    echo "  ok   [-] a planted core.excludesFile cannot hide a fixture's file"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: excludesFile ($(tail -1 "$WORK/herm4.out" 2>/dev/null))"
+    FAIL=$((FAIL + 1))
+  }
 
 # 5. core.hooksPath: unlike tag.gpgsign/fsmonitor/color.ui it HAS an observable effect here, so it
 #    gets a plant rather than a config assertion. The hook prints a marker, so the control proves
 #    the commit failed BECAUSE of the hook and not for some unrelated reason.
-( H="$WORK/herm5"; HK="$WORK/herm5hooks"; mkdir -p "$H" "$HK"; cd "$H" || exit 1
-  printf '#!/bin/sh\necho RELAY_HOOK_MARKER >&2\nexit 1\n' > "$HK/pre-commit"; chmod +x "$HK/pre-commit"
+(
+  H="$WORK/herm5"
+  HK="$WORK/herm5hooks"
+  mkdir -p "$H" "$HK"
+  cd "$H" || exit 1
+  printf '#!/bin/sh\necho RELAY_HOOK_MARKER >&2\nexit 1\n' >"$HK/pre-commit"
+  chmod +x "$HK/pre-commit"
   git init -q . 2>/dev/null
   export GIT_CONFIG_PARAMETERS="'core.hooksPath=$HK'"
-  cerr=$(git commit --allow-empty -m blocked 2>&1); [ $? != 0 ] || { echo PLANT_DEAD; exit 3; }
-  case "$cerr" in *RELAY_HOOK_MARKER*) ;; *) echo PLANT_NOT_THE_HOOK; exit 3;; esac
+  cerr=$(git commit --allow-empty -m blocked 2>&1)
+  [ $? != 0 ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
+  case "$cerr" in *RELAY_HOOK_MARKER*) ;; *)
+    echo PLANT_NOT_THE_HOOK
+    exit 3
+    ;;
+  esac
   relay_isolate_git "$WORK"
-  git commit -q --allow-empty -m allowed 2>/dev/null || { echo STILL_BLOCKED; exit 4; }
-  echo OK ) > "$WORK/herm5.out" 2>/dev/null
-[ "$(tail -1 "$WORK/herm5.out" 2>/dev/null)" = "OK" ] \
-  && { echo "  ok   [-] a planted core.hooksPath cannot block a fixture commit"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: hooksPath ($(tail -1 "$WORK/herm5.out" 2>/dev/null))"; FAIL=$((FAIL+1)); }
+  git commit -q --allow-empty -m allowed 2>/dev/null || {
+    echo STILL_BLOCKED
+    exit 4
+  }
+  echo OK
+) >"$WORK/herm5.out" 2>/dev/null
+[ "$(tail -1 "$WORK/herm5.out" 2>/dev/null)" = "OK" ] &&
+  {
+    echo "  ok   [-] a planted core.hooksPath cannot block a fixture commit"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: hooksPath ($(tail -1 "$WORK/herm5.out" 2>/dev/null))"
+    FAIL=$((FAIL + 1))
+  }
 
 # 6. The remaining three keys have no observable effect on these suites, which is exactly why they
 #    would rot unnoticed — and why asserting them post-isolation was not enough: on a machine that
 #    already has them false, deleting the exports leaves this green. Plant them true first.
-( cd "$WORK" || exit 1
+(
+  cd "$WORK" || exit 1
   export GIT_CONFIG_PARAMETERS="'tag.gpgsign=true' 'core.fsmonitor=true' 'color.ui=always'"
-  [ "$(git config --get tag.gpgsign 2>/dev/null)" = "true" ] || { echo PLANT_DEAD; exit 3; }
+  [ "$(git config --get tag.gpgsign 2>/dev/null)" = "true" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   relay_isolate_git "$WORK"
   printf '%s|%s|%s' "$(git config --get tag.gpgsign 2>/dev/null)" \
-                    "$(git config --get core.fsmonitor 2>/dev/null)" \
-                    "$(git config --get color.ui 2>/dev/null)" ) > "$WORK/herm6.out" 2>/dev/null
-hr=$?; hv="$(tail -1 "$WORK/herm6.out" 2>/dev/null)"
-[ "$hr" = 0 ] && [ "$hv" = "false|false|false" ] \
-  && { echo "  ok   [-] planted tag.gpgsign, fsmonitor and color.ui are all neutralised"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: tag.gpgsign/fsmonitor/color.ui (rc=$hr got '$hv')"; FAIL=$((FAIL+1)); }
+    "$(git config --get core.fsmonitor 2>/dev/null)" \
+    "$(git config --get color.ui 2>/dev/null)"
+) >"$WORK/herm6.out" 2>/dev/null
+hr=$?
+hv="$(tail -1 "$WORK/herm6.out" 2>/dev/null)"
+[ "$hr" = 0 ] && [ "$hv" = "false|false|false" ] &&
+  {
+    echo "  ok   [-] planted tag.gpgsign, fsmonitor and color.ui are all neutralised"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: tag.gpgsign/fsmonitor/color.ui (rc=$hr got '$hv')"
+    FAIL=$((FAIL + 1))
+  }
 
 # 6b. The --allow-hooks branch had no coverage at all: a regression that set core.hooksPath there
 #     would break every gate test, and nothing here pinned it. It must leave hooksPath OUT of the
 #     controlled keys so a fixture's own `git config core.hooksPath` still wins.
-( cd "$WORK" || exit 1
+(
+  cd "$WORK" || exit 1
   relay_isolate_git "$WORK" --allow-hooks
-  [ "${GIT_CONFIG_COUNT:-0}" = 5 ] || { echo "COUNT=${GIT_CONFIG_COUNT:-unset}"; exit 3; }
+  [ "${GIT_CONFIG_COUNT:-0}" = 5 ] || {
+    echo "COUNT=${GIT_CONFIG_COUNT:-unset}"
+    exit 3
+  }
   for i in 0 1 2 3 4; do
     v="GIT_CONFIG_KEY_$i"
-    [ "${!v}" = "core.hooksPath" ] && { echo "hooksPath still set at $i"; exit 4; }
+    [ "${!v}" = "core.hooksPath" ] && {
+      echo "hooksPath still set at $i"
+      exit 4
+    }
   done
-  echo OK ) > "$WORK/herm6b.out" 2>/dev/null
-[ "$(tail -1 "$WORK/herm6b.out" 2>/dev/null)" = "OK" ] \
-  && { echo "  ok   [-] --allow-hooks leaves core.hooksPath to the caller"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: --allow-hooks ($(tail -1 "$WORK/herm6b.out" 2>/dev/null))"; FAIL=$((FAIL+1)); }
+  echo OK
+) >"$WORK/herm6b.out" 2>/dev/null
+[ "$(tail -1 "$WORK/herm6b.out" 2>/dev/null)" = "OK" ] &&
+  {
+    echo "  ok   [-] --allow-hooks leaves core.hooksPath to the caller"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: --allow-hooks ($(tail -1 "$WORK/herm6b.out" 2>/dev/null))"
+    FAIL=$((FAIL + 1))
+  }
 
 # 7. The invariant, planted: a hostile git environment is actually cleared, not merely absent.
-( cd "$WORK" || exit 1
+(
+  cd "$WORK" || exit 1
   export GIT_DIR="$WORK/decoy/.git" GIT_INDEX_FILE="$WORK/decoy/idx"
-  [ -n "${GIT_DIR:-}" ] || { echo PLANT_DEAD; exit 3; }
+  [ -n "${GIT_DIR:-}" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   relay_isolate_git "$WORK"
-  [ -z "${GIT_DIR:-}${GIT_WORK_TREE:-}${GIT_INDEX_FILE:-}" ] && echo OK || echo "STILL_SET" ) > "$WORK/herm7.out" 2>/dev/null
-[ "$(tail -1 "$WORK/herm7.out" 2>/dev/null)" = "OK" ] \
-  && { echo "  ok   [-] a planted git environment is cleared"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: env not cleared ($(tail -1 "$WORK/herm7.out" 2>/dev/null))"; FAIL=$((FAIL+1)); }
+  [ -z "${GIT_DIR:-}${GIT_WORK_TREE:-}${GIT_INDEX_FILE:-}" ] && echo OK || echo "STILL_SET"
+) >"$WORK/herm7.out" 2>/dev/null
+[ "$(tail -1 "$WORK/herm7.out" 2>/dev/null)" = "OK" ] &&
+  {
+    echo "  ok   [-] a planted git environment is cleared"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: env not cleared ($(tail -1 "$WORK/herm7.out" 2>/dev/null))"
+    FAIL=$((FAIL + 1))
+  }
 
 # 8. The stale-pair cleanup must not depend on an external binary. It used to be
 #    `for _i in $(seq 0 31)`, and these suites do not run under `set -e`: on a machine without `seq`
@@ -3390,22 +4603,42 @@ hr=$?; hv="$(tail -1 "$WORK/herm6.out" 2>/dev/null)"
 #    this bug were back), and dropping every PATH entry that contains `seq` takes `/usr/bin` with it
 #    — and `git` lives there, so `relay_isolate_git` aborted before asserting anything. A stub
 #    reproduces the exact failure mode the bug had: `$(seq 0 31)` expands to nothing.
-HSEQ="$WORK/hseq"; mkdir -p "$HSEQ"
-printf '#!/bin/sh\nexit 127\n' > "$HSEQ/seq"; chmod +x "$HSEQ/seq"
-( cd "$WORK" || exit 1
-  PATH="$HSEQ:$PATH"; export PATH
+HSEQ="$WORK/hseq"
+mkdir -p "$HSEQ"
+printf '#!/bin/sh\nexit 127\n' >"$HSEQ/seq"
+chmod +x "$HSEQ/seq"
+(
+  cd "$WORK" || exit 1
+  PATH="$HSEQ:$PATH"
+  export PATH
   # Control: the stub really is what `seq` resolves to, and it really yields nothing.
-  [ "$(command -v seq)" = "$HSEQ/seq" ] || { echo PLANT_DEAD_WRONG_SEQ; exit 3; }
-  [ -z "$(seq 0 31 2>/dev/null)" ] || { echo PLANT_DEAD_SEQ_WORKS; exit 3; }
+  [ "$(command -v seq)" = "$HSEQ/seq" ] || {
+    echo PLANT_DEAD_WRONG_SEQ
+    exit 3
+  }
+  [ -z "$(seq 0 31 2>/dev/null)" ] || {
+    echo PLANT_DEAD_SEQ_WORKS
+    exit 3
+  }
   # A stale pair above the library's COUNT (it installs 0..5), planted so the loop has real work.
   export GIT_CONFIG_KEY_9=core.pager GIT_CONFIG_VALUE_9=cat
-  [ -n "${GIT_CONFIG_KEY_9:-}" ] || { echo PLANT_DEAD; exit 3; }
+  [ -n "${GIT_CONFIG_KEY_9:-}" ] || {
+    echo PLANT_DEAD
+    exit 3
+  }
   relay_isolate_git "$WORK"
-  [ -z "${GIT_CONFIG_KEY_9:-}${GIT_CONFIG_VALUE_9:-}" ] && echo OK || echo "STALE_PAIR_SURVIVED" ) \
-  > "$WORK/herm8.out" 2>/dev/null
-[ "$(tail -1 "$WORK/herm8.out" 2>/dev/null)" = "OK" ] \
-  && { echo "  ok   [-] stale GIT_CONFIG_KEY_n pairs are cleared when \`seq\` is broken"; PASS=$((PASS+1)); } \
-  || { echo "  FAIL hermeticity: seq-less cleanup ($(tail -1 "$WORK/herm8.out" 2>/dev/null))"; FAIL=$((FAIL+1)); }
+  [ -z "${GIT_CONFIG_KEY_9:-}${GIT_CONFIG_VALUE_9:-}" ] && echo OK || echo "STALE_PAIR_SURVIVED"
+) \
+  >"$WORK/herm8.out" 2>/dev/null
+[ "$(tail -1 "$WORK/herm8.out" 2>/dev/null)" = "OK" ] &&
+  {
+    echo "  ok   [-] stale GIT_CONFIG_KEY_n pairs are cleared when \`seq\` is broken"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL hermeticity: seq-less cleanup ($(tail -1 "$WORK/herm8.out" 2>/dev/null))"
+    FAIL=$((FAIL + 1))
+  }
 unset hr hv
 
 # --- gaps round 2 asked for ---------------------------------------------------
@@ -3413,10 +4646,11 @@ echo "round-2 coverage:"
 
 # Truncation must be caught by SIZE, with no SIGPIPE involved. This stub writes past the cap and
 # exits 0 of its own accord, which is exactly the case the old rc=141 check let through.
-BINQ="$WORK/binq"; mkdir -p "$BINQ"
+BINQ="$WORK/binq"
+mkdir -p "$BINQ"
 for t in gh codex; do ln -sf "$BIN/$t" "$BINQ/$t"; done
 ln -sf "$(command -v node)" "$BINQ/node" 2>/dev/null
-cat > "$BINQ/claude" <<'VB'
+cat >"$BINQ/claude" <<'VB'
 #!/usr/bin/env bash
 # Write more than the cap, then exit 0 WITHOUT being killed: head has already taken what it wants.
 trap '' PIPE
@@ -3425,32 +4659,43 @@ exit 0
 VB
 chmod +x "$BINQ/claude"
 s_reset
-_rc=$(env PATH="$BINQ:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
-  GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 \
-  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1; echo $?)
+_rc=$(
+  env PATH="$BINQ:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
+    GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1
+  echo $?
+)
 _side=$(latest_side)
-[ "$_rc" = 3 ]; ok_if $? "overflow detected without SIGPIPE → round not clean" "rc=$_rc"
-grep -q "INCOMPLETE" "$_side" 2>/dev/null; ok_if $? "overflow without SIGPIPE is still marked" "-"
+[ "$_rc" = 3 ]
+ok_if $? "overflow detected without SIGPIPE → round not clean" "rc=$_rc"
+grep -q "INCOMPLETE" "$_side" 2>/dev/null
+ok_if $? "overflow without SIGPIPE is still marked" "-"
 
 # A cap exit must leave a verdict in the log, not just a return code.
-s_reset; s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=1 >/dev/null
+s_reset
+s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=1 >/dev/null
 s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=1 >/dev/null
 _log=$(latest_log)
-grep -q "verdict exit=4 same-SHA cap" "$_log" 2>/dev/null; ok_if $? "an exit-4 cap hit logs its verdict" "$(tail -1 "$_log" 2>/dev/null)"
+grep -q "verdict exit=4 same-SHA cap" "$_log" 2>/dev/null
+ok_if $? "an exit-4 cap hit logs its verdict" "$(tail -1 "$_log" 2>/dev/null)"
 
 # PR_RELAY_MAX_SAME_SHA=0: documented asymmetry — the same-SHA cap is only consulted once a SHA has
 # been seen before, so 0 still allows the first dispatch and blocks every retry.
 s_reset
-_r1=$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=0); _r2=$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=0)
-[ "$_r1" = 0 ] && [ "$_r2" = 4 ]; ok_if $? "MAX_SAME_SHA=0 allows the first dispatch, blocks retries" "r1=$_r1 r2=$_r2"
+_r1=$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=0)
+_r2=$(s_run "$SHA_A" PR_RELAY_MAX_SAME_SHA=0)
+[ "$_r1" = 0 ] && [ "$_r2" = 4 ]
+ok_if $? "MAX_SAME_SHA=0 allows the first dispatch, blocks retries" "r1=$_r1 r2=$_r2"
 
 # The GIT_CONFIG_* half of the hermeticity fix needs its own guard: deleting those exports would
 # otherwise leave the suite green here and hanging on a signing machine.
 # 6 by default, 5 under --allow-hooks. The old threshold was -ge 2, left over from when the
 # block set two keys; it stayed green while saying nothing about the current intent.
-[ "${GIT_CONFIG_COUNT:-0}" = 6 ]; ok_if $? "the git config override is exported (all six keys)" "count=${GIT_CONFIG_COUNT:-unset}"
-_sg=$( (cd "$WORK" && git config --get commit.gpgsign) 2>/dev/null )
-[ "$_sg" = "false" ]; ok_if $? "commit signing is forced off for every fixture git" "gpgsign=$_sg"
+[ "${GIT_CONFIG_COUNT:-0}" = 6 ]
+ok_if $? "the git config override is exported (all six keys)" "count=${GIT_CONFIG_COUNT:-unset}"
+_sg=$( (cd "$WORK" && git config --get commit.gpgsign) 2>/dev/null)
+[ "$_sg" = "false" ]
+ok_if $? "commit signing is forced off for every fixture git" "gpgsign=$_sg"
 
 # Runaway stderr must be bounded WITHOUT killing the reviewer. The stderr cap drains past the limit
 # rather than closing the pipe: closing it makes the agent's next write take SIGPIPE, which killed a
@@ -3458,24 +4703,29 @@ _sg=$( (cd "$WORK" && git config --get commit.gpgsign) 2>/dev/null )
 # below writes far past the cap on stderr and THEN produces its review, so it only passes if it
 # survived. (The previous version of this test was `ok_if 0 "..."` — hard-coded success, proving
 # nothing. Cross-review caught it.)
-cat > "$BINQ/claude" <<'VB'
+cat >"$BINQ/claude" <<'VB'
 #!/usr/bin/env bash
 head -c 200000 /dev/zero | tr '\0' 'e' >&2 2>/dev/null
 echo "LGTM from claude."
 VB
 chmod +x "$BINQ/claude"
 s_reset
-_rc=$(env PATH="$BINQ:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
-  GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 \
-  bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1; echo $?)
+_rc=$(
+  env PATH="$BINQ:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
+    GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1
+  echo $?
+)
 _side=$(latest_side)
-[ "$_rc" = 0 ]; ok_if $? "a chatty-stderr reviewer survives the cap and the round is clean" "rc=$_rc"
-grep -q "LGTM from claude" "$_side" 2>/dev/null; ok_if $? "...and its review still arrived in full" "side=${_side:-<none>}"
+[ "$_rc" = 0 ]
+ok_if $? "a chatty-stderr reviewer survives the cap and the round is clean" "rc=$_rc"
+grep -q "LGTM from claude" "$_side" 2>/dev/null
+ok_if $? "...and its review still arrived in full" "side=${_side:-<none>}"
 
 # The stderr cap keeps the LAST bytes, not the first: the diagnosis is at the end of a transcript,
 # and `tail -n 15` of it is all that is ever shown. Bounding with `head` kept the opening banner and
 # discarded the actual error — which cross-review caught by reading the comment against the code.
-cat > "$BINQ/claude" <<'VB'
+cat >"$BINQ/claude" <<'VB'
 #!/usr/bin/env bash
 head -c 200000 /dev/zero | tr '\0' 'e' >&2 2>/dev/null
 echo "FINAL_DIAGNOSIS_MARKER" >&2
@@ -3486,28 +4736,32 @@ s_reset
 _err=$(env PATH="$BINQ:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude 2>&1 >/dev/null)
-grep -q "FINAL_DIAGNOSIS_MARKER" <<< "$_err"; ok_if $? "the END of a runaway stderr is what survives the cap" "${_err: -80}"
+grep -q "FINAL_DIAGNOSIS_MARKER" <<<"$_err"
+ok_if $? "the END of a runaway stderr is what survives the cap" "${_err: -80}"
 
 # A truncated review must still be POSTED — that is the documented promise for this path, and the
 # other truncation tests only checked the exit code, the size and the marker.
-cat > "$BINQ/claude" <<'VB'
+cat >"$BINQ/claude" <<'VB'
 #!/usr/bin/env bash
 trap '' PIPE
 head -c 20000 /dev/zero | tr '\0' 'y' 2>/dev/null
 exit 0
 VB
 chmod +x "$BINQ/claude"
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 env PATH="$BINQ:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" PR_RELAY_LOG_MAX_BYTES=4096 GH_POST_LOG="$WORK/posted.log" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1
-[ -s "$WORK/posted.log" ]; ok_if $? "a truncated review is still posted to the PR" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
+[ -s "$WORK/posted.log" ]
+ok_if $? "a truncated review is still posted to the PR" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
 
 # The posted body must respect the advertised cap: the capture reads one byte PAST it to detect
 # overflow, and that probe byte must not survive into what gets posted.
 _side=$(latest_side)
-_tot=$(wc -c < "$_side" 2>/dev/null || echo 0)
-[ "$_tot" -le $((4096 + 400)) ]; ok_if $? "the probe byte is trimmed, body respects the stated cap" "total=$_tot"
+_tot=$(wc -c <"$_side" 2>/dev/null || echo 0)
+[ "$_tot" -le $((4096 + 400)) ]
+ok_if $? "the probe byte is trimmed, body respects the stated cap" "total=$_tot"
 
 # A NON-REVIEW must fail the round and must not be posted. This is the assertion that
 # would have caught the original bug: on 2026-09-01 three of four opencode failures
@@ -3518,7 +4772,8 @@ _tot=$(wc -c < "$_side" 2>/dev/null || echo 0)
 # COMMENT on the pull request, so "did not post" is asserted directly, on the empty
 # post log, the way --no-post is asserted below. (Grepping GH_POST_LOG for the body
 # would pass vacuously — the log records the argv and the body travels in --body-file.)
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 # Separate streams: merging them cannot prove the body stays OFF stdout, which is
 # what the launching agent reads as the review.
 _nr_out=$(env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
@@ -3526,47 +4781,60 @@ _nr_out=$(env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER=
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude 2>"$WORK/nr_err.log")
 _nr_rc=$?
 _nr_err=$(cat "$WORK/nr_err.log")
-[ "$_nr_rc" = 3 ]; ok_if $? "a non-review fails the round" "rc=$_nr_rc"
-[ ! -s "$WORK/posted.log" ]; ok_if $? "a non-review is not posted to the PR" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
+[ "$_nr_rc" = 3 ]
+ok_if $? "a non-review fails the round" "rc=$_nr_rc"
+[ ! -s "$WORK/posted.log" ]
+ok_if $? "a non-review is not posted to the PR" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
 # The delivery contract, asserted rather than implied. The launching agent reads the
 # relay's stdout, so a rejected body must not arrive there wearing a review header —
 # that would be the same harm the gate exists to stop, one channel over. And the
 # body has to be visible SOMEWHERE, or the gate deletes the evidence it rejected.
 printf '%s' "$_nr_out" | grep -q '========== Claude review =========='
-[ $? -ne 0 ]; ok_if $? "a non-review does not print under the review banner" "out=$(printf '%s' "$_nr_out" | tail -3 | tr '\n' '|')"
-printf '%s' "$_nr_err" | grep -q 'not a review'; ok_if $? "the relay says why it rejected the body" "err=$(printf '%s' "$_nr_err" | tail -3 | tr '\n' '|')"
+[ $? -ne 0 ]
+ok_if $? "a non-review does not print under the review banner" "out=$(printf '%s' "$_nr_out" | tail -3 | tr '\n' '|')"
+printf '%s' "$_nr_err" | grep -q 'not a review'
+ok_if $? "the relay says why it rejected the body" "err=$(printf '%s' "$_nr_err" | tail -3 | tr '\n' '|')"
 printf '%s' "$_nr_out" | grep -q 'Reading the rest of the diff'
-[ $? -ne 0 ]; ok_if $? "the rejected body stays off stdout" "out=$(printf '%s' "$_nr_out" | tail -3 | tr '\n' '|')"
-printf '%s' "$_nr_err" | grep -q 'Reading the rest of the diff'; ok_if $? "the rejected body itself is shown on stderr" "err=$(printf '%s' "$_nr_err" | tail -3 | tr '\n' '|')"
+[ $? -ne 0 ]
+ok_if $? "the rejected body stays off stdout" "out=$(printf '%s' "$_nr_out" | tail -3 | tr '\n' '|')"
+printf '%s' "$_nr_err" | grep -q 'Reading the rest of the diff'
+ok_if $? "the rejected body itself is shown on stderr" "err=$(printf '%s' "$_nr_err" | tail -3 | tr '\n' '|')"
 # The two rejection reasons are different problems with different fixes, so they must
 # not read the same. "no verdict" here; "a verdict, then a stall" on the body below.
-printf '%s' "$_nr_err" | grep -q 'names no severity'; ok_if $? "a body with no verdict says so" "err=$(printf '%s' "$_nr_err" | tail -3 | tr '\n' '|')"
+printf '%s' "$_nr_err" | grep -q 'names no severity'
+ok_if $? "a body with no verdict says so" "err=$(printf '%s' "$_nr_err" | tail -3 | tr '\n' '|')"
 
 # The recovered body that names a severity. A gate built only on markers accepts this
 # one, which is the whole reason the stall check exists.
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 _nrs_out=$(env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" NONREVIEW_STALL=claude \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude 2>"$WORK/nrs_err.log")
 _nrs_rc=$?
 _nrs_err=$(cat "$WORK/nrs_err.log")
-[ "$_nrs_rc" = 3 ]; ok_if $? "a stall that names Blocker still fails the round" "rc=$_nrs_rc"
-printf '%s' "$_nrs_err" | grep -q 'still reading'; ok_if $? "a stall is reported as a stall, not as a missing verdict" "err=$(printf '%s' "$_nrs_err" | tail -3 | tr '\n' '|')"
-[ ! -s "$WORK/posted.log" ]; ok_if $? "a stall that names Blocker is not posted" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
+[ "$_nrs_rc" = 3 ]
+ok_if $? "a stall that names Blocker still fails the round" "rc=$_nrs_rc"
+printf '%s' "$_nrs_err" | grep -q 'still reading'
+ok_if $? "a stall is reported as a stall, not as a missing verdict" "err=$(printf '%s' "$_nrs_err" | tail -3 | tr '\n' '|')"
+[ ! -s "$WORK/posted.log" ]
+ok_if $? "a stall that names Blocker is not posted" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
 
 # Ordering, pinned. The bench short-circuits on `rc != 0 AND a quota match`, so a
 # benched seat never reaches the gate — QUOTA_OUT exits 1 with an unmarked line and
 # must still bench rather than being called a non-review. Its sibling QUOTA_TEXT_OK
 # exits 0, DOES reach the gate, and passes only because it says "Looks good".
 # If the gate is ever moved above the bench, the first of these goes red.
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" QUOTA_OUT=claude \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex >/dev/null 2>&1
 _nrq_rc=$?
 # Two seats on purpose: benching the ONLY reviewer empties the panel, which is its own
 # exit 3, and would hide whether the bench or the gate produced it.
-[ "$_nrq_rc" = 0 ]; ok_if $? "quota is benched before the non-review gate can see it" "rc=$_nrq_rc"
+[ "$_nrq_rc" = 0 ]
+ok_if $? "quota is benched before the non-review gate can see it" "rc=$_nrq_rc"
 
 # The sibling. QUOTA_TEXT_OK exits 0, so the bench does NOT short-circuit it (the bench
 # needs rc!=0 AND a quota match) — it reaches the gate and passes only because it says
@@ -3578,66 +4846,86 @@ _nrq_rc=$?
 # show this — it is equally true of "rejected and not posted" — so the post log is the
 # assertion. Without it, a gate that also swallowed rc!=0 bodies would keep every
 # existing test green while quietly deleting partial reviews.
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" FAIL_RC=claude \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1
 _nrf_rc=$?
-[ "$_nrf_rc" = 3 ]; ok_if $? "a crashed reviewer with a verdict still fails the round" "rc=$_nrf_rc"
-[ -s "$WORK/posted.log" ]; ok_if $? "and it is still POSTED — the gate does not swallow rc!=0 bodies" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
+[ "$_nrf_rc" = 3 ]
+ok_if $? "a crashed reviewer with a verdict still fails the round" "rc=$_nrf_rc"
+[ -s "$WORK/posted.log" ]
+ok_if $? "and it is still POSTED — the gate does not swallow rc!=0 bodies" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
 
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" QUOTA_TEXT_OK=claude \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1
 _nrqt_rc=$?
-[ "$_nrqt_rc" = 0 ]; ok_if $? "a review that merely mentions quota passes the gate" "rc=$_nrqt_rc"
-[ -s "$WORK/posted.log" ]; ok_if $? "and it is posted, not benched" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
+[ "$_nrqt_rc" = 0 ]
+ok_if $? "a review that merely mentions quota passes the gate" "rc=$_nrqt_rc"
+[ -s "$WORK/posted.log" ]
+ok_if $? "and it is posted, not benched" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
 
 # --no-post. The reviews are the delivery on stdout, and the pull request is not touched: used when
 # the PR belongs to someone else and a human has to read the review before anybody else does. The
 # assertion that matters is the empty post log — "it printed something" would pass even if it had
 # also posted.
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 _np_out=$(env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude --no-post 2>&1)
 _np_rc=$?
-[ ! -s "$WORK/posted.log" ]; ok_if $? "--no-post writes nothing to the PR" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
-printf '%s' "$_np_out" | grep -q 'printed, not posted'; ok_if $? "--no-post says the review was printed rather than posted" "out=$(printf '%s' "$_np_out" | tail -3 | tr '\n' '|')"
-[ "$_np_rc" = 0 ]; ok_if $? "--no-post is a clean round: not posting is not a reviewer failure" "rc=$_np_rc"
+[ ! -s "$WORK/posted.log" ]
+ok_if $? "--no-post writes nothing to the PR" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
+printf '%s' "$_np_out" | grep -q 'printed, not posted'
+ok_if $? "--no-post says the review was printed rather than posted" "out=$(printf '%s' "$_np_out" | tail -3 | tr '\n' '|')"
+[ "$_np_rc" = 0 ]
+ok_if $? "--no-post is a clean round: not posting is not a reviewer failure" "rc=$_np_rc"
 
 # --no-post must not hide a bad review. The flag changes where the review goes, not whether it counts,
 # so an empty or failed reviewer still fails the round.
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" FAIL_EMPTY=claude \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude --no-post >/dev/null 2>&1
 _np_bad=$?
-[ "$_np_bad" = 3 ]; ok_if $? "--no-post still fails the round on an empty review" "rc=$_np_bad"
-[ ! -s "$WORK/posted.log" ]; ok_if $? "--no-post posts nothing even when the round fails" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
+[ "$_np_bad" = 3 ]
+ok_if $? "--no-post still fails the round on an empty review" "rc=$_np_bad"
+[ ! -s "$WORK/posted.log" ]
+ok_if $? "--no-post posts nothing even when the round fails" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
 
 # The banner has to say what happened. "posted" on a run that posted nothing is exactly the kind of
 # false report the fail-closed contract exists to prevent.
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 _np_banner=$(env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude --no-post 2>&1)
-printf '%s' "$_np_banner" | grep -q 'reviewer(s) printed, not posted'; ok_if $? "the closing banner does not claim it posted" "banner=$(printf '%s' "$_np_banner" | grep 'Relay done' | tr '\n' '|')"
+printf '%s' "$_np_banner" | grep -q 'reviewer(s) printed, not posted'
+ok_if $? "the closing banner does not claim it posted" "banner=$(printf '%s' "$_np_banner" | grep 'Relay done' | tr '\n' '|')"
 
 # Without the flag the same run posts, which is what makes the assertion above mean something.
-s_reset; : > "$WORK/posted.log"
+s_reset
+: >"$WORK/posted.log"
 env PATH="$BIN:/usr/bin:/bin" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
   GH_FIXED_SHA="$SHA_A" GH_POST_LOG="$WORK/posted.log" \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude >/dev/null 2>&1
-[ -s "$WORK/posted.log" ]; ok_if $? "without --no-post the same run does post" "posted=$(wc -c < "$WORK/posted.log" 2>/dev/null)"
+[ -s "$WORK/posted.log" ]
+ok_if $? "without --no-post the same run does post" "posted=$(wc -c <"$WORK/posted.log" 2>/dev/null)"
 
 # The revert case is the whole subtlety of "SHA transitions, not distinct SHAs": going back to a SHA
 # already reviewed spends a THIRD slot, because only the last SHA is stored.
 s_reset
-s_run "$SHA_A" >/dev/null; s_run "$SHA_B" >/dev/null; s_run "$SHA_A" >/dev/null
-read -r _s _r _m < "$SRF" 2>/dev/null || true
-[ "$_r" = 3 ] && [ "$_s" = "$SHA_A" ]; ok_if $? "shaA→shaB→shaA spends three rounds (transitions, not distinct SHAs)" "state=$(s_state)"
+s_run "$SHA_A" >/dev/null
+s_run "$SHA_B" >/dev/null
+s_run "$SHA_A" >/dev/null
+read -r _s _r _m <"$SRF" 2>/dev/null || true
+[ "$_r" = 3 ] && [ "$_s" = "$SHA_A" ]
+ok_if $? "shaA→shaB→shaA spends three rounds (transitions, not distinct SHAs)" "state=$(s_state)"
 
 # The round cap must log its verdict too, matching the same-SHA cap's coverage.
 s_reset
@@ -3651,7 +4939,8 @@ ok_if $? "an exit-4 ROUND cap hit logs its verdict too" "rc=$_rc $(tail -1 "$_lo
 # nothing is persisted.
 s_reset
 _rc=$(s_run "$SHA_A" PR_RELAY_MAX_ROUNDS=0)
-[ "$_rc" = 4 ] && [ ! -f "$SRF" ]; ok_if $? "MAX_ROUNDS=0 refuses the first dispatch and persists nothing" "rc=$_rc state=$(s_state)"
+[ "$_rc" = 4 ] && [ ! -f "$SRF" ]
+ok_if $? "MAX_ROUNDS=0 refuses the first dispatch and persists nothing" "rc=$_rc state=$(s_state)"
 # ...and because it persists nothing, its log is an orphan like the dry run's: same 6h sweep, so
 # the exit path documented as "always at cap" does not quietly accumulate evidence forever.
 _zlog=$(latest_log)
@@ -3668,23 +4957,27 @@ unset _r1 _r2 _sg _log _side _rc
 # for weeks, because a caller that omits --reviewers got the default assigned inside the script.
 # These run the real relay with no --reviewers and assert the command lines it actually built.
 _pcfg="$WORK/panel.conf"
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter" "$WORK/argv.panel"
-printf 'REVIEWERS=claude,codex\nMODEL_claude=sonnet\n' > "$_pcfg"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter" "$WORK/argv.panel"
+printf 'REVIEWERS=claude,codex\nMODEL_claude=sonnet\n' >"$_pcfg"
 # The model env vars are cleared on purpose: with one exported, "the file wins" would pass for the
 # wrong reason — the same trap this suite already guards for CURSOR_REVIEW_MODEL.
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   ARGV_LOG="$WORK/argv.panel" PR_RELAY_CONFIG="$_pcfg" \
   CLAUDE_REVIEW_MODEL= PR_RELAY_REVIEWERS= \
   bash "$RELAY" --pr 1 --author antigravity --parallel >/dev/null 2>&1
-grep -q "^claude " "$WORK/argv.panel" 2>/dev/null && grep -q "^codex " "$WORK/argv.panel" 2>/dev/null \
-  && ! grep -q "^grok \|^opencode " "$WORK/argv.panel" 2>/dev/null
+grep -q "^claude " "$WORK/argv.panel" 2>/dev/null && grep -q "^codex " "$WORK/argv.panel" 2>/dev/null &&
+  ! grep -q "^grok \|^opencode " "$WORK/argv.panel" 2>/dev/null
 ok_if $? "a panel in the config file reaches the relay with no --reviewers" "argv=$(cat "$WORK/argv.panel" 2>/dev/null | cut -c1-120 | tr '\n' '|')"
 
 grep -q "^claude .*--model sonnet" "$WORK/argv.panel" 2>/dev/null
 ok_if $? "MODEL_<seat> from the config reaches that reviewer's command line" "argv=$(grep '^claude ' "$WORK/argv.panel" 2>/dev/null | cut -c1-160)"
 
 # --reviewers still outranks the file — precedence 1 beats precedence 3, at the entry point.
-rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter" "$WORK/argv.panel2"
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter" "$WORK/argv.panel2"
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
   ARGV_LOG="$WORK/argv.panel2" PR_RELAY_CONFIG="$_pcfg" CLAUDE_REVIEW_MODEL= PR_RELAY_REVIEWERS= \
   bash "$RELAY" --pr 1 --author antigravity --reviewers codex --parallel >/dev/null 2>&1
@@ -3694,11 +4987,12 @@ ok_if $? "--reviewers still outranks the config file" "argv=$(cat "$WORK/argv.pa
 # AGENT_TIMEOUT from the file reaches each of the three programs that load the config. The value is
 # deliberately invalid: every one of them validates it before doing any work, so the error message
 # naming it back is proof the file was read inside THAT program.
-printf 'AGENT_TIMEOUT=notanumber\n' > "$_pcfg"
+printf 'AGENT_TIMEOUT=notanumber\n' >"$_pcfg"
 for _prog in pr-review-relay review-local pr-review-distill; do
   _out=$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" PR_RELAY_CONFIG="$_pcfg" \
     PR_RELAY_AGENT_TIMEOUT= PR_DISTILL_AGENT_TIMEOUT= \
-    bash "$HERE/../$_prog" --pr 1 --author antigravity 2>&1); _prc=$?
+    bash "$HERE/../$_prog" --pr 1 --author antigravity 2>&1)
+  _prc=$?
   [ "$_prc" = 2 ] && printf '%s' "$_out" | grep -q "notanumber"
   ok_if $? "$_prog reads AGENT_TIMEOUT from the config file" "rc=$_prc out=$(printf '%s' "$_out" | head -1)"
 done
@@ -3712,14 +5006,17 @@ echo "review-local parallel by default:"
 # which matters on a machine running several agents at once with bin/ci as the only gate.
 # Its OWN fixture repo: the shared one is left in whatever state earlier cases need, and a branch
 # with no diff against its base exits before any reviewer is dispatched.
-HSREPO="$WORK/hsrepo"; mkdir -p "$HSREPO"
-( cd "$HSREPO" && git init -q . && git config user.email t@t && git config user.name t \
-  && echo base > f.txt && git add f.txt && git commit -qm base && git branch -M mainline \
-  && git checkout -qb feature && echo changed > f.txt && git commit -qam change ) >/dev/null 2>&1
+HSREPO="$WORK/hsrepo"
+mkdir -p "$HSREPO"
+(cd "$HSREPO" && git init -q . && git config user.email t@t && git config user.name t &&
+  echo base >f.txt && git add f.txt && git commit -qm base && git branch -M mainline &&
+  git checkout -qb feature && echo changed >f.txt && git commit -qam change) >/dev/null 2>&1
 if [ -f "$RL" ] && [ -n "$(cd "$HSREPO" && git diff mainline --stat 2>/dev/null)" ]; then
-  HS="$WORK/handshake"; HSBIN="$WORK/hsbin"; mkdir -p "$HSBIN"
+  HS="$WORK/handshake"
+  HSBIN="$WORK/hsbin"
+  mkdir -p "$HSBIN"
   for _s in claude codex; do
-    cat > "$HSBIN/$_s" <<STUB
+    cat >"$HSBIN/$_s" <<STUB
 #!/usr/bin/env bash
 cat >/dev/null
 : > "\$HS_DIR/started.$_s"
@@ -3731,41 +5028,54 @@ STUB
     chmod +x "$HSBIN/$_s"
   done
   _hs() { # _hs <expect: both|one> <desc> [flags...]
-    local expect="$1" desc="$2" _i _n=0 _pid; shift 2
-    rm -rf "$HS"; mkdir -p "$HS"
-    ( cd "$HSREPO" && env PATH="$HSBIN:$BIN:$PATH" HS_DIR="$HS" \
-        bash "$RL" --base mainline --reviewers claude,codex "$@" >/dev/null 2>&1 ) &
+    local expect="$1" desc="$2" _i _n=0 _pid
+    shift 2
+    rm -rf "$HS"
+    mkdir -p "$HS"
+    (cd "$HSREPO" && env PATH="$HSBIN:$BIN:$PATH" HS_DIR="$HS" \
+      bash "$RL" --base mainline --reviewers claude,codex "$@" >/dev/null 2>&1) &
     _pid=$!
     # Wait (bounded) until the first stub has started.
-    for _i in $(seq 1 150); do ls "$HS"/started.* >/dev/null 2>&1 && break; sleep 0.1; done
+    for _i in $(seq 1 150); do
+      ls "$HS"/started.* >/dev/null 2>&1 && break
+      sleep 0.1
+    done
     if [ "$expect" = both ]; then
-      for _i in $(seq 1 150); do [ -e "$HS/started.claude" ] && [ -e "$HS/started.codex" ] && break; sleep 0.1; done
+      for _i in $(seq 1 150); do
+        [ -e "$HS/started.claude" ] && [ -e "$HS/started.codex" ] && break
+        sleep 0.1
+      done
     else
       # Proving ABSENCE needs a window: hold the first stub for 5 s and require that the second never
       # starts meanwhile. A sequential second stub cannot start while the first blocks; a parallel
       # one starts within milliseconds. The event order is checked after `go` as well.
-      for _i in $(seq 1 50); do [ "$(ls "$HS"/started.* 2>/dev/null | wc -l | tr -d ' ')" -gt 1 ] && break; sleep 0.1; done
+      for _i in $(seq 1 50); do
+        [ "$(ls "$HS"/started.* 2>/dev/null | wc -l | tr -d ' ')" -gt 1 ] && break
+        sleep 0.1
+      done
     fi
     _n=$(ls "$HS"/started.* 2>/dev/null | wc -l | tr -d ' ')
-    : > "$HS/go"; wait "$_pid"
+    : >"$HS/go"
+    wait "$_pid"
     if [ "$expect" = both ]; then
       [ "$_n" = 2 ]
     else
       # One at a time: each start is followed by its own end before the next start.
       [ "$_n" = 1 ] && [ "$(awk '{print $1}' "$HS/events" 2>/dev/null | tr '\n' ' ')" = "start end start end " ]
     fi
-    ok_if $? "$desc" "started before go: $_n; events: $(tr '\n' ',' < "$HS/events" 2>/dev/null)"
+    ok_if $? "$desc" "started before go: $_n; events: $(tr '\n' ',' <"$HS/events" 2>/dev/null)"
   }
   _hs both "review-local: no flag → reviewers run at the same time"
-  _hs one  "review-local: --sequential → one at a time"                 --sequential
-  _hs both "review-local: --parallel alone → at the same time"          --parallel
+  _hs one "review-local: --sequential → one at a time" --sequential
+  _hs both "review-local: --parallel alone → at the same time" --parallel
   _hs both "review-local: --sequential --parallel → last wins (parallel)" --sequential --parallel
-  _hs one  "review-local: --parallel --sequential → last wins (sequential)" --parallel --sequential
+  _hs one "review-local: --parallel --sequential → last wins (sequential)" --parallel --sequential
   unset -f _hs
   bash "$RL" --help 2>/dev/null | grep -- '--sequential' >/dev/null && bash "$RL" --help 2>/dev/null | grep -- '--parallel' >/dev/null
   ok_if $? "review-local --help names --sequential and --parallel" "-"
 else
-  echo "  FAIL review-local handshake: could not build its fixture repo"; FAIL=$((FAIL+1))
+  echo "  FAIL review-local handshake: could not build its fixture repo"
+  FAIL=$((FAIL + 1))
 fi
 
 # =============================================================================
@@ -3776,122 +5086,212 @@ fi
 # are refused BEFORE they start, with a named reason, no posted comment, and a failed round.
 # =============================================================================
 echo "argv limit:"
-AV="$WORK/argv-limit"; rm -rf "$AV"; mkdir -p "$AV"
+AV="$WORK/argv-limit"
+rm -rf "$AV"
+mkdir -p "$AV"
 av_ctx() { # <file> <bytes> — filler lines, then a marker as the last line
-  awk -v n="$2" 'BEGIN { l = "context filler line, not code, about eighty characters wide, padding padding pad\n"; t = 0; while (t < n) { printf "%s", l; t += length(l) } print "CTX-MARKER-END" }' > "$1"
+  awk -v n="$2" 'BEGIN { l = "context filler line, not code, about eighty characters wide, padding padding pad\n"; t = 0; while (t < n) { printf "%s", l; t += length(l) } print "CTX-MARKER-END" }' >"$1"
 }
 av_run() { # av_run [env assignments...] -- <relay args...>   → $AV_RC, $AV/{argv,max,stdin,bodies,out,err}
   local -a envs=() args=()
-  while [ $# -gt 0 ]; do case "$1" in --) shift; args=("$@"); break;; *) envs+=("$1"); shift;; esac; done
-  rm -f "$AV/argv" "$AV/max" "$AV/stdin" "$AV/bodies" "$AV/out" "$AV/err"; : > "$AV/argv"; : > "$AV/max"; : > "$AV/stdin"; : > "$AV/bodies"
-  rm -rf "$WORK/cache"; mkdir -p "$WORK/cache"; rm -f "$WORK/sha_counter"
+  while [ $# -gt 0 ]; do case "$1" in --)
+    shift
+    args=("$@")
+    break
+    ;;
+  *)
+    envs+=("$1")
+    shift
+    ;;
+  esac done
+  rm -f "$AV/argv" "$AV/max" "$AV/stdin" "$AV/bodies" "$AV/out" "$AV/err"
+  : >"$AV/argv"
+  : >"$AV/max"
+  : >"$AV/stdin"
+  : >"$AV/bodies"
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
   env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
     GH_SHA_COUNTER="$WORK/sha_counter" ARGV_LOG="$AV/argv" ARGV_MAX_LOG="$AV/max" STDIN_LOG="$AV/stdin" GH_BODY_DIR="$AV" \
-    ${envs[@]+"${envs[@]}"} bash "$RELAY" --pr 1 ${args[@]+"${args[@]}"} > "$AV/out" 2> "$AV/err" < /dev/null
+    ${envs[@]+"${envs[@]}"} bash "$RELAY" --pr 1 ${args[@]+"${args[@]}"} >"$AV/out" 2>"$AV/err" </dev/null
   AV_RC=$?
 }
 av_ok() { # <desc> <status of the condition just tested>
-  if [ "$2" = 0 ]; then echo "  ok   [-] $1"; PASS=$((PASS+1)); else echo "  FAIL $1"; FAIL=$((FAIL+1)); fi
+  if [ "$2" = 0 ]; then
+    echo "  ok   [-] $1"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $1"
+    FAIL=$((FAIL + 1))
+  fi
 }
-av_max() { awk -v s="$1" '$1 == s { print $2 }' "$AV/max" | tail -1; }   # longest argv element of a seat
+av_max() { awk -v s="$1" '$1 == s { print $2 }' "$AV/max" | tail -1; } # longest argv element of a seat
 av_count() { grep -c -- "$1" "$2" 2>/dev/null || true; }
 
 # Completeness, not just markers: every filler line of the context and every line of the diff must
 # reach the seat's stdin, once. (A prompt that lost most of a 98 KB diff would still carry its tail marker.)
 av_full() { # <label> <ctx file> <expected diff lines>
-  local cl dl
-  cl=$(grep -c '^context filler line' "$2" 2>/dev/null || true); [ -n "$cl" ] || cl=0
-  [ "$(grep -c '^context filler line' "$AV/stdin")" = "$cl" ] && [ "$cl" -gt 0 ] \
-    && [ "$(grep -c -E '^\+d{79}$' "$AV/stdin")" = "$3" ]; av_ok "$1 stdin carries all $cl context lines and all $3 diff lines, once" $?
+  local cl
+  cl=$(grep -c '^context filler line' "$2" 2>/dev/null || true)
+  [ -n "$cl" ] || cl=0
+  [ "$(grep -c '^context filler line' "$AV/stdin")" = "$cl" ] && [ "$cl" -gt 0 ] &&
+    [ "$(grep -c -E '^\+d{79}$' "$AV/stdin")" = "$3" ]
+  av_ok "$1 stdin carries all $cl context lines and all $3 diff lines, once" $?
 }
 av_ctx "$AV/ctx34k" 34305
 av_ctx "$AV/ctx140k" 140000
 av_run GH_DIFF_BYTES=98277 -- --author antigravity --reviewers codex --context-file "$AV/ctx34k"
 _m=$(av_max codex)
-[ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -lt 100000 ]; av_ok "T1 PR #121 sizes, codex: round clean, largest argv element ${_m:-?} B (< 100000)" $?
-[ "$(av_count CTX-MARKER-END "$AV/stdin")" = 1 ] && [ "$(av_count DIFF-TAIL-MARKER "$AV/stdin")" = 1 ]; av_ok "T1 codex stdin holds the context and the inlined diff exactly once" $?
-grep -q 'LGTM from codex' "$AV/bodies"; av_ok "T1 codex's review was posted" $?
+[ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -lt 100000 ]
+av_ok "T1 PR #121 sizes, codex: round clean, largest argv element ${_m:-?} B (< 100000)" $?
+[ "$(av_count CTX-MARKER-END "$AV/stdin")" = 1 ] && [ "$(av_count DIFF-TAIL-MARKER "$AV/stdin")" = 1 ]
+av_ok "T1 codex stdin holds the context and the inlined diff exactly once" $?
+grep -q 'LGTM from codex' "$AV/bodies"
+av_ok "T1 codex's review was posted" $?
 av_full "T1 codex" "$AV/ctx34k" 1214
 
 av_run GH_DIFF_BYTES=98277 -- --author codex --reviewers claude --context-file "$AV/ctx34k"
 _m=$(av_max claude)
-[ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -lt 100000 ]; av_ok "T2 PR #121 sizes, claude: round clean, largest argv element ${_m:-?} B (< 100000)" $?
-[ "$(av_count CTX-MARKER-END "$AV/stdin")" = 1 ] && [ "$(av_count DIFF-TAIL-MARKER "$AV/stdin")" = 1 ]; av_ok "T2 claude stdin holds the context and the diff exactly once" $?
+[ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -lt 100000 ]
+av_ok "T2 PR #121 sizes, claude: round clean, largest argv element ${_m:-?} B (< 100000)" $?
+[ "$(av_count CTX-MARKER-END "$AV/stdin")" = 1 ] && [ "$(av_count DIFF-TAIL-MARKER "$AV/stdin")" = 1 ]
+av_ok "T2 claude stdin holds the context and the diff exactly once" $?
 av_full "T2 claude" "$AV/ctx34k" 1214
-grep -q 'LGTM from claude' "$AV/bodies"; av_ok "T2 claude's review was posted" $?
+grep -q 'LGTM from claude' "$AV/bodies"
+av_ok "T2 claude's review was posted" $?
 
 # --diff mode: today's stdin is the diff alone and the prompt rides in argv, so piping $feed unchanged
 # would drop the prompt. Order matters too: prompt first, then a blank line, then the diff.
 av_run GH_DIFF_BYTES=98277 -- --author antigravity --reviewers codex --diff
-_p=$(grep -n 'Blocker / Should-fix / Nit' "$AV/stdin" | head -1 | cut -d: -f1); _d=$(grep -n 'DIFF-TAIL-MARKER' "$AV/stdin" | head -1 | cut -d: -f1)
-[ "$AV_RC" = 0 ] && [ -n "$_p" ] && [ -n "$_d" ] && [ "$_p" -lt "$_d" ] && [ "$(av_count DIFF-TAIL-MARKER "$AV/stdin")" = 1 ]; av_ok "T3 --diff: codex stdin is the prompt, then the diff, once (prompt line ${_p:-?}, diff end ${_d:-?})" $?
-_m=$(av_max codex); [ -n "$_m" ] && [ "$_m" -lt 1000 ]; av_ok "T3 --diff: no argv element of codex carries the prompt or the diff (${_m:-?} B)" $?
-[ "$(grep -c -E '^\+d{79}$' "$AV/stdin")" = 1214 ]; av_ok "T3 --diff: codex stdin carries all 1214 diff lines, once" $?
+_p=$(grep -n 'Blocker / Should-fix / Nit' "$AV/stdin" | head -1 | cut -d: -f1)
+_d=$(grep -n 'DIFF-TAIL-MARKER' "$AV/stdin" | head -1 | cut -d: -f1)
+[ "$AV_RC" = 0 ] && [ -n "$_p" ] && [ -n "$_d" ] && [ "$_p" -lt "$_d" ] && [ "$(av_count DIFF-TAIL-MARKER "$AV/stdin")" = 1 ]
+av_ok "T3 --diff: codex stdin is the prompt, then the diff, once (prompt line ${_p:-?}, diff end ${_d:-?})" $?
+_m=$(av_max codex)
+[ -n "$_m" ] && [ "$_m" -lt 1000 ]
+av_ok "T3 --diff: no argv element of codex carries the prompt or the diff (${_m:-?} B)" $?
+[ "$(grep -c -E '^\+d{79}$' "$AV/stdin")" = 1214 ]
+av_ok "T3 --diff: codex stdin carries all 1214 diff lines, once" $?
 # the separator between the prompt and the diff is a blank line, directly before the diff header
 _h=$(grep -n '^diff --git a/big b/big$' "$AV/stdin" | head -1 | cut -d: -f1)
-[ -n "$_h" ] && [ "$_h" -gt 1 ] && [ -z "$(sed -n "$((_h-1))p" "$AV/stdin")" ]; av_ok "T3 --diff: a blank line separates the prompt from the diff" $?
+[ -n "$_h" ] && [ "$_h" -gt 1 ] && [ -z "$(sed -n "$((_h - 1))p" "$AV/stdin")" ]
+av_ok "T3 --diff: a blank line separates the prompt from the diff" $?
 av_run GH_DIFF_BYTES=98277 -- --author antigravity --reviewers claude --diff
-_p=$(grep -n 'Blocker / Should-fix / Nit' "$AV/stdin" | head -1 | cut -d: -f1); _d=$(grep -n 'DIFF-TAIL-MARKER' "$AV/stdin" | head -1 | cut -d: -f1)
-[ "$AV_RC" = 0 ] && [ -n "$_p" ] && [ -n "$_d" ] && [ "$_p" -lt "$_d" ]; av_ok "T3 --diff: claude stdin is the prompt, then the diff" $?
-_m=$(av_max claude); [ -n "$_m" ] && [ "$_m" -lt 1000 ]; av_ok "T3 --diff: no argv element of claude carries the prompt or the diff (${_m:-?} B)" $?
+_p=$(grep -n 'Blocker / Should-fix / Nit' "$AV/stdin" | head -1 | cut -d: -f1)
+_d=$(grep -n 'DIFF-TAIL-MARKER' "$AV/stdin" | head -1 | cut -d: -f1)
+[ "$AV_RC" = 0 ] && [ -n "$_p" ] && [ -n "$_d" ] && [ "$_p" -lt "$_d" ]
+av_ok "T3 --diff: claude stdin is the prompt, then the diff" $?
+_m=$(av_max claude)
+[ -n "$_m" ] && [ "$_m" -lt 1000 ]
+av_ok "T3 --diff: no argv element of claude carries the prompt or the diff (${_m:-?} B)" $?
 
 # T4: a context alone over the limit. qwen takes the prompt as one argv string: refused, named, no 126,
 # no comment from it, and the round fails (3) while the healthy seat still posts.
 for _mode in "" "--sequential"; do
   av_run -- --author antigravity --reviewers qwen,codex $_mode --context-file "$AV/ctx140k"
   _l="T4${_mode:+ $_mode}"
-  [ "$AV_RC" = 3 ]; av_ok "$_l: oversize qwen → round exit 3 (got $AV_RC)" $?
-  grep -q 'qwen: prompt is [0-9]* B, over the argv limit (122880 B, counting the terminating NUL) — shorten the --context-file' "$AV/err"; av_ok "$_l: the named reason is on stderr" $?
-  [ -z "$(av_max qwen)" ]; av_ok "$_l: qwen never started" $?
-  ! grep -q -E 'exit(ed with)?( code)? 126' "$AV/err" "$AV/out"; av_ok "$_l: no exit 126 anywhere" $?
-  ! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"; av_ok "$_l: nothing from qwen was posted; codex's review was" $?
+  [ "$AV_RC" = 3 ]
+  av_ok "$_l: oversize qwen → round exit 3 (got $AV_RC)" $?
+  grep -q 'qwen: prompt is [0-9]* B, over the argv limit (122880 B, counting the terminating NUL) — shorten the --context-file' "$AV/err"
+  av_ok "$_l: the named reason is on stderr" $?
+  [ -z "$(av_max qwen)" ]
+  av_ok "$_l: qwen never started" $?
+  ! grep -q -E 'exit(ed with)?( code)? 126' "$AV/err" "$AV/out"
+  av_ok "$_l: no exit 126 anywhere" $?
+  ! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"
+  av_ok "$_l: nothing from qwen was posted; codex's review was" $?
 done
 
 # T5: the byte counter and the boundary.
-_u=$( . "$HERE/../lib-argv.sh"; e=$(awk 'BEGIN { for (i = 0; i < 70000; i++) printf "é" }'); n=$(argv_bytes "$e")
-      if [ "$n" = 140000 ] && ! argv_fits "$n"; then echo ok; else echo "bytes=$n"; fi )
-[ "$_u" = ok ]; av_ok "T5 70000 × é is 140000 bytes (not 70000 characters) and does not fit" $?
-_u=$( . "$HERE/../lib-argv.sh"; argv_fits 122879 && ! argv_fits 122880 && echo ok )
-[ "$_u" = ok ]; av_ok "T5 default limit: 122879 B fits, 122880 B does not (the NUL counts)" $?
-_u=$( . "$HERE/../lib-argv.sh"; export PR_RELAY_ARGV_MAX_BYTES=131072; argv_fits 131071 && ! argv_fits 131072 && echo ok )
-[ "$_u" = ok ]; av_ok "T5 override at the kernel's 131072: 131071 B fits, 131072 B does not" $?
+_u=$(
+  . "$HERE/../lib-argv.sh"
+  e=$(awk 'BEGIN { for (i = 0; i < 70000; i++) printf "é" }')
+  n=$(argv_bytes "$e")
+  if [ "$n" = 140000 ] && ! argv_fits "$n"; then echo ok; else echo "bytes=$n"; fi
+)
+[ "$_u" = ok ]
+av_ok "T5 70000 × é is 140000 bytes (not 70000 characters) and does not fit" $?
+_u=$(
+  . "$HERE/../lib-argv.sh"
+  argv_fits 122879 && ! argv_fits 122880 && echo ok
+)
+[ "$_u" = ok ]
+av_ok "T5 default limit: 122879 B fits, 122880 B does not (the NUL counts)" $?
+_u=$(
+  . "$HERE/../lib-argv.sh"
+  export PR_RELAY_ARGV_MAX_BYTES=131072
+  argv_fits 131071 && ! argv_fits 131072 && echo ok
+)
+[ "$_u" = ok ]
+av_ok "T5 override at the kernel's 131072: 131071 B fits, 131072 B does not" $?
 for _bad in 131073 abc 0 -5 1.5; do
-  _u=$( . "$HERE/../lib-argv.sh"; export PR_RELAY_ARGV_MAX_BYTES="$_bad"; argv_limit >/dev/null 2>&1 || echo rejected )
-  [ "$_u" = rejected ]; av_ok "T5 PR_RELAY_ARGV_MAX_BYTES='$_bad' is rejected" $?
+  _u=$(
+    . "$HERE/../lib-argv.sh"
+    export PR_RELAY_ARGV_MAX_BYTES="$_bad"
+    argv_limit >/dev/null 2>&1 || echo rejected
+  )
+  [ "$_u" = rejected ]
+  av_ok "T5 PR_RELAY_ARGV_MAX_BYTES='$_bad' is rejected" $?
 done
 av_run PR_RELAY_ARGV_MAX_BYTES=999999 -- --author antigravity --reviewers codex
-[ "$AV_RC" = 2 ] && grep -q 'invalid PR_RELAY_ARGV_MAX_BYTES' "$AV/err"; av_ok "T5 the relay stops at startup (exit 2) on an unusable override (got $AV_RC)" $?
+[ "$AV_RC" = 2 ] && grep -q 'invalid PR_RELAY_ARGV_MAX_BYTES' "$AV/err"
+av_ok "T5 the relay stops at startup (exit 2) on an unusable override (got $AV_RC)" $?
 
 # T6: opencode builds its prompt inside opencode_review; the guard lives there.
-BIN_OCA="$WORK/bin-oca"; make_strict_opencode "$BIN_OCA"
-OC_AV="$WORK/oc-argv-limit.log"; oc_reset "$OC_AV"
+BIN_OCA="$WORK/bin-oca"
+make_strict_opencode "$BIN_OCA"
+OC_AV="$WORK/oc-argv-limit.log"
+oc_reset "$OC_AV"
 av_run OC_ARGV_FILE="$OC_AV" PR_RELAY_OPENCODE_BIN="$BIN_OCA/opencode" -- --author antigravity --reviewers opencode,codex --context-file "$AV/ctx140k"
-[ "$AV_RC" = 3 ]; av_ok "T6 oversize opencode → round exit 3 (got $AV_RC)" $?
-[ ! -e "$OC_AV" ]; av_ok "T6 opencode never started" $?
-grep -q 'opencode: prompt is [0-9]* B, over the argv limit' "$AV/err"; av_ok "T6 the named reason is on stderr" $?
-! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"; av_ok "T6 the reason was not posted as opencode's review" $?
-! grep -q 'ran fine but returned an empty review' "$AV/err"; av_ok "T6 not reported as an empty review (non-zero rc, not 0)" $?
+[ "$AV_RC" = 3 ]
+av_ok "T6 oversize opencode → round exit 3 (got $AV_RC)" $?
+[ ! -e "$OC_AV" ]
+av_ok "T6 opencode never started" $?
+grep -q 'opencode: prompt is [0-9]* B, over the argv limit' "$AV/err"
+av_ok "T6 the named reason is on stderr" $?
+! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"
+av_ok "T6 the reason was not posted as opencode's review" $?
+! grep -q 'ran fine but returned an empty review' "$AV/err"
+av_ok "T6 not reported as an empty review (non-zero rc, not 0)" $?
 
 # opencode_review without lib-argv.sh loaded must fail CLOSED (rc 1, named), never run unguarded; and
 # argv_fits never says "fits" for an empty or non-numeric size.
-_u=$( . "$HERE/../lib-opencode.sh"; opencode_review "$WORK" "d" "c" "s" "$WORK/errf-x" 5 2>&1 >/dev/null; echo "rc=$?" )
-grep -q 'lib-argv.sh is not loaded' <<< "$_u" && grep -q 'rc=1' <<< "$_u"; av_ok "T6 opencode_review with no lib-argv.sh loaded is refused (fail closed, rc 1)" $?
-_u=$( . "$HERE/../lib-argv.sh"; { argv_fits "" || argv_fits abc || argv_fits -1; } && echo fits || echo refused )
-[ "$_u" = refused ]; av_ok "T5 argv_fits never fits an empty or non-numeric size" $?
+_u=$(
+  . "$HERE/../lib-opencode.sh"
+  opencode_review "$WORK" "d" "c" "s" "$WORK/errf-x" 5 2>&1 >/dev/null
+  echo "rc=$?"
+)
+grep -q 'lib-argv.sh is not loaded' <<<"$_u" && grep -q 'rc=1' <<<"$_u"
+av_ok "T6 opencode_review with no lib-argv.sh loaded is refused (fail closed, rc 1)" $?
+_u=$(
+  . "$HERE/../lib-argv.sh"
+  { argv_fits "" || argv_fits abc || argv_fits -1; } && echo fits || echo refused
+)
+[ "$_u" = refused ]
+av_ok "T5 argv_fits never fits an empty or non-numeric size" $?
 # review-local: an unusable override stops it at startup, like the relay.
-( cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
-  PR_RELAY_ARGV_MAX_BYTES=bogus bash "$RL" --author codex --reviewers claude --base HEAD~1 > "$AV/rl.out" 2> "$AV/rl.err" < /dev/null ); _rc=$?
-[ "$_rc" = 2 ] && grep -q 'invalid PR_RELAY_ARGV_MAX_BYTES' "$AV/rl.err"; av_ok "review-local stops at startup (exit 2) on an unusable PR_RELAY_ARGV_MAX_BYTES (got $_rc)" $?
+(cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
+  PR_RELAY_ARGV_MAX_BYTES=bogus bash "$RL" --author codex --reviewers claude --base HEAD~1 >"$AV/rl.out" 2>"$AV/rl.err" </dev/null)
+_rc=$?
+[ "$_rc" = 2 ] && grep -q 'invalid PR_RELAY_ARGV_MAX_BYTES' "$AV/rl.err"
+av_ok "review-local stops at startup (exit 2) on an unusable PR_RELAY_ARGV_MAX_BYTES (got $_rc)" $?
 
 # T7: antigravity in both modes. Link mode: the context is the oversize part. Diff mode: the diff is.
 av_run -- --author claude --reviewers antigravity,codex --context-file "$AV/ctx140k"
-[ "$AV_RC" = 3 ] && [ -z "$(av_max agy)" ] && grep -q 'antigravity: prompt is [0-9]* B, over the argv limit.*shorten the --context-file' "$AV/err"; av_ok "T7 antigravity, link mode: refused, never started, hint names the context file" $?
-! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"; av_ok "T7 link mode: nothing from antigravity posted; codex's review was" $?
+[ "$AV_RC" = 3 ] && [ -z "$(av_max agy)" ] && grep -q 'antigravity: prompt is [0-9]* B, over the argv limit.*shorten the --context-file' "$AV/err"
+av_ok "T7 antigravity, link mode: refused, never started, hint names the context file" $?
+! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"
+av_ok "T7 link mode: nothing from antigravity posted; codex's review was" $?
 av_run GH_DIFF_BYTES=130000 -- --author claude --reviewers antigravity,codex --diff
-[ "$AV_RC" = 3 ] && [ -z "$(av_max agy)" ] && grep -q 'antigravity: prompt is [0-9]* B, over the argv limit.*use a smaller diff' "$AV/err"; av_ok "T7 antigravity, --diff mode: refused, never started, hint names the diff" $?
-! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"; av_ok "T7 --diff mode: nothing from antigravity posted; codex's review was" $?
+[ "$AV_RC" = 3 ] && [ -z "$(av_max agy)" ] && grep -q 'antigravity: prompt is [0-9]* B, over the argv limit.*use a smaller diff' "$AV/err"
+av_ok "T7 antigravity, --diff mode: refused, never started, hint names the diff" $?
+! grep -q 'over the argv limit' "$AV/bodies" && grep -q 'LGTM from codex' "$AV/bodies"
+av_ok "T7 --diff mode: nothing from antigravity posted; codex's review was" $?
 av_run GH_DIFF_BYTES=20000 -- --author claude --reviewers antigravity --diff
-_m=$(av_max agy); [ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -gt 20000 ]; av_ok "T7 antigravity, --diff mode, 20 KB diff: still runs, element ${_m:-?} B" $?
+_m=$(av_max agy)
+[ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -gt 20000 ]
+av_ok "T7 antigravity, --diff mode, 20 KB diff: still runs, element ${_m:-?} B" $?
 
 echo "-------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"

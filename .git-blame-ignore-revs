@@ -4,3 +4,6 @@
 
 # shfmt -i 2 -ci on every shell file (shfmt v3.14.1, tool output only)
 485f9e022e8e211b3cd89d3a560a9d38c9af2ee3
+
+# shfmt -i 2 -ci on every shell file under relay/ (shfmt v3.14.1, tool output only)
+b1a201760b2b6ad2752b2f861831af8a462b527b

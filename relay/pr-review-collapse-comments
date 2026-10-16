@@ -11,18 +11,26 @@ set -euo pipefail
 # (~/.local/bin/pr-review-collapse-comments -> the repo) still finds its siblings. Same block
 # as in pr-review-relay / review-local — keep them in sync. See pr-review-relay for the why.
 _self="${BASH_SOURCE[0]}"
-_rl=/usr/bin/readlink; [ -x "$_rl" ] || _rl=/bin/readlink
+_rl=/usr/bin/readlink
+[ -x "$_rl" ] || _rl=/bin/readlink
 _n=0
 while [ -h "$_self" ] && [ -x "$_rl" ] && [ "$_n" -lt 40 ]; do
-  _n=$((_n + 1)); _link="$("$_rl" "$_self" 2>/dev/null)" || break
+  _n=$((_n + 1))
+  _link="$("$_rl" "$_self" 2>/dev/null)" || break
   case "$_link" in
-    /*) _self="$_link";;
-    *)  case "$_self" in */*) _self="${_self%/*}/$_link";; *) _self="$_link";; esac;;
+    /*) _self="$_link" ;;
+    *) case "$_self" in */*) _self="${_self%/*}/$_link" ;; *) _self="$_link" ;; esac ;;
   esac
 done
-if [ -h "$_self" ]; then echo "cannot resolve the script's own symlink: $_self" >&2; exit 1; fi
-case "$_self" in */*) SCRIPT_DIR="${_self%/*}";; *) SCRIPT_DIR=".";; esac
-SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" 2>/dev/null && pwd -P)" || { echo "cannot resolve script directory" >&2; exit 1; }
+if [ -h "$_self" ]; then
+  echo "cannot resolve the script's own symlink: $_self" >&2
+  exit 1
+fi
+case "$_self" in */*) SCRIPT_DIR="${_self%/*}" ;; *) SCRIPT_DIR="." ;; esac
+SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" 2>/dev/null && pwd -P)" || {
+  echo "cannot resolve script directory" >&2
+  exit 1
+}
 unset _self _rl _n _link
 WRAP="$SCRIPT_DIR/wrap-collapsed-pr-comment.mjs"
 RELAY_TAG="(automated cross-review)"
@@ -31,21 +39,40 @@ PR=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --pr) PR="$2"; shift 2;;
-    -h|--help)
+    --pr)
+      PR="$2"
+      shift 2
+      ;;
+    -h | --help)
       sed -n '2,6p' "$0"
-      exit 0;;
-    [0-9]*) PR="$1"; shift;;
-    *) echo "unknown arg: $1" >&2; exit 2;;
+      exit 0
+      ;;
+    [0-9]*)
+      PR="$1"
+      shift
+      ;;
+    *)
+      echo "unknown arg: $1" >&2
+      exit 2
+      ;;
   esac
 done
 
-command -v gh >/dev/null || { echo "gh CLI required." >&2; exit 1; }
+command -v gh >/dev/null || {
+  echo "gh CLI required." >&2
+  exit 1
+}
 [ -z "$PR" ] && PR="$(gh pr view --json number -q .number 2>/dev/null || true)"
-[ -n "$PR" ] || { echo "No PR found. Pass a PR number or run from a PR branch." >&2; exit 1; }
+[ -n "$PR" ] || {
+  echo "No PR found. Pass a PR number or run from a PR branch." >&2
+  exit 1
+}
 
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
-[ -n "$REPO" ] || { echo "Run from inside the repo." >&2; exit 1; }
+[ -n "$REPO" ] || {
+  echo "Run from inside the repo." >&2
+  exit 1
+}
 
 echo "▶ PR #$PR ($REPO)"
 
@@ -60,7 +87,7 @@ fi
 while IFS= read -r cid; do
   [ -n "$cid" ] || continue
   tmp="$(mktemp)"
-  gh api "repos/$REPO/issues/comments/$cid" --jq .body > "$tmp"
+  gh api "repos/$REPO/issues/comments/$cid" --jq .body >"$tmp"
   if grep -q '<details' "$tmp"; then
     echo "  – comment $cid already collapsed"
     rm -f "$tmp"
@@ -69,12 +96,12 @@ while IFS= read -r cid; do
   wrapped="$(node "$WRAP" --auto --file "$tmp")"
   rm -f "$tmp"
   patch_body="$(mktemp)"
-  printf '%s' "$wrapped" > "$patch_body"
+  printf '%s' "$wrapped" >"$patch_body"
   gh api -X PATCH "repos/$REPO/issues/comments/$cid" \
     -f body="$(cat "$patch_body")" >/dev/null
   rm -f "$patch_body"
   summary="$(printf '%s' "$wrapped" | sed -n 's/^<summary>\(.*\)<\/summary>$/\1/p' | head -1)"
   echo "  ✓ comment $cid → ▶ ${summary:-collapsed}"
-done <<< "$ids"
+done <<<"$ids"
 
 echo "✔ Done"

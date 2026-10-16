@@ -7,19 +7,28 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 LIB="$HERE/../lib-panel.sh"
-PASS=0; FAIL=0
-ok()  { echo "  ok   [-] $1"; PASS=$((PASS+1)); }
-bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
+PASS=0
+FAIL=0
+ok() {
+  echo "  ok   [-] $1"
+  PASS=$((PASS + 1))
+}
+bad() {
+  echo "  FAIL $1"
+  FAIL=$((FAIL + 1))
+}
 
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 CFG="$WORK/config"
 
 # Every case runs with the model/panel environment scrubbed. Without this the suite reads the
 # developer's own exports and "the file wins" passes for the wrong reason — the exact trap the
 # relay's own tests already guard against for CURSOR_REVIEW_MODEL.
 resolve() { # $1 = config body (or ""), rest = panel_resolve args
-  local body="$1"; shift
-  printf '%s' "$body" > "$CFG"
+  local body="$1"
+  shift
+  printf '%s' "$body" >"$CFG"
   env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" \
     bash -c '. "$0"; panel_config_load 2>/dev/null; panel_resolve "$@"' "$LIB" "$@"
 }
@@ -28,14 +37,14 @@ echo "panel config tests:"
 
 # THE INCIDENT: a panel set in the file must reach a caller that passes no flag at all.
 got=$(resolve 'REVIEWERS=claude,codex' NOT_SET_ANYWHERE REVIEWERS 'claude,codex,grok,opencode')
-[ "$got" = "claude,codex" ] && ok "a panel in the config reaches a caller that omits --reviewers" \
-  || bad "config panel ignored — got '$got'"
+[ "$got" = "claude,codex" ] && ok "a panel in the config reaches a caller that omits --reviewers" ||
+  bad "config panel ignored — got '$got'"
 
 # No config at all → the script default. The machine with nothing configured must still work.
 got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$WORK/absent" \
   bash -c '. "$0"; panel_config_load 2>/dev/null; panel_resolve NOPE REVIEWERS "$1"' "$LIB" 'claude,codex,grok,opencode')
-[ "$got" = "claude,codex,grok,opencode" ] && ok "no config file → the script default still applies" \
-  || bad "missing config broke the default — got '$got'"
+[ "$got" = "claude,codex,grok,opencode" ] && ok "no config file → the script default still applies" ||
+  bad "missing config broke the default — got '$got'"
 
 # Precedence: env beats file.
 got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" CLAUDE_REVIEW_MODEL=sonnet \
@@ -47,8 +56,8 @@ got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" CLAUDE_REVIE
 # empty meant "disabled" the model would silently unpin and argv would carry a bare --model.
 got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" CURSOR_REVIEW_MODEL= \
   bash -c 'printf "" > "$2"; . "$0"; panel_config_load 2>/dev/null; panel_resolve CURSOR_REVIEW_MODEL MODEL_cursor composer-2.5' "$LIB" x "$CFG")
-[ "$got" = "composer-2.5" ] && ok "an empty env value means 'not set', not 'disabled'" \
-  || bad "empty env unpinned the model — got '$got'"
+[ "$got" = "composer-2.5" ] && ok "an empty env value means 'not set', not 'disabled'" ||
+  bad "empty env unpinned the model — got '$got'"
 got=$(resolve 'MODEL_cursor=' CURSOR_REVIEW_MODEL MODEL_cursor composer-2.5)
 [ "$got" = "composer-2.5" ] && ok "an empty file value means 'not set' too" || bad "empty file value — got '$got'"
 
@@ -62,21 +71,21 @@ got=$(resolve 'MODEL_cursor=' CURSOR_REVIEW_MODEL MODEL_cursor composer-2.5)
 # AND for ship-feature's plan-review, which reads this same file.
 RELAY="$HERE/../pr-review-relay"
 got=$(grep -o 'panel_resolve PR_RELAY_AGENT_TIMEOUT AGENT_TIMEOUT [0-9]*' "$RELAY" | awk '{print $4}')
-[ "$got" = "500" ] && ok "the built-in per-reviewer timeout is 500s" \
-  || bad "the built-in timeout default is '$got', not 500"
+[ "$got" = "500" ] && ok "the built-in per-reviewer timeout is 500s" ||
+  bad "the built-in timeout default is '$got', not 500"
 
 # review-local runs the SAME panel with the SAME seats off the SAME config key, so its literal has to
 # agree with the relay's. Two entrypoints in one repo quietly disagreeing on a no-config machine is
 # the drift this default exists to remove, and nothing else in the suite compares them.
 LOCAL="$HERE/../review-local"
 got=$(grep -o 'panel_resolve PR_RELAY_AGENT_TIMEOUT AGENT_TIMEOUT [0-9]*' "$LOCAL" | awk '{print $4}')
-[ "$got" = "500" ] && ok "review-local uses the same 500s default as the relay" \
-  || bad "review-local's timeout default is '$got', not 500"
+[ "$got" = "500" ] && ok "review-local uses the same 500s default as the relay" ||
+  bad "review-local's timeout default is '$got', not 500"
 
 # The file still beats that literal — the override has to keep working, or the default becomes a cap.
 got=$(resolve 'AGENT_TIMEOUT=470' PR_RELAY_AGENT_TIMEOUT AGENT_TIMEOUT 500)
-[ "$got" = "470" ] && ok "AGENT_TIMEOUT in the config beats the built-in default" \
-  || bad "config timeout ignored — got '$got'"
+[ "$got" = "470" ] && ok "AGENT_TIMEOUT in the config beats the built-in default" ||
+  bad "config timeout ignored — got '$got'"
 
 # Every seat named in a panel must be configurable. This is the cursor bug in its second form:
 # a seat you can name but cannot pin drifts back to a default nobody chose.
@@ -90,15 +99,15 @@ done
 # stored, and read by nothing: a setting that vanished in silence, in the file written to stop
 # settings vanishing in silence. MODEL_agy stays working as an alias for anyone who wrote it.
 got=$(resolve 'MODEL_agy=via-alias' NOT_SET MODEL_antigravity 'script-default')
-[ "$got" = "via-alias" ] && ok "MODEL_agy still resolves as an alias of MODEL_antigravity" \
-  || bad "the MODEL_agy alias broke — got '$got'"
+[ "$got" = "via-alias" ] && ok "MODEL_agy still resolves as an alias of MODEL_antigravity" ||
+  bad "the MODEL_agy alias broke — got '$got'"
 
 # A suffix that names no seat is stored (ship-feature reads this file too and may know seats this
 # repo does not) but must be REPORTED, or a typo reads as a setting that simply had no effect.
 out=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" \
   bash -c 'printf "MODEL_opencde=oops\n" > "$2"; . "$0"; panel_config_load 2>&1 >/dev/null' "$LIB" x "$CFG")
-printf '%s' "$out" | grep -q "no reviewer seat named 'opencde'" && ok "a MODEL_ key for a non-seat is reported" \
-  || bad "typo'd seat name swallowed — got: $out"
+printf '%s' "$out" | grep -q "no reviewer seat named 'opencde'" && ok "a MODEL_ key for a non-seat is reported" ||
+  bad "typo'd seat name swallowed — got: $out"
 
 # ...and a seat this repo does not drive itself must NOT be reported: ship-feature's plan panel
 # uses these, and warning about them would train everyone to ignore the warning.
@@ -114,10 +123,12 @@ out=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" \
 # --- panel_seat_pins: what each seat's dispatch line shows -----------------------
 # Sourced in the order both entry points use (panel, opencode, grok), because the grok and
 # opencode arms call those libs' resolvers. Globals the scripts set at load time are passed in.
-GLIB="$HERE/../lib-grok.sh"; OLIB="$HERE/../lib-opencode.sh"
+GLIB="$HERE/../lib-grok.sh"
+OLIB="$HERE/../lib-opencode.sh"
 pins() { # $1 = config body, $2 = seat, rest = VAR=value assignments for the call
-  local body="$1" seat="$2"; shift 2
-  printf '%s' "$body" > "$CFG"
+  local body="$1" seat="$2"
+  shift 2
+  printf '%s' "$body" >"$CFG"
   env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" "$@" \
     bash -c 'set -u; . "$0"; . "$1"; . "$2"; panel_config_load 2>/dev/null; panel_seat_pins "$3"' "$LIB" "$OLIB" "$GLIB" "$seat"
 }
@@ -139,7 +150,7 @@ got=$(pins '' claude CLAUDE_REVIEW_MODEL=opus CLAUDE_REVIEW_FALLBACK_MODEL=sonne
 # are resolved here the way the scripts resolve them, so MODEL_agy — an alias the PARSER maps onto
 # MODEL_antigravity — is proven to reach the line, not just a value passed in by hand.
 seatglob() { # $1 = config body, $2 = seat; resolves CURSOR/AGY like pr-review-relay:179-190
-  printf '%s' "$1" > "$CFG"
+  printf '%s' "$1" >"$CFG"
   env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" \
     bash -c 'set -u; . "$0"; panel_config_load 2>/dev/null
       CURSOR_REVIEW_MODEL="$(panel_resolve CURSOR_REVIEW_MODEL MODEL_cursor composer-2.5)"
@@ -155,18 +166,22 @@ got=$(seatglob '' antigravity)
 got=$(seatglob $'MODEL_agy=gemini-x\n' antigravity)
 [ "$got" = " (model=gemini-x)" ] && ok "MODEL_agy (alias) reaches the antigravity line" || bad "MODEL_agy alias: '$got'"
 # Every global unset, under set -u: must not abort (both callers run set -u).
-got=$(pins '' claude); rc=$?
-[ "$rc" = 0 ] && [ "$got" = " (model=cli default, fallback=none, effort=cli default)" ] \
-  && ok "claude with no globals set does not abort under set -u" || bad "claude unset globals: rc=$rc '$got'"
+got=$(pins '' claude)
+rc=$?
+[ "$rc" = 0 ] && [ "$got" = " (model=cli default, fallback=none, effort=cli default)" ] &&
+  ok "claude with no globals set does not abort under set -u" || bad "claude unset globals: rc=$rc '$got'"
 # A seat with no pin, and a name nobody knows: empty, exit 0 — never an error.
-got=$(pins '' qwen); rc=$?
+got=$(pins '' qwen)
+rc=$?
 [ "$rc" = 0 ] && [ -z "$got" ] && ok "qwen (no pin) prints nothing" || bad "qwen: rc=$rc '$got'"
-got=$(pins '' no-such-seat); rc=$?
+got=$(pins '' no-such-seat)
+rc=$?
 [ "$rc" = 0 ] && [ -z "$got" ] && ok "an unknown seat prints nothing and succeeds" || bad "unknown seat: rc=$rc '$got'"
 # A caller that sources lib-panel.sh ALONE (pr-review-distill does) gets nothing for grok rather
 # than "command not found".
 got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG=/dev/null \
-  bash -c 'set -u; . "$0"; panel_seat_pins grok' "$LIB" 2>&1); rc=$?
+  bash -c 'set -u; . "$0"; panel_seat_pins grok' "$LIB" 2>&1)
+rc=$?
 [ "$rc" = 0 ] && [ -z "$got" ] && ok "grok pins without lib-grok.sh print nothing, no error" || bad "grok without its lib: rc=$rc '$got'"
 
 # --- the pi seats (lib-pi.sh) ---------------------------------------------------
@@ -174,8 +189,9 @@ got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG=/dev/null \
 # pass for the wrong reason — the same result as the negative case. pipins() sources it too.
 PLIB="$HERE/../lib-pi.sh"
 pipins() { # $1 = config body, $2 = seat, rest = VAR=value assignments for the call
-  local body="$1" seat="$2"; shift 2
-  printf '%s' "$body" > "$CFG"
+  local body="$1" seat="$2"
+  shift 2
+  printf '%s' "$body" >"$CFG"
   env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" "$@" \
     bash -c 'set -u; . "$0"; . "$1"; . "$2"; . "$3"; panel_config_load 2>/dev/null; panel_seat_pins "$4"' "$LIB" "$OLIB" "$GLIB" "$PLIB" "$seat"
 }
@@ -190,7 +206,8 @@ got=$(pipins $'MODEL_pi_grok=xai/grok-9\nEFFORT_pi_grok=medium\n' pi_grok)
 [ "$got" = " (model=xai/grok-9, effort=medium)" ] && ok "MODEL_pi_grok / EFFORT_pi_grok reach the pi_grok line" || bad "file pi_grok pins: '$got'"
 got=$(pipins $'EFFORT_pi_glm=medium\n' pi_glm PI_GLM_REVIEW_EFFORT=high PI_GLM_REVIEW_MODEL=zai/env)
 [ "$got" = " (model=zai/env, effort=high)" ] && ok "PI_GLM_REVIEW_* beat the config on the line too" || bad "env pi_glm pins: '$got'"
-got=$(pins '' pi_glm); rc=$?
+got=$(pins '' pi_glm)
+rc=$?
 [ "$rc" = 0 ] && [ -z "$got" ] && ok "pi_glm pins without lib-pi.sh print nothing, no error" || bad "pi_glm without its lib: rc=$rc '$got'"
 
 # Parsing is fail-noisy, never fail-silent: a config that disappears without a word is the very
@@ -205,19 +222,22 @@ printf '%s' "$out" | grep -q "malformed" && ok "a malformed line is reported" ||
 canary="$WORK/pwned"
 env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" \
   bash -c 'printf "REVIEWERS=\$(touch %s)\n" "$3" > "$2"; . "$0"; panel_config_load >/dev/null 2>&1' "$LIB" x "$CFG" "$canary"
-[ -e "$canary" ] && bad "the config file was EXECUTED — command substitution ran" \
-  || ok "the config is read, never sourced (no command substitution)"
+[ -e "$canary" ] && bad "the config file was EXECUTED — command substitution ran" ||
+  ok "the config is read, never sourced (no command substitution)"
 
 # The KEY side of the same rule, which the test above does not cover. `printf -v name[i]` assigns
 # to an array element and bash evaluates that subscript as arithmetic — so MODEL_x[$(cmd)] would
 # run cmd while the file was merely being parsed. The key must be a bare identifier first.
 for inj in 'MODEL_x[$(touch %s)]=y' 'MODEL_x[`touch %s`]=y' 'EFFORT_a[$(touch %s)]=z'; do
-  canary="$WORK/pwned-key"; rm -f "$canary"
-  printf "$inj\n" "$canary" > "$CFG"
+  canary="$WORK/pwned-key"
+  rm -f "$canary"
+  printf "$inj\n" "$canary" >"$CFG"
   out=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" \
     bash -c '. "$0"; panel_config_load; panel_resolve NOPE REVIEWERS d' "$LIB" 2>&1)
-  if [ -e "$canary" ]; then bad "key injection EXECUTED a command: $inj"
-  elif printf '%s' "$out" | grep -q "invalid key"; then ok "an injected key is rejected and reported: ${inj%%=*}"
+  if [ -e "$canary" ]; then
+    bad "key injection EXECUTED a command: $inj"
+  elif printf '%s' "$out" | grep -q "invalid key"; then
+    ok "an injected key is rejected and reported: ${inj%%=*}"
   else bad "injected key neither ran nor was reported: $inj (out: $out)"; fi
 done
 rm -f "$WORK/pwned-key"
@@ -226,22 +246,22 @@ rm -f "$WORK/pwned-key"
 # must not swallow that distinction, or the warning stops telling you which mistake you made.
 out=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" \
   bash -c 'printf "NOT_A_KEY=1\n" > "$2"; . "$0"; panel_config_load; panel_resolve NOPE REVIEWERS d' "$LIB" x "$CFG" 2>&1)
-printf '%s' "$out" | grep -q "unknown key" && ok "a valid-looking but unknown key still says 'unknown key'" \
-  || bad "unknown identifier key misreported — got: $out"
+printf '%s' "$out" | grep -q "unknown key" && ok "a valid-looking but unknown key still says 'unknown key'" ||
+  bad "unknown identifier key misreported — got: $out"
 
 # PANEL_CFG_* is the loader's output, not an input. An exported one would be a fifth precedence
 # layer nobody documented, outranking the script default — cursor coming back through the very fix
 # that removed it. This is asserted with NO config file, the case where the leak survives longest.
 got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$WORK/absent" PANEL_CFG_REVIEWERS=cursor \
   bash -c '. "$0"; panel_config_load 2>/dev/null; panel_resolve NOPE REVIEWERS "$1"' "$LIB" 'claude,codex,grok,opencode')
-[ "$got" = "claude,codex,grok,opencode" ] && ok "an inherited PANEL_CFG_* is not a precedence layer" \
-  || bad "PANEL_CFG_REVIEWERS from the environment won — got '$got'"
+[ "$got" = "claude,codex,grok,opencode" ] && ok "an inherited PANEL_CFG_* is not a precedence layer" ||
+  bad "PANEL_CFG_REVIEWERS from the environment won — got '$got'"
 
 # ...and it must not survive a load that DOES find a file either, for a key that file omits.
 got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" PANEL_CFG_MODEL_claude=ghost \
   bash -c 'printf "REVIEWERS=claude\n" > "$2"; . "$0"; panel_config_load 2>/dev/null; panel_resolve NOPE MODEL_claude opus' "$LIB" x "$CFG")
-[ "$got" = "opus" ] && ok "an inherited PANEL_CFG_* is dropped for a key the file omits" \
-  || bad "stale PANEL_CFG_MODEL_claude survived the load — got '$got'"
+[ "$got" = "opus" ] && ok "an inherited PANEL_CFG_* is dropped for a key the file omits" ||
+  bad "stale PANEL_CFG_MODEL_claude survived the load — got '$got'"
 
 # Sourced from a shell that is not bash. The reset that stops an inherited PANEL_CFG_* from acting
 # as a precedence layer used `${!PANEL_CFG_@}`, a bash-only expansion: under zsh it was a
@@ -249,21 +269,21 @@ got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$CFG" PANEL_CFG_MO
 # non-bash shell — which SKIPPED the reset, so PANEL_CFG_REVIEWERS=cursor still won while the
 # warning claimed nothing was loaded. Three reviewers caught that. The reset is now bounded and
 # portable, and it runs before every return.
-ZCFG="$WORK/other-shell.cfg"   # never the shared $CFG: later cases reuse that file
+ZCFG="$WORK/other-shell.cfg" # never the shared $CFG: later cases reuse that file
 if command -v zsh >/dev/null 2>&1; then
-  printf 'REVIEWERS=from-file\nMODEL_grok=g46\n' > "$ZCFG"
+  printf 'REVIEWERS=from-file\nMODEL_grok=g46\n' >"$ZCFG"
 
   # THE FINDING: an inherited PANEL_CFG_* must not survive, on the shell where the sweep cannot run.
   got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$WORK/absent" PANEL_CFG_REVIEWERS=cursor \
     zsh -c '. "$0"; panel_config_load 2>/dev/null; panel_resolve NOPE REVIEWERS "$1"' "$LIB" 'claude,codex,grok,opencode')
-  [ "$got" = "claude,codex,grok,opencode" ] && ok "zsh: an inherited PANEL_CFG_* is cleared, not honoured" \
-    || bad "zsh: PANEL_CFG_REVIEWERS survived — got '$got'"
+  [ "$got" = "claude,codex,grok,opencode" ] && ok "zsh: an inherited PANEL_CFG_* is cleared, not honoured" ||
+    bad "zsh: PANEL_CFG_REVIEWERS survived — got '$got'"
 
   # ...and a real file still loads there, rather than aborting on a bash expansion.
   got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$ZCFG" PANEL_CFG_REVIEWERS=cursor \
     zsh -c '. "$0"; panel_config_load 2>/dev/null; printf "%s|%s" "$(panel_resolve NOPE REVIEWERS d)" "$(panel_resolve NOPE MODEL_grok grok-4.5)"' "$LIB")
-  [ "$got" = "from-file|g46" ] && ok "zsh: the config file loads (no bash-only expansion on the path)" \
-    || bad "zsh: file did not load — got '$got'"
+  [ "$got" = "from-file|g46" ] && ok "zsh: the config file loads (no bash-only expansion on the path)" ||
+    bad "zsh: file did not load — got '$got'"
 
   err=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$ZCFG" \
     zsh -c '. "$0"; panel_config_load' "$LIB" 2>&1 >/dev/null)
@@ -280,16 +300,19 @@ fi
 # cleared on purpose. The bounded reset cannot see such a key by construction, and the bash sweep
 # is not available on every shell, so PANEL_CFG_KEYS from the previous load is what closes it.
 for _sh in bash zsh; do
-  command -v "$_sh" >/dev/null 2>&1 || { echo "  skip [-] $_sh not installed"; continue; }
-  printf 'MODEL_future=old\nREVIEWERS=first\n' > "$WORK/load-a.cfg"
-  printf 'REVIEWERS=second\n'                   > "$WORK/load-b.cfg"
+  command -v "$_sh" >/dev/null 2>&1 || {
+    echo "  skip [-] $_sh not installed"
+    continue
+  }
+  printf 'MODEL_future=old\nREVIEWERS=first\n' >"$WORK/load-a.cfg"
+  printf 'REVIEWERS=second\n' >"$WORK/load-b.cfg"
   got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin "$_sh" -c '. "$0"
     PR_RELAY_CONFIG="$1" panel_config_load 2>/dev/null
     PR_RELAY_CONFIG="$2" panel_config_load 2>/dev/null
     printf "%s|%s" "$(panel_resolve NOPE MODEL_future none)" "$(panel_resolve NOPE REVIEWERS d)"' \
     "$LIB" "$WORK/load-a.cfg" "$WORK/load-b.cfg")
-  [ "$got" = "none|second" ] && ok "$_sh: a second load clears the first one's unknown-seat key" \
-    || bad "$_sh: stale key survived a reload — got '$got'"
+  [ "$got" = "none|second" ] && ok "$_sh: a second load clears the first one's unknown-seat key" ||
+    bad "$_sh: stale key survived a reload — got '$got'"
 done
 unset _sh
 
@@ -298,12 +321,15 @@ unset _sh
 # a `bad substitution`, under dash an abort that takes the whole load with it. Every case above
 # uses `env -i`, which scrubs the variable and hides this entirely — so it gets its own cases.
 for _sh in zsh dash; do
-  command -v "$_sh" >/dev/null 2>&1 || { echo "  skip [-] $_sh not installed"; continue; }
+  command -v "$_sh" >/dev/null 2>&1 || {
+    echo "  skip [-] $_sh not installed"
+    continue
+  }
   got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$WORK/absent" \
     BASH_VERSION=5.2.0 PANEL_CFG_REVIEWERS=cursor \
     "$_sh" -c '. "$0"; panel_config_load 2>/dev/null; panel_resolve NOPE REVIEWERS "$1"' "$LIB" 'script-default')
-  [ "$got" = "script-default" ] && ok "$_sh: an inherited BASH_VERSION does not trigger the bash-only sweep" \
-    || bad "$_sh: inherited BASH_VERSION broke the load — got '$got'"
+  [ "$got" = "script-default" ] && ok "$_sh: an inherited BASH_VERSION does not trigger the bash-only sweep" ||
+    bad "$_sh: inherited BASH_VERSION broke the load — got '$got'"
 
   err=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$WORK/absent" BASH_VERSION=5.2.0 \
     "$_sh" -c '. "$0"; panel_config_load' "$LIB" 2>&1 >/dev/null)
@@ -318,16 +344,16 @@ unset _sh
 # extra dependency. Storing is impossible there, so the honest answer is to say so and load
 # nothing; the reset has already run, so nothing inherited is left standing either.
 if command -v dash >/dev/null 2>&1; then
-  printf 'REVIEWERS=from-file\n' > "$ZCFG"
+  printf 'REVIEWERS=from-file\n' >"$ZCFG"
   err=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$ZCFG" PANEL_CFG_REVIEWERS=cursor \
     dash -c '. "$0"; panel_config_load' "$LIB" 2>&1 >/dev/null)
-  printf '%s' "$err" | grep -q "printf -v" && ok "a shell without printf -v says so" \
-    || bad "no printf -v, but no warning either — got: $err"
+  printf '%s' "$err" | grep -q "printf -v" && ok "a shell without printf -v says so" ||
+    bad "no printf -v, but no warning either — got: $err"
 
   got=$(env -i HOME="$WORK" PATH=/usr/bin:/bin PR_RELAY_CONFIG="$ZCFG" PANEL_CFG_REVIEWERS=cursor \
     dash -c '. "$0"; panel_config_load 2>/dev/null; panel_resolve NOPE REVIEWERS "$1"' "$LIB" 'script-default')
-  [ "$got" = "script-default" ] && ok "a shell without printf -v still clears an inherited PANEL_CFG_*" \
-    || bad "dash: inherited value survived the refusal — got '$got'"
+  [ "$got" = "script-default" ] && ok "a shell without printf -v still clears an inherited PANEL_CFG_*" ||
+    bad "dash: inherited value survived the refusal — got '$got'"
 else
   echo "  skip [-] dash not installed"
 fi
@@ -338,7 +364,6 @@ if env -u HOME -i PATH=/usr/bin:/bin bash -c 'set -u; . "$0"; panel_config_load;
   ok "an unset HOME does not abort the loader"
 else bad "unset HOME aborted panel_config_load"; fi
 
-
 # --- review_looks_like_a_review ---------------------------------------------
 # The relay used to fail closed only on an EMPTY review, so a stall or a fragment of
 # garbage posted as a verdict and the round exited 0. Four such bodies were recovered
@@ -347,6 +372,7 @@ else bad "unset HOME aborted panel_config_load"; fi
 #
 # NOT via resolve(): that runs under `env -i PATH=/usr/bin:/bin` for config-precedence
 # reasons that do not apply here, and this helper needs the real PATH for grep/sed/tr.
+# shellcheck source=relay/lib-panel.sh
 . "$LIB"
 
 # want: yes | no | stall  — "stall" pins the THREE-valued contract (0 a review,
@@ -356,7 +382,7 @@ else bad "unset HOME aborted panel_config_load"; fi
 rlr() { # rlr <yes|no|stall> <label> <body>
   local want="$1" label="$2" body="$3" got
   review_looks_like_a_review "$body"
-  case $? in 0) got=yes;; 2) got=stall;; *) got=no;; esac
+  case $? in 0) got=yes ;; 2) got=stall ;; *) got=no ;; esac
   # NO collapse: "no" means exit 1 (no verdict) and "stall" means exit 2. Rewriting
   # one into the other would let a fixture keep passing after its rejection REASON
   # changed, and the two reasons now print different sentences to the human.
@@ -378,57 +404,57 @@ rlr no "recovered D — mojibake tool-call fragment" \
 # Real closing lines from this panel, verbatim. A gate that rejects the reviews this
 # repo's own reviewers actually write is the wrong gate — two of these three contain
 # no severity word at all, which is why the approval list exists.
-rlr yes "real: codex closing #37"    'No findings. `bin/ci` passed: 355 tests, 0 failures.'
-rlr yes "real: grok closing #36"     'Looks good: stdin redirect replaces `-f` as planned, prompt and tests match.'
+rlr yes "real: codex closing #37" 'No findings. `bin/ci` passed: 355 tests, 0 failures.'
+rlr yes "real: grok closing #36" 'Looks good: stdin redirect replaces `-f` as planned, prompt and tests match.'
 rlr yes "real: opencode closing #37" '**LGTM** — the diff implements the plan exactly.'
 
 # Markers, including the plural headings reviewers actually use. `## Blockers` and
 # `Nits:` are ordinary style; rejecting a finished review over them would be this
 # gate failing at its own job.
-rlr yes "severity: Blocker heading"  '## Blocker
+rlr yes "severity: Blocker heading" '## Blocker
 - something real'
-rlr yes "severity: Blockers plural"  '## Blockers
+rlr yes "severity: Blockers plural" '## Blockers
 - two of them'
-rlr yes "severity: Nits: plural"     'Nits:
+rlr yes "severity: Nits: plural" 'Nits:
 - naming'
-rlr yes "severity: Nit alone"        'Nit: the naming.'
-rlr yes "severity: Should-fix alone"  'Should-fix: the guard.'
-rlr yes "severity: Should-fixes"     'Should-fixes: a couple.'
+rlr yes "severity: Nit alone" 'Nit: the naming.'
+rlr yes "severity: Should-fix alone" 'Should-fix: the guard.'
+rlr yes "severity: Should-fixes" 'Should-fixes: a couple.'
 # A bare period is not a sentence boundary: it also ends a filename, a path or a
 # version, and the bodies this guards cite them constantly. Splitting on `.` instead
 # of `. ` made every one of these accepted — measured.
-rlr stall "stall ending in a filename"  'Blocker: none yet. Let me read attachment.txt.'
-rlr stall "stall ending in a path"   'Blocker: none. Reading the rest of /tmp/oc-diff.auQm5v.'
+rlr stall "stall ending in a filename" 'Blocker: none yet. Let me read attachment.txt.'
+rlr stall "stall ending in a path" 'Blocker: none. Reading the rest of /tmp/oc-diff.auQm5v.'
 rlr stall "stall ending in a version" 'Blocker: none. I need the rest before I can verify v1.2.'
 rlr yes "severity: Should fix, space" 'Should fix: the thing.'
-rlr yes "severity: bold markdown"    '**Blocker** — none'
+rlr yes "severity: bold markdown" '**Blocker** — none'
 # MID-SENTENCE, which the plan asked for and every other positive fixture missed:
 # they are all sentence-initial or headings, and mid-sentence is exactly where the
 # [^a-z0-9_] boundary classes would regress first.
-rlr yes "severity: Nit mid-sentence"  'There is one more Nit buried in the guard.'
+rlr yes "severity: Nit mid-sentence" 'There is one more Nit buried in the guard.'
 rlr yes "approval: LGTM mid-sentence" 'Read it twice and it is LGTM as far as I can tell.'
 # grok and opencode both found this hole: a marked stall phrased only with the words
 # an earlier pass dropped. Restoring `before concluding` closes it, and it fires on
 # no valid fixture — measured phrase by phrase.
 rlr stall "stall: phrased only with 'before concluding'" 'Blocker: none yet, I will stop before concluding.'
-rlr yes "approval: nothing to flag"  'Nothing to flag.'
-rlr yes "approval: none found"       'Blockers: none found.'
-rlr yes "approval: No blockers."     'No blockers.'
+rlr yes "approval: nothing to flag" 'Nothing to flag.'
+rlr yes "approval: none found" 'Blockers: none found.'
+rlr yes "approval: No blockers." 'No blockers.'
 # Underscores are word characters, not boundaries. A raw transcript full of
 # identifiers is exactly what a broken agent emits, and `monitor_nit_state` read as a
 # verdict until this was fixed — measured, not imagined.
 rlr no "boundary: identifier with _nit_" 'monitor_nit_state pending and nothing else'
-rlr no "boundary: _blocker_ as a name"   'setting _blocker_ = 1 and moving on'
+rlr no "boundary: _blocker_ as a name" 'setting _blocker_ = 1 and moving on'
 rlr no "boundary: should-fixs is not a marker" 'should-fixs: whatever'
-rlr yes "case: uppercase severity"   'BLOCKER: the guard is missing.'
-rlr yes "approval: bare LGTM"        'LGTM'
-rlr yes "approval: lowercase"        'lgtm'
+rlr yes "case: uppercase severity" 'BLOCKER: the guard is missing.'
+rlr yes "approval: bare LGTM" 'LGTM'
+rlr yes "approval: lowercase" 'lgtm'
 
 # Word boundaries. `nit` lives inside unit/init/monitor/definitely, `blocker` inside
 # unblocked; a substring match would call ordinary prose a verdict.
-rlr no "boundary: unit test"      'I read the unit test and it seemed fine to me.'
+rlr no "boundary: unit test" 'I read the unit test and it seemed fine to me.'
 rlr no "boundary: initial/monitor" 'The initial monitor definitely needs work here.'
-rlr no "boundary: unblocked"      'This unblocked the pipeline nicely.'
+rlr no "boundary: unblocked" 'This unblocked the pipeline nicely.'
 
 # Prompt echo. Every prompt contains TWO marker-bearing sentences, and the pair is
 # hard-wrapped five different ways across the five sites — review-local breaks inside
@@ -455,7 +481,7 @@ rlr no "echo: in CAPS" \
 # The exemption for an approving review is checked on the CLOSING SENTENCE only.
 # Exempting the whole body accepted "Looks good. Let me read the remainder before
 # concluding." — a stall wearing an approval. Order is what separates them.
-rlr yes   "stall: read first, verdict last" 'After reading the rest of the diff, this looks good.'
+rlr yes "stall: read first, verdict last" 'After reading the rest of the diff, this looks good.'
 rlr stall "stall: verdict first, then still reading" 'Looks good. Let me read the remainder before concluding.'
 # The stall anchor is the closing sentence OF THE LAST NON-EMPTY LINE, and both halves
 # were measured rejecting real reviews before they were added.
@@ -525,7 +551,7 @@ rlr yes "phrase: past tense, I read the remaining" 'Should-fix: add a case.
 I read the remaining tests as well.'
 rlr stall "stall: recovered B is reported AS a stall" 'Blocker
 - None visible in the readable portion of the diff. Reading the remainder before concluding.'
-rlr no    "no verdict is reported as no verdict" 'Reading the rest of the diff before reviewing.'
+rlr no "no verdict is reported as no verdict" 'Reading the rest of the diff before reviewing.'
 rlr yes "stall: narration first, verdict last" \
   'Let me read the diff first. Now checking the tests. Should-fix: the helper needs a guard.'
 

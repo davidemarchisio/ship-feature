@@ -82,17 +82,18 @@ set -uo pipefail
 # guarantee. The loop only runs when the script is actually a symlink, and is bounded
 # against a symlink cycle.
 _self="${BASH_SOURCE[0]}"
-_rl=/usr/bin/readlink; [ -x "$_rl" ] || _rl=/bin/readlink
+_rl=/usr/bin/readlink
+[ -x "$_rl" ] || _rl=/bin/readlink
 _n=0
 while [ -h "$_self" ] && [ -x "$_rl" ] && [ "$_n" -lt 40 ]; do
   _n=$((_n + 1))
   _link="$("$_rl" "$_self" 2>/dev/null)" || break
   case "$_link" in
-    /*) _self="$_link";;                # absolute symlink target
-    *)  case "$_self" in
-          */*) _self="${_self%/*}/$_link";;  # relative target → resolve against the link's dir
-          *)   _self="$_link";;              # bare name (no dir) → target is relative to cwd
-        esac;;
+    /*) _self="$_link" ;; # absolute symlink target
+    *) case "$_self" in
+      */*) _self="${_self%/*}/$_link" ;; # relative target → resolve against the link's dir
+      *) _self="$_link" ;;               # bare name (no dir) → target is relative to cwd
+    esac ;;
   esac
 done
 # Fail CLOSED: if it's STILL a symlink, we couldn't resolve it (readlink missing, or a
@@ -103,31 +104,54 @@ if [ -h "$_self" ]; then
   exit 1
 fi
 case "$_self" in
-  */*) SCRIPT_DIR="${_self%/*}";;
-  *)   SCRIPT_DIR=".";;
+  */*) SCRIPT_DIR="${_self%/*}" ;;
+  *) SCRIPT_DIR="." ;;
 esac
 # `cd --` so a dir that begins with '-' isn't read as an option (or, for '-', as $OLDPWD).
-SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" 2>/dev/null && pwd -P)" || { echo "cannot resolve script directory" >&2; exit 1; }
+SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" 2>/dev/null && pwd -P)" || {
+  echo "cannot resolve script directory" >&2
+  exit 1
+}
 unset _self _rl _n _link
 WRAP_COMMENT="$SCRIPT_DIR/wrap-collapsed-pr-comment.mjs"
 # The OpenCode reviewer lives in a shared lib so its policy cannot drift between
 # this script and review-local — cross-review flagged that duplication repeatedly.
 PANEL_LIB="$SCRIPT_DIR/lib-panel.sh"
-[ -r "$PANEL_LIB" ] || { echo "missing $PANEL_LIB (keep it next to this script)" >&2; exit 1; }
+[ -r "$PANEL_LIB" ] || {
+  echo "missing $PANEL_LIB (keep it next to this script)" >&2
+  exit 1
+}
+# shellcheck source=relay/lib-panel.sh
 . "$PANEL_LIB"
 panel_config_load
 
 OPENCODE_LIB="$SCRIPT_DIR/lib-opencode.sh"
-[ -r "$OPENCODE_LIB" ] || { echo "missing $OPENCODE_LIB (keep it next to this script)" >&2; exit 1; }
+[ -r "$OPENCODE_LIB" ] || {
+  echo "missing $OPENCODE_LIB (keep it next to this script)" >&2
+  exit 1
+}
+# shellcheck source=relay/lib-opencode.sh
 . "$OPENCODE_LIB"
 ARGV_LIB="$SCRIPT_DIR/lib-argv.sh"
-[ -r "$ARGV_LIB" ] || { echo "missing $ARGV_LIB (keep it next to this script)" >&2; exit 1; }
+[ -r "$ARGV_LIB" ] || {
+  echo "missing $ARGV_LIB (keep it next to this script)" >&2
+  exit 1
+}
+# shellcheck source=relay/lib-argv.sh
 . "$ARGV_LIB"
 GROK_LIB="$SCRIPT_DIR/lib-grok.sh"
-[ -r "$GROK_LIB" ] || { echo "missing $GROK_LIB (keep it next to this script)" >&2; exit 1; }
+[ -r "$GROK_LIB" ] || {
+  echo "missing $GROK_LIB (keep it next to this script)" >&2
+  exit 1
+}
+# shellcheck source=relay/lib-grok.sh
 . "$GROK_LIB"
 PI_LIB="$SCRIPT_DIR/lib-pi.sh"
-[ -r "$PI_LIB" ] || { echo "missing $PI_LIB (keep it next to this script)" >&2; exit 1; }
+[ -r "$PI_LIB" ] || {
+  echo "missing $PI_LIB (keep it next to this script)" >&2
+  exit 1
+}
+# shellcheck source=relay/lib-pi.sh
 . "$PI_LIB"
 
 # The default panel is FOUR VENDORS, EVERY SEAT ON A FLAT-RATE SUBSCRIPTION: Anthropic, OpenAI,
@@ -149,14 +173,23 @@ DEFAULT_REVIEWERS="claude,codex,grok,opencode"
 # the SUM of every seat's time — with a grok seat that alone takes 300-500s, a three-seat round went
 # past 20 minutes where a parallel one costs the slowest seat. Agents already passed --parallel on
 # every call because a rule told them to; a default does that without the rule, and for humans too.
-AUTHOR=""; PR=""; PARALLEL=1; DRY=0; MAX_ROUNDS="${PR_RELAY_MAX_ROUNDS:-3}"; RESET=0
+AUTHOR=""
+PR=""
+PARALLEL=1
+DRY=0
+MAX_ROUNDS="${PR_RELAY_MAX_ROUNDS:-3}"
+RESET=0
 REVIEWERS="$(panel_resolve PR_RELAY_REVIEWERS REVIEWERS "$DEFAULT_REVIEWERS")"
 # 500, because the panel runs reasoning models at high effort; see the CHANGELOG entry for what 300
 # cost. This literal is the LAST resort — AGENT_TIMEOUT in ~/.config/pr-review-relay/config is the one
 # place to change it, for this tool and for ship-feature's plan-review, which reads the same file.
 AGENT_TIMEOUT="$(panel_resolve PR_RELAY_AGENT_TIMEOUT AGENT_TIMEOUT 500)"
 # Validate here rather than letting `timeout` fail with a bare exit 125.
-case "$AGENT_TIMEOUT" in ''|*[!0-9]*|0) echo "invalid PR_RELAY_AGENT_TIMEOUT: '$AGENT_TIMEOUT' (want a positive number of seconds)" >&2; exit 2;; esac
+case "$AGENT_TIMEOUT" in '' | *[!0-9]* | 0)
+  echo "invalid PR_RELAY_AGENT_TIMEOUT: '$AGENT_TIMEOUT' (want a positive number of seconds)" >&2
+  exit 2
+  ;;
+esac
 
 # Second loop guard, alongside --max-rounds. The round counter now advances only when the PR head
 # SHA CHANGES (see the round-state block below), which is what makes splitting a panel across
@@ -167,13 +200,21 @@ case "$AGENT_TIMEOUT" in ''|*[!0-9]*|0) echo "invalid PR_RELAY_AGENT_TIMEOUT: '$
 # AGENT_TIMEOUT rejects 0 instead, because there `timeout 0` disables the limit rather than
 # tightening it.
 MAX_SAME_SHA="${PR_RELAY_MAX_SAME_SHA:-6}"
-case "$MAX_SAME_SHA" in ''|*[!0-9]*) echo "invalid PR_RELAY_MAX_SAME_SHA: '$MAX_SAME_SHA' (want a non-negative integer)" >&2; exit 2;; esac
+case "$MAX_SAME_SHA" in '' | *[!0-9]*)
+  echo "invalid PR_RELAY_MAX_SAME_SHA: '$MAX_SAME_SHA' (want a non-negative integer)" >&2
+  exit 2
+  ;;
+esac
 # Cap on a single reviewer's captured output. Applied on the WRITE path (see review_with), not just
 # to what is read back, so a runaway agent cannot fill the disk before AGENT_TIMEOUT fires. The
 # truncation is deliberate backpressure: `head` closing early sends SIGPIPE to the agent.
 # It does NOT bound the run log itself, which only ever holds short event lines.
 LOG_MAX_BYTES="${PR_RELAY_LOG_MAX_BYTES:-262144}"
-case "$LOG_MAX_BYTES" in ''|*[!0-9]*|0) echo "invalid PR_RELAY_LOG_MAX_BYTES: '$LOG_MAX_BYTES' (want a positive number of bytes)" >&2; exit 2;; esac
+case "$LOG_MAX_BYTES" in '' | *[!0-9]* | 0)
+  echo "invalid PR_RELAY_LOG_MAX_BYTES: '$LOG_MAX_BYTES' (want a positive number of bytes)" >&2
+  exit 2
+  ;;
+esac
 
 # Pin the Cursor reviewer's model. Left unset, `cursor-agent` falls back to whatever
 # ~/.cursor/cli-config.json holds — typically "Auto", which routes to the frontier models.
@@ -271,23 +312,69 @@ AGY_GRACE=10
 # same arithmetic is how review-local's rc-124 message went stale one commit after the relay's
 # was fixed — the reviewers caught it, twice.
 AGY_OUTER_TIMEOUT=$((10#$AGENT_TIMEOUT + AGY_GRACE))
-CONTEXT_FILE=""; MODE="link"; REVIEWERS_EXPLICIT=0; NO_POST=0
+CONTEXT_FILE=""
+MODE="link"
+REVIEWERS_EXPLICIT=0
+NO_POST=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --author)       AUTHOR="$2"; shift 2;;
-    --pr)           PR="$2"; shift 2;;
-    --reviewers)    REVIEWERS="$2"; REVIEWERS_EXPLICIT=1; shift 2;;
-    --parallel)     PARALLEL=1; shift;;   # the default; kept so existing callers keep working
-    --sequential)   PARALLEL=0; shift;;
-    --context-file) CONTEXT_FILE="$2"; shift 2;;
-    --diff)         MODE="diff"; shift;;
-    --link)         MODE="link"; shift;;
-    --no-post)      NO_POST=1; shift;;
-    --dry-run)      DRY=1; shift;;
-    --max-rounds)   MAX_ROUNDS="$2"; shift 2;;
-    --reset)        RESET=1; shift;;
-    -h|--help)      relay_print_header "$0"; exit 0;;
-    *) echo "unknown arg: $1" >&2; exit 2;;
+    --author)
+      AUTHOR="$2"
+      shift 2
+      ;;
+    --pr)
+      PR="$2"
+      shift 2
+      ;;
+    --reviewers)
+      REVIEWERS="$2"
+      REVIEWERS_EXPLICIT=1
+      shift 2
+      ;;
+    --parallel)
+      PARALLEL=1
+      shift
+      ;; # the default; kept so existing callers keep working
+    --sequential)
+      PARALLEL=0
+      shift
+      ;;
+    --context-file)
+      CONTEXT_FILE="$2"
+      shift 2
+      ;;
+    --diff)
+      MODE="diff"
+      shift
+      ;;
+    --link)
+      MODE="link"
+      shift
+      ;;
+    --no-post)
+      NO_POST=1
+      shift
+      ;;
+    --dry-run)
+      DRY=1
+      shift
+      ;;
+    --max-rounds)
+      MAX_ROUNDS="$2"
+      shift 2
+      ;;
+    --reset)
+      RESET=1
+      shift
+      ;;
+    -h | --help)
+      relay_print_header "$0"
+      exit 0
+      ;;
+    *)
+      echo "unknown arg: $1" >&2
+      exit 2
+      ;;
   esac
 done
 
@@ -295,13 +382,19 @@ done
 relay_assert_path_outside_repo
 relay_assert_tmpdir_outside_repo_global
 
-command -v gh >/dev/null || { echo "gh not found"; exit 1; }
-case "$AUTHOR" in agy) AUTHOR=antigravity;; esac
+command -v gh >/dev/null || {
+  echo "gh not found"
+  exit 1
+}
+case "$AUTHOR" in agy) AUTHOR=antigravity ;; esac
 # After AUTHOR normalization, so opencode_is_selected compares like for like.
 opencode_is_selected && opencode_resolve_bin
 pi_is_selected && pi_resolve_bin
 [ -z "$PR" ] && PR=$(gh pr view --json number -q .number 2>/dev/null)
-[ -z "$PR" ] && { echo "No PR found for the current branch. Pass --pr <n>."; exit 1; }
+[ -z "$PR" ] && {
+  echo "No PR found for the current branch. Pass --pr <n>."
+  exit 1
+}
 PR_URL=$(gh pr view "$PR" --json url -q .url 2>/dev/null || true)
 # The repository is read off the pull request that was just resolved, NOT from
 # `gh repo view`. Inside a fork that command answers with the PARENT, and unlike
@@ -312,9 +405,9 @@ PR_URL=$(gh pr view "$PR" --json url -q .url 2>/dev/null || true)
 # stranger's pull request while every banner named ours. Parsing the URL keeps one
 # source of truth — whatever `gh pr view` was aimed at is what gets written to.
 case "$PR_URL" in
-  http://*/*/*/pull/*|https://*/*/*/pull/*)
+  http://*/*/*/pull/* | https://*/*/*/pull/*)
     _rest=${PR_URL#*://}
-    PR_HOST=${_rest%%/*}          # the host the pull request actually lives on
+    PR_HOST=${_rest%%/*} # the host the pull request actually lives on
     # userinfo is not part of the host. `https://user:pass@ghe.example.com/...`
     # would otherwise export GH_HOST=user:pass@ghe.example.com, which is not a
     # hostname, and gh then resolves somewhere nobody chose.
@@ -333,13 +426,16 @@ case "$PR_URL" in
     [ -n "$_num" ] && PR=$_num
     unset _rest _num
     ;;
-  *) REPO=""; PR_HOST="" ;;
+  *)
+    REPO=""
+    PR_HOST=""
+    ;;
 esac
 # Exactly owner/name, and nothing else. A URL with a doubled or trailing slash
 # leaves "owner/repo/" here, which addresses a different path once it is pasted
 # into an API route.
 case "$REPO" in
-  */*/*|*/|/*|"") REPO="" ;;
+  */*/* | */ | /* | "") REPO="" ;;
   */*) ;;
   *) REPO="" ;;
 esac
@@ -351,7 +447,7 @@ if [ -n "$REPO" ]; then
   # unambiguous on its own, a bare number is not.
   export GH_REPO="$REPO"
 fi
-case "$PR_HOST" in github.com|www.github.com) PR_HOST="" ;; esac
+case "$PR_HOST" in github.com | www.github.com) PR_HOST="" ;; esac
 if [ -n "$PR_HOST" ]; then
   # Every gh call after this one targets the host the pull request is on. Without
   # it, `gh api repos/owner/name/...` goes to whatever host gh defaults to, so on
@@ -371,22 +467,29 @@ if [ -z "$REPO" ]; then
   exit 1
 fi
 case "$PR" in
-  ''|*[!0-9]*)
+  '' | *[!0-9]*)
     echo "Could not resolve PR '$PR' to a number." >&2
     echo "  It is pasted into API routes, where a URL builds issues/https://... and fails silently." >&2
-    exit 1 ;;
+    exit 1
+    ;;
 esac
 # --max-rounds must be a non-negative integer, else the arithmetic below breaks and
 # silently bypasses the cap — reject it as a usage error instead.
-case "$MAX_ROUNDS" in ''|*[!0-9]*) echo "invalid --max-rounds: '$MAX_ROUNDS' (want a non-negative integer)" >&2; exit 2;; esac
+case "$MAX_ROUNDS" in '' | *[!0-9]*)
+  echo "invalid --max-rounds: '$MAX_ROUNDS' (want a non-negative integer)" >&2
+  exit 2
+  ;;
+esac
 # Both XDG_CACHE_HOME and HOME can be unset (cron, systemd, minimal containers) and
 # this script runs under `set -u`, so a bare $HOME here aborts the relay outright.
 # The last-resort path is per-UID and mode 700, NOT a shared /tmp/.cache: a fixed
 # world-writable path lets another user pre-create it (or plant a symlink) and then
 # read or steer another user's round state.
-if [ -n "${XDG_CACHE_HOME:-}" ]; then   ROUND_DIR="$XDG_CACHE_HOME/pr-review-relay"
-elif [ -n "${HOME:-}" ]; then           ROUND_DIR="$HOME/.cache/pr-review-relay"
-else                                    ROUND_DIR="${TMPDIR:-/tmp}/pr-review-relay-$(id -u)"; fi
+if [ -n "${XDG_CACHE_HOME:-}" ]; then
+  ROUND_DIR="$XDG_CACHE_HOME/pr-review-relay"
+elif [ -n "${HOME:-}" ]; then
+  ROUND_DIR="$HOME/.cache/pr-review-relay"
+else ROUND_DIR="${TMPDIR:-/tmp}/pr-review-relay-$(id -u)"; fi
 # Create with the mode already applied (mkdir -m is atomic — no writable window a racer can slip
 # through, and no chmod that could land on a swapped-in target), then validate what we ended up with
 # and fail closed if it isn't ours.
@@ -396,6 +499,9 @@ else                                    ROUND_DIR="${TMPDIR:-/tmp}/pr-review-rel
 # It no longer is: it now holds REVIEW TEXT and per-run logs, so a directory that is group-writable
 # (a bad umask, a restored backup, a shared build account) would leak review content and let someone
 # plant a symlink for any of the files we create. Same checks, every branch.
+# -m reaches only the last directory, and that is the one that must be private: the parents are
+# $XDG_CACHE_HOME, ~/.cache or $TMPDIR, and the checks below test the leaf alone.
+# shellcheck disable=SC2174
 mkdir -m 700 -p "$ROUND_DIR" 2>/dev/null
 if [ -L "$ROUND_DIR" ] || [ ! -d "$ROUND_DIR" ] || [ ! -O "$ROUND_DIR" ]; then
   echo "✖ refusing to use round-state dir '$ROUND_DIR': not a directory owned by this user." >&2
@@ -410,8 +516,11 @@ fi
 _round_mode="$(stat -c %a "$ROUND_DIR" 2>/dev/null || stat -f %Lp "$ROUND_DIR" 2>/dev/null || echo '')"
 _round_mode="${_round_mode: -3}"
 case "$_round_mode" in
-  700|'') ;;   # empty = no usable stat; the ownership check above still applied
-  *) chmod 700 "$ROUND_DIR" 2>/dev/null || { echo "✖ cannot secure round-state dir '$ROUND_DIR' (mode $_round_mode)" >&2; exit 1; };;
+  700 | '') ;; # empty = no usable stat; the ownership check above still applied
+  *) chmod 700 "$ROUND_DIR" 2>/dev/null || {
+    echo "✖ cannot secure round-state dir '$ROUND_DIR' (mode $_round_mode)" >&2
+    exit 1
+  } ;;
 esac
 ROUND_KEY=$(printf '%s#%s' "${REPO:-unknown}" "$PR" | tr -c 'A-Za-z0-9._#-' '_')
 ROUND_FILE="$ROUND_DIR/$ROUND_KEY.round"
@@ -452,16 +561,21 @@ BENCH_FILE="$ROUND_DIR/benched"
 # hand-rolls BSD/macOS `stat`. Locking $BENCH_FILE itself would guard nothing, because the writer
 # replaces it by rename and the lock would follow the old inode into oblivion.
 BENCH_LOCK="$ROUND_DIR/benched.lock"
-BENCH_LOCK_STALE=120   # seconds; a lock older than this is assumed to be a crashed run
+BENCH_LOCK_STALE=120 # seconds; a lock older than this is assumed to be a crashed run
 
 # Take the lock, or give up quietly. Callers treat failure as "could not persist", never as "go
 # ahead anyway" — see the write path.
 bench_lock() {
   local waited=0
   while ! mkdir "$BENCH_LOCK" 2>/dev/null; do
-    local age; age=$(( $(date +%s) - $(_round_mtime "$BENCH_LOCK") ))
-    if [ "$age" -gt "$BENCH_LOCK_STALE" ]; then rm -rf "$BENCH_LOCK" 2>/dev/null || true; continue; fi
-    waited=$((waited + 1)); [ "$waited" -gt 50 ] && return 1
+    local age
+    age=$(($(date +%s) - $(_round_mtime "$BENCH_LOCK")))
+    if [ "$age" -gt "$BENCH_LOCK_STALE" ]; then
+      rm -rf "$BENCH_LOCK" 2>/dev/null || true
+      continue
+    fi
+    waited=$((waited + 1))
+    [ "$waited" -gt 50 ] && return 1
     sleep 0.1 2>/dev/null || sleep 1
   done
   return 0
@@ -472,14 +586,22 @@ bench_unlock() { rm -rf "$BENCH_LOCK" 2>/dev/null || true; }
 # A malformed line is ignored and named — one bad line must never disable the whole bench.
 bench_until() {
   [ -r "$BENCH_FILE" ] || return 0
-  local now; now=$(date +%s)
+  local now
+  now=$(date +%s)
   local agent until reason
   while IFS=$'\t' read -r agent until reason; do
     [ "$agent" = "$1" ] || continue
-    case "$until" in ''|*[!0-9]*) echo "  ! ignoring malformed bench line for '$agent'" >&2; return 0;; esac
-    [ "$until" -gt "$now" ] && { echo "$until"; return 0; }
+    case "$until" in '' | *[!0-9]*)
+      echo "  ! ignoring malformed bench line for '$agent'" >&2
+      return 0
+      ;;
+    esac
+    [ "$until" -gt "$now" ] && {
+      echo "$until"
+      return 0
+    }
     return 0
-  done < "$BENCH_FILE"
+  done <"$BENCH_FILE"
   return 0
 }
 
@@ -490,14 +612,22 @@ bench_prune() {
   # relay recorded a new bench would replace the file with its own older snapshot and erase that
   # entry — the agent would be re-invoked and hit the same wall, with nothing to show why.
   bench_lock || return 1
-  local now tmp; now=$(date +%s)
-  tmp="$(mktemp "$ROUND_DIR/benched.XXXXXXXX")" || { bench_unlock; return 1; }
+  local now tmp
+  now=$(date +%s)
+  tmp="$(mktemp "$ROUND_DIR/benched.XXXXXXXX")" || {
+    bench_unlock
+    return 1
+  }
   local agent until reason
   while IFS=$'\t' read -r agent until reason; do
-    case "$until" in ''|*[!0-9]*) continue;; esac
-    [ "$until" -gt "$now" ] && printf '%s\t%s\t%s\n' "$agent" "$until" "$reason" >> "$tmp"
-  done < "$BENCH_FILE"
-  mv -f "$tmp" "$BENCH_FILE" 2>/dev/null || { rm -f "$tmp"; bench_unlock; return 1; }
+    case "$until" in '' | *[!0-9]*) continue ;; esac
+    [ "$until" -gt "$now" ] && printf '%s\t%s\t%s\n' "$agent" "$until" "$reason" >>"$tmp"
+  done <"$BENCH_FILE"
+  mv -f "$tmp" "$BENCH_FILE" 2>/dev/null || {
+    rm -f "$tmp"
+    bench_unlock
+    return 1
+  }
   bench_unlock
   return 0
 }
@@ -517,11 +647,14 @@ bench_parse_reset() {
   m="$(printf '%s' "$rest" | sed -n 's/^\([0-9][0-9]*\)m.*/\1/p')"
   [ -n "$m" ] && rest="${rest#*m}"
   s="$(printf '%s' "$rest" | sed -n 's/^\([0-9][0-9]*\)s.*/\1/p')"
-  if [ -z "$h$m$s" ]; then echo $(( $(date +%s) + 21600 )); return 0; fi
+  if [ -z "$h$m$s" ]; then
+    echo $(($(date +%s) + 21600))
+    return 0
+  fi
   # 10# on every component: a zero-padded value like "Resets in 08m00s" is read as octal
   # otherwise, and `08` is not valid octal — the arithmetic aborts the relay instead of benching
   # the reviewer, turning a quota message into a crash.
-  echo $(( $(date +%s) + 10#0${h:-0} * 3600 + 10#0${m:-0} * 60 + 10#0${s:-0} ))
+  echo $(($(date +%s) + 10#0${h:-0} * 3600 + 10#0${m:-0} * 60 + 10#0${s:-0}))
 }
 
 # Does this output say "out of quota"? Deliberately narrow: a timeout or a crash is NOT out of
@@ -549,8 +682,8 @@ _round_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || e
 # the safe direction for the STATE (a fresh counter beats a counter nobody can date), and the
 # opposite of what the orphan sweep below does for logs, where the safe direction is to keep the
 # evidence. The asymmetry is deliberate, not an oversight.
-if [ -f "$ROUND_FILE" ] && [ $(( $(date +%s) - $(_round_mtime "$ROUND_FILE") )) -gt 21600 ]; then
-  relay_forget_key   # stale (>6h): new session, start fresh — state AND transcripts
+if [ -f "$ROUND_FILE" ] && [ $(($(date +%s) - $(_round_mtime "$ROUND_FILE"))) -gt 21600 ]; then
+  relay_forget_key # stale (>6h): new session, start fresh — state AND transcripts
 fi
 # The staleness path above needs a ROUND_FILE to look at, and the state write is gated on
 # `DRY = 0 && would_run > 0`. So a dry run, a run that resolves nobody (--max-rounds 0,
@@ -577,7 +710,7 @@ if [ ! -f "$ROUND_FILE" ]; then
     # reason to keep, not to collect.
     _omt="$(_round_mtime "$_orphan")"
     [ "$_omt" -gt 0 ] 2>/dev/null || continue
-    if [ $(( $(date +%s) - _omt )) -gt 21600 ]; then
+    if [ $(($(date +%s) - _omt)) -gt 21600 ]; then
       rm -f "$_orphan" "$_orphan".* 2>/dev/null || true
     fi
   done
@@ -590,7 +723,7 @@ if [ ! -f "$ROUND_FILE" ]; then
     [ "$_omt" -gt 0 ] 2>/dev/null || continue
     # `if`, not `[ … ] && rm`: under `set -e` a false test as the last command of a loop body
     # takes the whole script down with it.
-    if [ $(( $(date +%s) - _omt )) -gt 21600 ]; then
+    if [ $(($(date +%s) - _omt)) -gt 21600 ]; then
       rm -f "$_orphan" 2>/dev/null || true
     fi
   done
@@ -619,8 +752,10 @@ fi
 # So the honest promise, and the one the README makes, is "as soon as REPO and PR are known, before
 # the head SHA and the diff" — NOT "before any network call".
 RUN_BASE="$(mktemp "$ROUND_DIR/$ROUND_KEY.run.XXXXXXXX" 2>/dev/null)" || {
-  echo "cannot create run log in '$ROUND_DIR'" >&2; exit 1; }
-relay_log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$RUN_BASE"; }
+  echo "cannot create run log in '$ROUND_DIR'" >&2
+  exit 1
+}
+relay_log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$RUN_BASE"; }
 # Printed NOW, not only in the closing banner: a killed run never reaches the banner, which is
 # exactly the run whose log someone will want.
 echo "  run log: $RUN_BASE"
@@ -642,10 +777,14 @@ echo "▶ Relay review for PR #$PR ${PR_URL:+($PR_URL)} — author: ${AUTHOR:-no
 # fork checkout is a legitimate thing to do — it just refuses to be quiet about it.
 _origin_url=$(git remote get-url origin 2>/dev/null || true)
 if [ -n "$_origin_url" ]; then
-  _origin=${_origin_url#*://}; _origin=${_origin#*@}
+  _origin=${_origin_url#*://}
+  _origin=${_origin#*@}
   case "$_origin" in *:*) _origin=${_origin#*:} ;; */*) _origin=${_origin#*/} ;; esac
-  _origin=${_origin%.git}; _origin=${_origin%/}
-  _oname=${_origin##*/}; _oowner=${_origin%/*}; _oowner=${_oowner##*/}
+  _origin=${_origin%.git}
+  _origin=${_origin%/}
+  _oname=${_origin##*/}
+  _oowner=${_origin%/*}
+  _oowner=${_oowner##*/}
   [ -n "$_oname" ] && [ -n "$_oowner" ] && _origin="$_oowner/$_oname" || _origin=""
   if [ -n "$_origin" ] && [ "$_origin" != "$REPO" ]; then
     echo "  ! this checkout is $_origin — every write below goes to $REPO instead"
@@ -671,7 +810,11 @@ relay_exit() {
 # Per-reviewer outcome, written as files so it survives subshells under --parallel:
 # $STATUS_DIR/<key> is "pending" (pre-seeded), "ok", or "fail". A reviewer that is
 # hard-killed before writing leaves its pre-seeded "pending" → counted as a failure.
-STATUS_DIR="$(mktemp -d)" || { relay_log "verdict exit=1 cannot create outcome temp dir"; echo "cannot create temp dir for outcome tracking" >&2; exit 1; }
+STATUS_DIR="$(mktemp -d)" || {
+  relay_log "verdict exit=1 cannot create outcome temp dir"
+  echo "cannot create temp dir for outcome tracking" >&2
+  exit 1
+}
 # Armed immediately, on the next line: if the ATTACH_DIR mktemp below fails we exit, and without a
 # trap already installed STATUS_DIR would be left behind. That is why relay_exit is defined ABOVE
 # this point: a trap that names a function not yet defined cleans nothing. The ATTACH_DIR failure
@@ -698,7 +841,11 @@ trap relay_exit EXIT
 # outside STATUS_DIR. Don't allocate (or widen the trap) when none is selected.
 ATTACH_DIR=""
 if opencode_is_selected || grok_is_selected || pi_is_selected; then
-  ATTACH_DIR="$(mktemp -d)" || { relay_log "verdict exit=1 cannot create attachment temp dir"; echo "cannot create temp dir for attachments" >&2; exit 1; }
+  ATTACH_DIR="$(mktemp -d)" || {
+    relay_log "verdict exit=1 cannot create attachment temp dir"
+    echo "cannot create temp dir for attachments" >&2
+    exit 1
+  }
   # relay_exit already removes ATTACH_DIR now that it is set; no second trap to widen.
   relay_assert_tmpdir_outside_repo "$ATTACH_DIR"
 fi
@@ -707,7 +854,11 @@ fi
 # handles fork PRs, never fooled by a stale/rebased local base), and it is a single cheap
 # subprocess, NOT an agent tool call.
 DIFF=$(gh pr diff "$PR" 2>/dev/null)
-[ -z "$DIFF" ] && { relay_log "verdict exit=1 empty diff or unreadable PR"; echo "Empty diff or cannot read PR #$PR."; exit 1; }
+[ -z "$DIFF" ] && {
+  relay_log "verdict exit=1 empty diff or unreadable PR"
+  echo "Empty diff or cannot read PR #$PR."
+  exit 1
+}
 # The speed win is separate: when the current checkout PROVABLY is this PR's head AND is
 # clean, we tell reviewers to read the changed files straight off disk instead of running
 # `gh` themselves. Each `gh` an agentic reviewer runs is a full LLM round-trip — the main
@@ -726,8 +877,8 @@ local_context_ok() {
   local _h _st
   _h=$(git rev-parse HEAD 2>/dev/null) || return 1
   [ "$_h" = "$HEAD_SHA" ] || return 1
-  _st=$(git status --porcelain 2>/dev/null) || return 1   # git status errored → not eligible
-  [ -z "$_st" ]                                            # any output → dirty → not eligible
+  _st=$(git status --porcelain 2>/dev/null) || return 1 # git status errored → not eligible
+  [ -z "$_st" ]                                         # any output → dirty → not eligible
 }
 # WHY local context is off, when it is. Without this the downgrade is silent: the run still works,
 # every reviewer just spends `gh` round-trips it did not need to, and nothing on screen connects
@@ -736,11 +887,20 @@ local_context_ok() {
 # own branch sat one directory down.
 local_context_reason() {
   local _h _st _wt _wt_state
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { printf 'not inside a git work tree'; return 0; }
-  _h=$(git rev-parse HEAD 2>/dev/null) || { printf 'cannot read HEAD here'; return 0; }
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    printf 'not inside a git work tree'
+    return 0
+  }
+  _h=$(git rev-parse HEAD 2>/dev/null) || {
+    printf 'cannot read HEAD here'
+    return 0
+  }
   # Checked BEFORE the comparison: with no PR head there is nothing to be wrong about, and
   # comparing against it would print "the PR head is " with nothing after it.
-  if [ -z "$HEAD_SHA" ]; then printf 'the PR head could not be read'; return 0; fi
+  if [ -z "$HEAD_SHA" ]; then
+    printf 'the PR head could not be read'
+    return 0
+  fi
 
   if [ "$_h" != "$HEAD_SHA" ]; then
     printf 'HEAD here is %.7s, the PR head is %.7s' "$_h" "$HEAD_SHA"
@@ -756,15 +916,18 @@ local_context_reason() {
       _wt_state="${_wt##*$'\t'}"
       _wt="${_wt%%$'\t'*}"
       case "$_wt_state" in
-        clean)      printf ' — a worktree at %s is on it; run from there to skip the gh round-trips' "$_wt" ;;
-        dirty)      printf ' — a worktree at %s is on it but is dirty; clean it and run from there' "$_wt" ;;
+        clean) printf ' — a worktree at %s is on it; run from there to skip the gh round-trips' "$_wt" ;;
+        dirty) printf ' — a worktree at %s is on it but is dirty; clean it and run from there' "$_wt" ;;
         unreadable) printf ' — a worktree at %s is on it, but its state could not be read' "$_wt" ;;
       esac
     fi
     return 0
   fi
 
-  _st=$(git status --porcelain 2>/dev/null) || { printf 'git status failed here'; return 0; }
+  _st=$(git status --porcelain 2>/dev/null) || {
+    printf 'git status failed here'
+    return 0
+  }
   if [ -n "$_st" ]; then
     # `stash` alone leaves untracked files behind, and those make the tree dirty just the same.
     printf 'the tree is dirty (%s changed path(s)) — commit, `git stash -u`, or clean before reviewing' \
@@ -802,13 +965,19 @@ best_worktree_on_pr_head() {
   while IFS= read -r _p; do
     [ -n "$_p" ] || continue
     if _st=$(git -C "$_p" status --porcelain 2>/dev/null); then
-      [ -z "$_st" ] && { printf '%s\tclean' "$_p"; return 0; }
+      [ -z "$_st" ] && {
+        printf '%s\tclean' "$_p"
+        return 0
+      }
       _state=dirty
     else
       _state=unreadable
     fi
-    [ -n "$_first" ] || { _first="$_p"; _first_state="$_state"; }
-  done <<< "$(worktrees_on_pr_head)"
+    [ -n "$_first" ] || {
+      _first="$_p"
+      _first_state="$_state"
+    }
+  done <<<"$(worktrees_on_pr_head)"
   [ -n "$_first" ] && printf '%s\t%s' "$_first" "$_first_state"
   return 0
 }
@@ -822,9 +991,13 @@ echo "  diff: $(printf '%s' "$DIFF" | wc -l) lines, $(printf '%s' "$DIFF" | wc -
 # --- Optional context document prepended to every reviewer's prompt ----------
 CONTEXT_BLOCK=""
 if [ -n "$CONTEXT_FILE" ]; then
-  [ -f "$CONTEXT_FILE" ] || { relay_log "verdict exit=1 context file not found"; echo "context file not found: $CONTEXT_FILE" >&2; exit 1; }
+  [ -f "$CONTEXT_FILE" ] || {
+    relay_log "verdict exit=1 context file not found"
+    echo "context file not found: $CONTEXT_FILE" >&2
+    exit 1
+  }
   CONTEXT_BLOCK=$(printf '## Provided context — read this and verify the PR against it\n\n%s\n\n---\n\n' "$(cat "$CONTEXT_FILE")")
-  echo "  context: $CONTEXT_FILE ($(wc -c < "$CONTEXT_FILE") bytes)"
+  echo "  context: $CONTEXT_FILE ($(wc -c <"$CONTEXT_FILE") bytes)"
 fi
 
 # --- Hard loop guard: cap the review rounds per PR --------------------------
@@ -849,14 +1022,29 @@ fi
 #   * an UNCHANGED head SHA advances only the same-SHA counter (PR_RELAY_MAX_SAME_SHA bounds that)
 # Strictly it counts SHA TRANSITIONS, not distinct SHAs: only the last SHA is stored, so
 # shaA → shaB → shaA spends three rounds. That is intended — a revert-and-retry loop should cost.
-_state_sha=""; ROUND=0; SAME=0; _state_legacy=0
+_state_sha=""
+ROUND=0
+SAME=0
+_state_legacy=0
 if [ -f "$ROUND_FILE" ]; then
-  read -r _f1 _f2 _f3 _rest < "$ROUND_FILE" 2>/dev/null || true
-  _f1="${_f1:-}"; _f2="${_f2:-}"; _f3="${_f3:-}"; _rest="${_rest:-}"
+  read -r _f1 _f2 _f3 _rest <"$ROUND_FILE" 2>/dev/null || true
+  _f1="${_f1:-}"
+  _f2="${_f2:-}"
+  _f3="${_f3:-}"
+  _rest="${_rest:-}"
   if [ -n "$_f1" ] && [ -z "$_f2" ] && [ -z "$_rest" ]; then
-    case "$_f1" in ''|*[!0-9]*) ;; *) ROUND="$_f1"; _state_legacy=1;; esac   # legacy: bare counter
+    case "$_f1" in '' | *[!0-9]*) ;; *)
+      ROUND="$_f1"
+      _state_legacy=1
+      ;;
+    esac # legacy: bare counter
   elif [ -n "$_f1" ] && [ -n "$_f2" ] && [ -n "$_f3" ] && [ -z "$_rest" ]; then
-    case "$_f2$_f3" in ''|*[!0-9]*) ;; *) _state_sha="$_f1"; ROUND="$_f2"; SAME="$_f3";; esac
+    case "$_f2$_f3" in '' | *[!0-9]*) ;; *)
+      _state_sha="$_f1"
+      ROUND="$_f2"
+      SAME="$_f3"
+      ;;
+    esac
   fi
   # anything else → all three stay at their zero defaults, exactly as a corrupted bare counter did
   unset _f1 _f2 _f3 _rest
@@ -873,9 +1061,16 @@ SAME_SHA=0
 # same-SHA retries this change exists to give them. A legacy file already AT the cap is a different
 # case and keeps the old meaning exactly: it was written by a version where the count was rounds, it
 # says the loop is over, and it still exits 4 below (before anything is written or dispatched).
-if [ "$SAME_SHA" = 1 ]; then         NEXT_ROUND="$ROUND"; NEXT_SAME=$((SAME + 1))
-elif [ "$_state_legacy" = 1 ]; then  NEXT_ROUND="$ROUND"; NEXT_SAME=1
-else                                 NEXT_ROUND=$((ROUND + 1)); NEXT_SAME=1; fi
+if [ "$SAME_SHA" = 1 ]; then
+  NEXT_ROUND="$ROUND"
+  NEXT_SAME=$((SAME + 1))
+elif [ "$_state_legacy" = 1 ]; then
+  NEXT_ROUND="$ROUND"
+  NEXT_SAME=1
+else
+  NEXT_ROUND=$((ROUND + 1))
+  NEXT_SAME=1
+fi
 relay_log "start reviewers=$REVIEWERS parallel=$PARALLEL dry=$DRY timeout=${AGENT_TIMEOUT}s"
 # PID and PGID are recorded so that the NEXT time something kills this process mid-round, the log
 # says what to look for. Every investigation so far has ended outside this script.
@@ -901,7 +1096,7 @@ if [ "$NEXT_ROUND" -gt "$MAX_ROUNDS" ]; then
   echo "⛔ Review round cap reached for $REPO#$PR ($ROUND/$MAX_ROUNDS reviewed revisions)." >&2
   echo "   STOP the review loop: do NOT run the relay again on this PR. Address any" >&2
   echo "   remaining items manually, or pass --reset to force another round." >&2
-  exit 4   # distinct code: not a clean pass — escalate, don't treat as consensus
+  exit 4 # distinct code: not a clean pass — escalate, don't treat as consensus
 fi
 if [ "$SAME_SHA" = 1 ]; then
   echo "  review round: $NEXT_ROUND/$MAX_ROUNDS — invocation $NEXT_SAME/$MAX_SAME_SHA on this SHA"
@@ -914,7 +1109,8 @@ fi
 # before spending reviewer runs (a dry-run needs no SHA).
 if [ "$DRY" = 0 ] && [ -z "$HEAD_SHA" ]; then
   relay_log "verdict exit=3 head sha unreadable at start"
-  echo "✖ Could not read PR head SHA — cannot prove HEAD stability. Re-run." >&2; exit 3
+  echo "✖ Could not read PR head SHA — cannot prove HEAD stability. Re-run." >&2
+  exit 3
 fi
 
 # --- Build the review prompt -------------------------------------------------
@@ -986,8 +1182,16 @@ PROMPT="${CONTEXT_BLOCK}${BASE}"
 # set 0 to always omit).
 LINK_DIFF_FALLBACK_MAX_BYTES="${LINK_DIFF_FALLBACK_MAX_BYTES:-100000}"
 # Validated: a non-numeric value would blow up in the arithmetic below.
-case "$LINK_DIFF_FALLBACK_MAX_BYTES" in ''|*[!0-9]*) relay_log "verdict exit=2 invalid LINK_DIFF_FALLBACK_MAX_BYTES"; echo "invalid LINK_DIFF_FALLBACK_MAX_BYTES: '$LINK_DIFF_FALLBACK_MAX_BYTES' (want bytes)" >&2; exit 2;; esac
-argv_limit_check || { relay_log "verdict exit=2 invalid PR_RELAY_ARGV_MAX_BYTES"; exit 2; }
+case "$LINK_DIFF_FALLBACK_MAX_BYTES" in '' | *[!0-9]*)
+  relay_log "verdict exit=2 invalid LINK_DIFF_FALLBACK_MAX_BYTES"
+  echo "invalid LINK_DIFF_FALLBACK_MAX_BYTES: '$LINK_DIFF_FALLBACK_MAX_BYTES' (want bytes)" >&2
+  exit 2
+  ;;
+esac
+argv_limit_check || {
+  relay_log "verdict exit=2 invalid PR_RELAY_ARGV_MAX_BYTES"
+  exit 2
+}
 if [ "$MODE" = link ]; then
   _diff_bytes=$(printf '%s' "$DIFF" | wc -c | tr -d ' ')
   if [ "$_diff_bytes" -le "$LINK_DIFF_FALLBACK_MAX_BYTES" ]; then
@@ -1010,7 +1214,7 @@ fi
 # value feeds both the `command -v` availability check in the reviewer loop and the
 # invocation in review_with(). It has to happen before that loop: resolving lazily
 # inside tool_for() would be dead code, because the loop skips on `command -v` first.
-tool_for() { case "$1" in claude) echo claude;; codex) echo codex;; cursor) echo cursor-agent;; antigravity|agy) echo agy;; opencode) echo "$OPENCODE_BIN";; qwen) echo qwen;; grok) echo grok;; pi_glm|pi_grok) echo "$PI_BIN";; *) echo "";; esac; }
+tool_for() { case "$1" in claude) echo claude ;; codex) echo codex ;; cursor) echo cursor-agent ;; antigravity | agy) echo agy ;; opencode) echo "$OPENCODE_BIN" ;; qwen) echo qwen ;; grok) echo grok ;; pi_glm | pi_grok) echo "$PI_BIN" ;; *) echo "" ;; esac }
 
 # What claude and codex read on stdin. Link mode: the prompt alone (the diff is already inside it when
 # it is inlined, so appending it again would send it twice). Diff mode: the prompt, a blank line, the
@@ -1025,7 +1229,7 @@ review_with() {
   # Capitalize first letter — Bash 3.2-safe (no ${name^}, which is Bash 4+).
   Name="$(printf '%s' "${name:0:1}" | tr '[:lower:]' '[:upper:]')${name:1}"
   errf="$(mktemp)"
-  [ "$MODE" = diff ] && feed="$DIFF"   # only diff mode pipes the diff; link mode fetches it
+  [ "$MODE" = diff ] && feed="$DIFF" # only diff mode pipes the diff; link mode fetches it
   # Cap the stderr capture as well. Bounding only stdout left the documented "a runaway reviewer
   # cannot fill the disk" guarantee false: agents are chatty on stderr (progress, retries, stack
   # traces) and nothing limited it. Only the last LOG_MAX_BYTES are kept, because the diagnosis is
@@ -1045,10 +1249,13 @@ review_with() {
   # _cap_errf below is the fallback for opencode and grok, whose stderr goes through a library
   # function that the call-site redirect cannot reach. For those two it is a post-hoc trim, so the
   # file can still grow while the agent runs — the README says so rather than claiming otherwise.
-  _cap_errf() { [ -s "$errf" ] || return 0
-    [ "$(wc -c < "$errf" 2>/dev/null || echo 0)" -le "$LOG_MAX_BYTES" ] && return 0
-    local _t; _t="$(mktemp)" || return 0
-    tail -c "$LOG_MAX_BYTES" "$errf" > "$_t" 2>/dev/null && mv -f "$_t" "$errf" || rm -f "$_t"; }
+  _cap_errf() {
+    [ -s "$errf" ] || return 0
+    [ "$(wc -c <"$errf" 2>/dev/null || echo 0)" -le "$LOG_MAX_BYTES" ] && return 0
+    local _t
+    _t="$(mktemp)" || return 0
+    tail -c "$LOG_MAX_BYTES" "$errf" >"$_t" 2>/dev/null && mv -f "$_t" "$errf" || rm -f "$_t"
+  }
   # This reviewer's sidecar. The name is derived from RUN_BASE (already unique and freshly created
   # by mktemp) and from status_key, the same sanitizer $STATUS_DIR uses — so a crafted --reviewers
   # value cannot escape $ROUND_DIR through this path either. The -L refusal is defence in depth:
@@ -1056,7 +1263,9 @@ review_with() {
   side="$RUN_BASE.$skey.review"
   if [ -L "$side" ]; then
     echo "  ! $name: sidecar path '$side' is a symlink — refusing to write" >&2
-    echo fail > "$STATUS_DIR/$skey"; rm -f "$errf"; return 0
+    echo fail >"$STATUS_DIR/$skey"
+    rm -f "$errf"
+    return 0
   fi
   # ARGV GUARD (lib-argv.sh). Seats that still take the prompt as ONE argv string (qwen, antigravity;
   # opencode checks inside opencode_review) must not start when it is over the kernel's per-string
@@ -1066,27 +1275,38 @@ review_with() {
   # later seats). The element measured is the exact string the seat is given.
   local _argv_check=0 _argv_el="" _argv_hint="shorten the --context-file or use another seat"
   case "$name" in
-    qwen)        _argv_check=1; _argv_el="$PROMPT";;
-    antigravity) _argv_check=1
-                 if [ "$MODE" = diff ]; then _argv_el="$(printf '%s\n\n%s' "$PROMPT" "$DIFF")"; _argv_hint="use a smaller diff or another seat"
-                 else _argv_el="$PROMPT"; fi;;
+    qwen)
+      _argv_check=1
+      _argv_el="$PROMPT"
+      ;;
+    antigravity)
+      _argv_check=1
+      if [ "$MODE" = diff ]; then
+        _argv_el="$(printf '%s\n\n%s' "$PROMPT" "$DIFF")"
+        _argv_hint="use a smaller diff or another seat"
+      else _argv_el="$PROMPT"; fi
+      ;;
   esac
   if [ "$_argv_check" = 1 ]; then
-    local _argv_n; _argv_n="$(argv_bytes "$_argv_el")"
+    local _argv_n
+    _argv_n="$(argv_bytes "$_argv_el")"
     if ! argv_fits "$_argv_n"; then
       argv_refuse "$name" "$_argv_n" "$_argv_hint"
       relay_log "seat=$name refused: argv element $_argv_n B over the limit"
-      echo fail > "$STATUS_DIR/$skey"; rm -f "$errf"; return 0
+      echo fail >"$STATUS_DIR/$skey"
+      rm -f "$errf"
+      return 0
     fi
   fi
-  printf '=== %s review — started %s ===\n' "$name" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$side"
+  printf '=== %s review — started %s ===\n' "$name" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$side"
   # A `>` redirect takes the caller's umask, so on a umask-022 machine the sidecar would be 644
   # while the mktemp'd files beside it are 600. The mode-700 directory already keeps other users
   # out; this closes the same-user gap, and these files hold full review text.
   chmod 600 "$side" 2>/dev/null || true
   # Measured, not assumed: the body is sized on its own below, and the header length varies with the
   # reviewer's name and the timestamp.
-  local _hdr; _hdr="$(wc -c < "$side" 2>/dev/null || echo 0)"
+  local _hdr
+  _hdr="$(wc -c <"$side" 2>/dev/null || echo 0)"
   # Read ONE BYTE past the cap. If that byte exists, the reviewer had more to say than we kept, and
   # we know it from the size alone — see the truncation block below for why that matters.
   local LOG_CAP_PROBE=$((LOG_MAX_BYTES + 1))
@@ -1102,38 +1322,55 @@ review_with() {
   # Partial capture is best-effort: many CLIs block-buffer when stdout is not a TTY, so a kill can
   # still leave an empty or chunked sidecar. stdbuf helps where it exists and is never required.
   # This is strictly better than the old behaviour, which lost the lot.
-  local -a SB=(); command -v stdbuf >/dev/null 2>&1 && SB=(stdbuf -oL)
+  local -a SB=()
+  command -v stdbuf >/dev/null 2>&1 && SB=(stdbuf -oL)
   case "$name" in
     # claude and codex take the prompt on STDIN, never in argv: no argv size depends on the diff, the
     # context or the base. The producer stays pipeline element 0, so rc is PIPESTATUS[1] as before.
-    claude)       _seat_stdin | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" claude -p ${CLAUDE_MODEL_ARGS[@]+"${CLAUDE_MODEL_ARGS[@]}"} 2> >(tail -c "$LOG_MAX_BYTES" > "$errf") | head -c "$LOG_CAP_PROBE" >> "$side"; rc=${PIPESTATUS[1]};;
-    codex)        _seat_stdin | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" codex exec -s danger-full-access ${CODEX_MODEL_ARGS[@]+"${CODEX_MODEL_ARGS[@]}"} 2> >(tail -c "$LOG_MAX_BYTES" > "$errf") | head -c "$LOG_CAP_PROBE" >> "$side"; rc=${PIPESTATUS[1]};;
-    qwen)         printf '%s' "$feed" | QWEN_CODE_SUPPRESS_YOLO_WARNING=1 ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" qwen --safe-mode --approval-mode yolo -p "$PROMPT" 2> >(tail -c "$LOG_MAX_BYTES" > "$errf") | head -c "$LOG_CAP_PROBE" >> "$side"; rc=${PIPESTATUS[1]};;
+    claude)
+      _seat_stdin | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" claude -p ${CLAUDE_MODEL_ARGS[@]+"${CLAUDE_MODEL_ARGS[@]}"} 2> >(tail -c "$LOG_MAX_BYTES" >"$errf") | head -c "$LOG_CAP_PROBE" >>"$side"
+      rc=${PIPESTATUS[1]}
+      ;;
+    codex)
+      _seat_stdin | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" codex exec -s danger-full-access ${CODEX_MODEL_ARGS[@]+"${CODEX_MODEL_ARGS[@]}"} 2> >(tail -c "$LOG_MAX_BYTES" >"$errf") | head -c "$LOG_CAP_PROBE" >>"$side"
+      rc=${PIPESTATUS[1]}
+      ;;
+    qwen)
+      printf '%s' "$feed" | QWEN_CODE_SUPPRESS_YOLO_WARNING=1 ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" qwen --safe-mode --approval-mode yolo -p "$PROMPT" 2> >(tail -c "$LOG_MAX_BYTES" >"$errf") | head -c "$LOG_CAP_PROBE" >>"$side"
+      rc=${PIPESTATUS[1]}
+      ;;
     cursor)
       if [ "$MODE" = diff ]; then
-        printf '%s\n\n%s' "$PROMPT" "$DIFF" | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" cursor-agent -p --trust --mode=ask --model "$CURSOR_REVIEW_MODEL" 2> >(tail -c "$LOG_MAX_BYTES" > "$errf") | head -c "$LOG_CAP_PROBE" >> "$side"
+        printf '%s\n\n%s' "$PROMPT" "$DIFF" | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" cursor-agent -p --trust --mode=ask --model "$CURSOR_REVIEW_MODEL" 2> >(tail -c "$LOG_MAX_BYTES" >"$errf") | head -c "$LOG_CAP_PROBE" >>"$side"
       else
-        printf '%s' "$PROMPT" | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" cursor-agent -p --trust --mode=ask --model "$CURSOR_REVIEW_MODEL" 2> >(tail -c "$LOG_MAX_BYTES" > "$errf") | head -c "$LOG_CAP_PROBE" >> "$side"
-      fi; rc=${PIPESTATUS[1]};;
+        printf '%s' "$PROMPT" | ${SB[@]+"${SB[@]}"} timeout "$AGENT_TIMEOUT" cursor-agent -p --trust --mode=ask --model "$CURSOR_REVIEW_MODEL" 2> >(tail -c "$LOG_MAX_BYTES" >"$errf") | head -c "$LOG_CAP_PROBE" >>"$side"
+      fi
+      rc=${PIPESTATUS[1]}
+      ;;
     antigravity)
       # No stdin producer here, so the agent is pipeline element 0, not 1.
       if [ "$MODE" = diff ]; then
-        ${SB[@]+"${SB[@]}"} timeout "$AGY_OUTER_TIMEOUT" agy --dangerously-skip-permissions --print-timeout "${AGENT_TIMEOUT}s" ${AGY_MODEL_ARGS[@]+"${AGY_MODEL_ARGS[@]}"} -p "$_argv_el" 2> >(tail -c "$LOG_MAX_BYTES" > "$errf") | head -c "$LOG_CAP_PROBE" >> "$side"
+        ${SB[@]+"${SB[@]}"} timeout "$AGY_OUTER_TIMEOUT" agy --dangerously-skip-permissions --print-timeout "${AGENT_TIMEOUT}s" ${AGY_MODEL_ARGS[@]+"${AGY_MODEL_ARGS[@]}"} -p "$_argv_el" 2> >(tail -c "$LOG_MAX_BYTES" >"$errf") | head -c "$LOG_CAP_PROBE" >>"$side"
       else
-        ${SB[@]+"${SB[@]}"} timeout "$AGY_OUTER_TIMEOUT" agy --dangerously-skip-permissions --print-timeout "${AGENT_TIMEOUT}s" ${AGY_MODEL_ARGS[@]+"${AGY_MODEL_ARGS[@]}"} -p "$PROMPT" 2> >(tail -c "$LOG_MAX_BYTES" > "$errf") | head -c "$LOG_CAP_PROBE" >> "$side"
-      fi; rc=${PIPESTATUS[0]};;
+        ${SB[@]+"${SB[@]}"} timeout "$AGY_OUTER_TIMEOUT" agy --dangerously-skip-permissions --print-timeout "${AGENT_TIMEOUT}s" ${AGY_MODEL_ARGS[@]+"${AGY_MODEL_ARGS[@]}"} -p "$PROMPT" 2> >(tail -c "$LOG_MAX_BYTES" >"$errf") | head -c "$LOG_CAP_PROBE" >>"$side"
+      fi
+      rc=${PIPESTATUS[0]}
+      ;;
     opencode)
       opencode_review "$ATTACH_DIR" "$DIFF" "$CONTEXT_BLOCK" \
-              "PR #$PR in $REPO ${PR_URL:+($PR_URL)}" "$errf" "$AGENT_TIMEOUT" | head -c "$LOG_CAP_PROBE" >> "$side"
-      rc=${PIPESTATUS[0]};;
+        "PR #$PR in $REPO ${PR_URL:+($PR_URL)}" "$errf" "$AGENT_TIMEOUT" | head -c "$LOG_CAP_PROBE" >>"$side"
+      rc=${PIPESTATUS[0]}
+      ;;
     grok)
       grok_review "$ATTACH_DIR" "$DIFF" "$CONTEXT_BLOCK" \
-              "PR #$PR in $REPO ${PR_URL:+($PR_URL)}" "$errf" "$AGENT_TIMEOUT" | head -c "$LOG_CAP_PROBE" >> "$side"
-      rc=${PIPESTATUS[0]};;
-    pi_glm|pi_grok)
+        "PR #$PR in $REPO ${PR_URL:+($PR_URL)}" "$errf" "$AGENT_TIMEOUT" | head -c "$LOG_CAP_PROBE" >>"$side"
+      rc=${PIPESTATUS[0]}
+      ;;
+    pi_glm | pi_grok)
       pi_review "$name" "$ATTACH_DIR" "$DIFF" "$CONTEXT_BLOCK" \
-              "PR #$PR in $REPO ${PR_URL:+($PR_URL)}" "$errf" "$AGENT_TIMEOUT" | head -c "$LOG_CAP_PROBE" >> "$side"
-      rc=${PIPESTATUS[0]};;
+        "PR #$PR in $REPO ${PR_URL:+($PR_URL)}" "$errf" "$AGENT_TIMEOUT" | head -c "$LOG_CAP_PROBE" >>"$side"
+      rc=${PIPESTATUS[0]}
+      ;;
   esac
   _cap_errf
   # TRUNCATION IS DETECTED BY SIZE, NOT BY A SIGNAL. The first version keyed off the producer
@@ -1143,18 +1380,20 @@ review_with() {
   # then exits 0 slips through — posting a capped, INCOMPLETE review on a round that reports clean.
   # So we read one byte MORE than the cap: if the body came back longer than the cap, output was
   # discarded, full stop. No exit code is consulted.
-  local _body; _body=$(( $(wc -c < "$side" 2>/dev/null || echo 0) - _hdr ))
+  local _body
+  _body=$(($(wc -c <"$side" 2>/dev/null || echo 0) - _hdr))
   [ "$_body" -lt 0 ] && _body=0
   if [ "$_body" -gt "$LOG_MAX_BYTES" ]; then
     TRUNCATED=1
     # Drop the probe byte before the marker goes on: the capture deliberately read one byte PAST the
     # cap to detect overflow, and posting cap+1 bytes under a marker that says "truncated at N"
     # would contradict itself.
-    local _trim; _trim="$(mktemp)" || _trim=""
+    local _trim
+    _trim="$(mktemp)" || _trim=""
     if [ -n "$_trim" ]; then
-      head -c $((_hdr + LOG_MAX_BYTES)) "$side" > "$_trim" 2>/dev/null && mv -f "$_trim" "$side" || rm -f "$_trim"
+      head -c $((_hdr + LOG_MAX_BYTES)) "$side" >"$_trim" 2>/dev/null && mv -f "$_trim" "$side" || rm -f "$_trim"
     fi
-    printf '\n[... truncated at %s bytes by PR_RELAY_LOG_MAX_BYTES — this review is INCOMPLETE, so the round is not clean; raise the limit and re-run ...]\n' "$LOG_MAX_BYTES" >> "$side"
+    printf '\n[... truncated at %s bytes by PR_RELAY_LOG_MAX_BYTES — this review is INCOMPLETE, so the round is not clean; raise the limit and re-run ...]\n' "$LOG_MAX_BYTES" >>"$side"
     # A cap hit usually also kills the producer with SIGPIPE. That is the bound working, not a
     # reviewer fault, and the round is already failed by TRUNCATED below — so don't ALSO report a
     # confusing "exited with code 141".
@@ -1163,7 +1402,7 @@ review_with() {
   # Read the body back, dropping the header line we wrote above. This is the value the rest of the
   # function used to get straight out of the command substitution.
   out="$(sed '1d' "$side" 2>/dev/null)"
-  printf '=== %s finished rc=%s %s ===\n' "$name" "$rc" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$side"
+  printf '=== %s finished rc=%s %s ===\n' "$name" "$rc" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$side"
 
   # Out of quota? Decide BEFORE anything is posted, and look at BOTH streams.
   #
@@ -1182,15 +1421,17 @@ review_with() {
   # mentions "quota reached" is thrown away and its author benched — and the likeliest place for a
   # review to contain that phrase is a PR about quota handling. This one.
   if [ "$rc" -ne 0 ] && bench_looks_like_quota "$out$(cat "$errf" 2>/dev/null)"; then
-    local until; until="$(bench_parse_reset "$out$(cat "$errf" 2>/dev/null)")"
+    local until
+    until="$(bench_parse_reset "$out$(cat "$errf" 2>/dev/null)")"
     # The agent NAME goes in the file, not the status key: status_key() prefixes with `k_`, and
     # the panel looks the bench up by name. Deriving the name from the filename wrote `k_codex`
     # where `codex` is read — the bench never matched and the feature was inert across runs. The
     # tests missed it because they hand-seeded the file; cross-review did not.
-    printf '%s\t%s\t%s\n' "$name" "$until" "out of quota" > "$STATUS_DIR/bench_$skey"
+    printf '%s\t%s\t%s\n' "$name" "$until" "out of quota" >"$STATUS_DIR/bench_$skey"
     echo "  ⏸ $name: out of quota — benched until $(date -u -d "@$until" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || date -u -r "$until" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo "epoch $until")" >&2
-    echo bench > "$STATUS_DIR/$skey"
-    rm -f "$errf"; return 0
+    echo bench >"$STATUS_DIR/$skey"
+    rm -f "$errf"
+    return 0
   fi
   # Never fail silently: if the agent produced no review, say why in human terms
   # and show what it wrote on stderr. "Empty" means no non-whitespace content, so
@@ -1198,10 +1439,10 @@ review_with() {
   if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
     local why="exited with code $rc"
     case "$rc" in
-      0)   why="ran fine but returned an empty review";;
-      124) why="timed out after $([ "$name" = antigravity ] && echo "$AGY_OUTER_TIMEOUT" || echo "$AGENT_TIMEOUT")s (raise PR_RELAY_AGENT_TIMEOUT)";;
-      126) why="found but could not be executed (exit 126)";;
-      127) why="command not found";;
+      0) why="ran fine but returned an empty review" ;;
+      124) why="timed out after $([ "$name" = antigravity ] && echo "$AGY_OUTER_TIMEOUT" || echo "$AGENT_TIMEOUT")s (raise PR_RELAY_AGENT_TIMEOUT)" ;;
+      126) why="found but could not be executed (exit 126)" ;;
+      127) why="command not found" ;;
     esac
     echo "  ! $name: no review — $why" >&2
     # On timeout stderr only holds the agent's partial transcript — skip it.
@@ -1209,8 +1450,9 @@ review_with() {
       echo "    $name stderr (last 15 lines):" >&2
       tail -n 15 "$errf" | sed 's/^/    │ /' >&2
     fi
-    echo fail > "$STATUS_DIR/$skey"   # no output → round is not clean
-    rm -f "$errf"; return 0
+    echo fail >"$STATUS_DIR/$skey" # no output → round is not clean
+    rm -f "$errf"
+    return 0
   fi
   # A non-empty answer is not automatically a review. Until now the ONLY content
   # check was the empty one above, so a stall or a fragment of garbage posted as the
@@ -1226,7 +1468,8 @@ review_with() {
   # banner into $out, the round is already unclean, and the body is posted
   # deliberately as evidence. What is left cannot be judged for completeness: a
   # missing verdict marker may be the relay's doing, not the reviewer's.
-  review_looks_like_a_review "$out"; local _nr=$?
+  review_looks_like_a_review "$out"
+  local _nr=$?
   if [ "$TRUNCATED" != 1 ] && [ "$_nr" -ne 0 ]; then
     if [ "$_nr" = 2 ]; then
       echo "  ! $name: not a review — it names a verdict and then says it is still reading. NOT posted." >&2
@@ -1235,8 +1478,9 @@ review_with() {
     fi
     echo "    $name returned:" >&2
     printf '%s\n' "$out" | sed 's/^/    │ /' >&2
-    echo fail > "$STATUS_DIR/$skey"
-    rm -f "$errf"; return 0
+    echo fail >"$STATUS_DIR/$skey"
+    rm -f "$errf"
+    return 0
   fi
   local unclean=0
   # TRUNCATED is checked alongside rc, not inside it: an agent that overflowed the cap and still
@@ -1252,7 +1496,8 @@ review_with() {
     unclean=1
   fi
   rm -f "$errf"
-  local icon; case "$name" in claude) icon="🟣";; codex) icon="🟢";; cursor) icon="🔵";; antigravity) icon="🟠";; opencode) icon="⚪";; qwen) icon="🟡";; grok) icon="⚡";; pi_glm|pi_grok) icon="🥧";; *) icon="🤖";; esac
+  local icon
+  case "$name" in claude) icon="🟣" ;; codex) icon="🟢" ;; cursor) icon="🔵" ;; antigravity) icon="🟠" ;; opencode) icon="⚪" ;; qwen) icon="🟡" ;; grok) icon="⚡" ;; pi_glm | pi_grok) icon="🥧" ;; *) icon="🤖" ;; esac
   # Echo the review to stdout so the agent that launched the relay can read it,
   # address the findings, push, and re-run (the iterate loop). Single printf to
   # stay roughly atomic under --parallel.
@@ -1262,13 +1507,13 @@ review_with() {
   # before anyone else sees it. Nothing below this point writes.
   if [ "$NO_POST" = 1 ]; then
     echo "  · $name review printed, not posted (--no-post)"
-    [ "$unclean" = 1 ] && echo fail > "$STATUS_DIR/$skey" || echo ok > "$STATUS_DIR/$skey"
+    [ "$unclean" = 1 ] && echo fail >"$STATUS_DIR/$skey" || echo ok >"$STATUS_DIR/$skey"
     return 0
   fi
   # idempotent: remove any previous review from the SAME agent on this PR
   if [ -n "$REPO" ]; then
     for id in $(gh api --paginate "repos/$REPO/issues/$PR/comments" \
-                  --jq ".[] | select(.body|contains(\"$Name review (automated cross-review)\")) | .id" 2>/dev/null); do
+      --jq ".[] | select(.body|contains(\"$Name review (automated cross-review)\")) | .id" 2>/dev/null); do
       gh api -X DELETE "repos/$REPO/issues/comments/$id" >/dev/null 2>&1 || true
     done
   fi
@@ -1276,17 +1521,19 @@ review_with() {
   # the PR page shows a one-line toggle (forum-style hide/show) per reviewer.
   local footer comment_body out_file
   footer="<sub>via pr-review-relay · author: ${AUTHOR:-?}${CONTEXT_FILE:+ · context: $(basename "$CONTEXT_FILE")}${HEAD_SHA:+ · reviewed sha: ${HEAD_SHA:0:7}}</sub>"
-  comment_body="$(mktemp)"; out_file="$(mktemp)"
-  printf '%s' "$out" > "$out_file"
+  comment_body="$(mktemp)"
+  out_file="$(mktemp)"
+  printf '%s' "$out" >"$out_file"
   # If the wrapper fails (node missing/broken) or yields an empty body, do NOT post
   # a broken/partial comment and mark ok — treat it as a failed reviewer.
   if ! node "$WRAP_COMMENT" \
-        --summary "${icon} $Name review (automated cross-review)" \
-        --footer "$footer" \
-        --file "$out_file" > "$comment_body" || [ ! -s "$comment_body" ]; then
+    --summary "${icon} $Name review (automated cross-review)" \
+    --footer "$footer" \
+    --file "$out_file" >"$comment_body" || [ ! -s "$comment_body" ]; then
     echo "  ! $name: could not render comment (wrapper failed / empty output)" >&2
-    echo fail > "$STATUS_DIR/$skey"
-    rm -f "$out_file" "$comment_body"; return 0
+    echo fail >"$STATUS_DIR/$skey"
+    rm -f "$out_file" "$comment_body"
+    return 0
   fi
   rm -f "$out_file"
   # --repo, always. Without it gh resolves the number against the PARENT inside a
@@ -1295,10 +1542,10 @@ review_with() {
   # decide where a comment goes.
   if gh pr comment "$PR" --repo "$REPO" --body-file "$comment_body" >/dev/null; then
     echo "  ✓ $name review posted (collapsed)"
-    [ "$unclean" = 1 ] && echo fail > "$STATUS_DIR/$skey" || echo ok > "$STATUS_DIR/$skey"
+    [ "$unclean" = 1 ] && echo fail >"$STATUS_DIR/$skey" || echo ok >"$STATUS_DIR/$skey"
   else
     echo "  ! $name: failed to post comment" >&2
-    echo fail > "$STATUS_DIR/$skey"   # review not visible on the PR → not clean
+    echo fail >"$STATUS_DIR/$skey" # review not visible on the PR → not clean
   fi
   rm -f "$comment_body"
 }
@@ -1309,12 +1556,13 @@ if [ "$REVIEWERS_EXPLICIT" = 1 ] && [ "$REVIEWERS" = "$DEFAULT_REVIEWERS" ]; the
   echo "  note: --reviewers matches the default, so a missing default CLI is now a hard failure (exit 3), not a skip. Omit --reviewers to tolerate missing agents." >&2
 fi
 
-IFS=',' read -ra LIST <<< "$REVIEWERS"
+IFS=',' read -ra LIST <<<"$REVIEWERS"
 # dedupe: same reviewer twice would share one status file (race under --parallel).
 # Space-delimited string, not an assoc array, so this stays Bash 3.2-safe (macOS).
 SEEN_LIST=""
-would_run=0; skipped=0   # reviewers that would run / were tolerated-skipped (default set)
-benched=0                # reviewers left out because they are out of quota (see the bench block)
+would_run=0
+skipped=0 # reviewers that would run / were tolerated-skipped (default set)
+benched=0 # reviewers left out because they are out of quota (see the bench block)
 # Expired entries go now, so a stale line cannot keep an agent out after its quota is back.
 bench_prune || echo "  ! could not prune the bench file — continuing with what it says" >&2
 # Pass 1 RESOLVES the panel; pass 2 (further down) dispatches it. They are split so the round state
@@ -1325,16 +1573,26 @@ bench_prune || echo "  ! could not prune the bench file — continuing with what
 # space-delimited accumulator is safe (same reasoning as SEEN_LIST above) and keeps this Bash 3.2-safe.
 RUNNABLE=""
 for r in "${LIST[@]}"; do
-  r="$(relay_trim "$r")"   # same normalization as opencode_is_selected
-  [ -z "$r" ] && continue           # tolerate empty items (e.g. "claude,,codex")
+  r="$(relay_trim "$r")"  # same normalization as opencode_is_selected
+  [ -z "$r" ] && continue # tolerate empty items (e.g. "claude,,codex")
   [ "$r" = "agy" ] && r=antigravity
-  [ "$r" = "$AUTHOR" ] && { echo "  – skip $r (author)"; continue; }
-  rkey="$(status_key "$r")"          # rkey has no spaces, so the string check is safe
-  case " $SEEN_LIST " in *" $rkey "*) echo "  – skip $r (duplicate)"; continue;; esac
+  [ "$r" = "$AUTHOR" ] && {
+    echo "  – skip $r (author)"
+    continue
+  }
+  rkey="$(status_key "$r")" # rkey has no spaces, so the string check is safe
+  case " $SEEN_LIST " in *" $rkey "*)
+    echo "  – skip $r (duplicate)"
+    continue
+    ;;
+  esac
   SEEN_LIST="$SEEN_LIST $rkey"
   local_tool=$(tool_for "$r")
   if [ -z "$local_tool" ]; then
-    if [ "$REVIEWERS_EXPLICIT" = 1 ]; then echo "  ! unknown reviewer '$r' (explicitly requested → fail)" >&2; echo fail > "$STATUS_DIR/$rkey"; else echo "  ! unknown reviewer '$r' (skip)"; fi
+    if [ "$REVIEWERS_EXPLICIT" = 1 ]; then
+      echo "  ! unknown reviewer '$r' (explicitly requested → fail)" >&2
+      echo fail >"$STATUS_DIR/$rkey"
+    else echo "  ! unknown reviewer '$r' (skip)"; fi
     continue
   fi
   # Benched? Out of the panel — even when explicitly requested.
@@ -1355,12 +1613,21 @@ for r in "${LIST[@]}"; do
   if ! command -v "$local_tool" >/dev/null; then
     # Not installed: a hard failure only if the user explicitly asked for this
     # reviewer; for the default set it's a tolerated skip (users have different CLIs).
-    if [ "$REVIEWERS_EXPLICIT" = 1 ]; then echo "  ! $local_tool not installed but explicitly requested → fail" >&2; echo fail > "$STATUS_DIR/$rkey"; else echo "  ! $local_tool not installed (skip $r)"; skipped=$((skipped + 1)); fi
+    if [ "$REVIEWERS_EXPLICIT" = 1 ]; then
+      echo "  ! $local_tool not installed but explicitly requested → fail" >&2
+      echo fail >"$STATUS_DIR/$rkey"
+    else
+      echo "  ! $local_tool not installed (skip $r)"
+      skipped=$((skipped + 1))
+    fi
     continue
   fi
   would_run=$((would_run + 1))
-  if [ "$DRY" = 1 ]; then echo "  · would run: $r ($local_tool)$(panel_seat_pins "$r")"; continue; fi
-  RUNNABLE="$RUNNABLE $r"     # pass 2 dispatches these, once the state is durable
+  if [ "$DRY" = 1 ]; then
+    echo "  · would run: $r ($local_tool)$(panel_seat_pins "$r")"
+    continue
+  fi
+  RUNNABLE="$RUNNABLE $r" # pass 2 dispatches these, once the state is durable
 done
 
 # --- Persist the round state BEFORE dispatching ------------------------------
@@ -1383,12 +1650,21 @@ if [ "$DRY" = 0 ] && [ "$would_run" -gt 0 ]; then
   # and the rename are checked by hand — an unnoticed failure here would dispatch reviewers with no
   # durable state, which is the exact hole this block closes.
   _state_tmp="$(mktemp "$ROUND_DIR/$ROUND_KEY.state.XXXXXXXX" 2>/dev/null)" || {
-    relay_log "verdict exit=1 cannot create round-state temp"; echo "✖ cannot create round-state temp file in '$ROUND_DIR'" >&2; exit 1; }
-  if ! printf '%s %s %s\n' "$HEAD_SHA" "$NEXT_ROUND" "$NEXT_SAME" > "$_state_tmp"; then
-    rm -f "$_state_tmp"; relay_log "verdict exit=1 cannot write round state"; echo "✖ cannot write round state" >&2; exit 1
+    relay_log "verdict exit=1 cannot create round-state temp"
+    echo "✖ cannot create round-state temp file in '$ROUND_DIR'" >&2
+    exit 1
+  }
+  if ! printf '%s %s %s\n' "$HEAD_SHA" "$NEXT_ROUND" "$NEXT_SAME" >"$_state_tmp"; then
+    rm -f "$_state_tmp"
+    relay_log "verdict exit=1 cannot write round state"
+    echo "✖ cannot write round state" >&2
+    exit 1
   fi
   if ! mv -f "$_state_tmp" "$ROUND_FILE"; then
-    rm -f "$_state_tmp"; relay_log "verdict exit=1 cannot install round state"; echo "✖ cannot install round state at '$ROUND_FILE'" >&2; exit 1
+    rm -f "$_state_tmp"
+    relay_log "verdict exit=1 cannot install round state"
+    echo "✖ cannot install round state at '$ROUND_FILE'" >&2
+    exit 1
   fi
   relay_log "state sha=${HEAD_SHA:0:7} round=$NEXT_ROUND same=$NEXT_SAME (written before dispatch)"
 else
@@ -1403,7 +1679,7 @@ for r in $RUNNABLE; do
   # Pre-seed "pending": if the reviewer is hard-killed before it can record its
   # own outcome, this file survives and the tally counts it as a failure (not a
   # silent exclusion that could let the round pass clean).
-  echo pending > "$STATUS_DIR/$rkey"
+  echo pending >"$STATUS_DIR/$rkey"
   if [ "$PARALLEL" = 1 ]; then review_with "$r" & else review_with "$r"; fi
 done
 [ "$PARALLEL" = 1 ] && wait
@@ -1424,18 +1700,21 @@ if ls "$STATUS_DIR"/bench_* >/dev/null 2>&1; then
       # Keep every live entry that no child is replacing this round.
       if [ -r "$BENCH_FILE" ]; then
         while IFS=$'\t' read -r _a _u _r; do
-          case "$_u" in ''|*[!0-9]*) continue;; esac
+          case "$_u" in '' | *[!0-9]*) continue ;; esac
           [ "$_u" -le "$_now" ] && continue
           [ -e "$STATUS_DIR/bench_$(status_key "$_a")" ] && continue
-          printf '%s\t%s\t%s\n' "$_a" "$_u" "$_r" >> "$_btmp"
-        done < "$BENCH_FILE"
+          printf '%s\t%s\t%s\n' "$_a" "$_u" "$_r" >>"$_btmp"
+        done <"$BENCH_FILE"
       fi
       for _bf in "$STATUS_DIR"/bench_*; do
         [ -e "$_bf" ] || continue
-        IFS=$'\t' read -r _n _u _r < "$_bf"
-        [ -n "$_n" ] && printf '%s\t%s\t%s\n' "$_n" "$_u" "$_r" >> "$_btmp"
+        IFS=$'\t' read -r _n _u _r <"$_bf"
+        [ -n "$_n" ] && printf '%s\t%s\t%s\n' "$_n" "$_u" "$_r" >>"$_btmp"
       done
-      mv -f "$_btmp" "$BENCH_FILE" 2>/dev/null || { rm -f "$_btmp"; bench_write_ok=0; }
+      mv -f "$_btmp" "$BENCH_FILE" 2>/dev/null || {
+        rm -f "$_btmp"
+        bench_write_ok=0
+      }
     fi
     bench_unlock
   else
@@ -1445,23 +1724,28 @@ if ls "$STATUS_DIR"/bench_* >/dev/null 2>&1; then
     echo "  ! could not record the bench — treating this round's quota discoveries as failures" >&2
     for _bf in "$STATUS_DIR"/bench_*; do
       [ -e "$_bf" ] || continue
-      echo fail > "$STATUS_DIR/${_bf##*/bench_}"
+      echo fail >"$STATUS_DIR/${_bf##*/bench_}"
     done
   fi
   rm -f "$STATUS_DIR"/bench_* 2>/dev/null || true
 fi
 
-ran=0; failed=0; failed_names=""; benched_now=0
+ran=0
+failed=0
+failed_names=""
+benched_now=0
 for f in "$STATUS_DIR"/*; do
   [ -e "$f" ] || continue
-  n="${f##*/}"; _outcome="$(cat "$f")"
+  n="${f##*/}"
+  _outcome="$(cat "$f")"
   # A benched agent neither posted nor failed. Leaving it in `ran` would make the banner's
   # "$ran/$ran posted" a lie, and counting it as a failure would make the bench pointless — the
   # round would still be unclean, which is the whole thing we are trying to stop.
   if [ "$_outcome" = bench ]; then
     # Counted here and NOT again anywhere else: an agent dropped at panel time already
     # incremented `benched` there, and it cannot also produce a status file this round.
-    benched_now=$((benched_now + 1)); benched=$((benched + 1))
+    benched_now=$((benched_now + 1))
+    benched=$((benched + 1))
     relay_log "outcome ${n#k_}=bench"
     continue
   fi
@@ -1469,7 +1753,10 @@ for f in "$STATUS_DIR"/*; do
   # Logged HERE, in the parent, after `wait` — never from review_with. A background subshell
   # appending to the shared run log is exactly the interleaving the sidecars exist to avoid.
   relay_log "outcome ${n#k_}=$_outcome"
-  if [ "$_outcome" != ok ]; then failed=$((failed + 1)); failed_names="$failed_names ${n#k_}"; fi
+  if [ "$_outcome" != ok ]; then
+    failed=$((failed + 1))
+    failed_names="$failed_names ${n#k_}"
+  fi
 done
 unset _outcome
 
@@ -1477,10 +1764,19 @@ unset _outcome
 # unknown/missing DO record a failure above — surface that as a non-zero preflight
 # instead of a false clean pass. Zero runnable reviewers is also a failed preflight.
 if [ "$DRY" = 1 ]; then
-  if [ "$failed" -gt 0 ]; then relay_log "verdict exit=3 dry-run invalid config —$failed_names"; echo "✖ Dry run: invalid --reviewers config —$failed_names." >&2; exit 3; fi
-  if [ "$would_run" = 0 ]; then relay_log "verdict exit=3 dry-run no runnable reviewers"; echo "✖ Dry run: no runnable reviewers (none installed / all excluded)." >&2; exit 3; fi
+  if [ "$failed" -gt 0 ]; then
+    relay_log "verdict exit=3 dry-run invalid config —$failed_names"
+    echo "✖ Dry run: invalid --reviewers config —$failed_names." >&2
+    exit 3
+  fi
+  if [ "$would_run" = 0 ]; then
+    relay_log "verdict exit=3 dry-run no runnable reviewers"
+    echo "✖ Dry run: no runnable reviewers (none installed / all excluded)." >&2
+    exit 3
+  fi
   relay_log "verdict exit=0 dry-run ok would_run=$would_run"
-  echo "✔ Dry run complete (config valid; $would_run reviewer(s) would run)."; exit 0
+  echo "✔ Dry run complete (config valid; $would_run reviewer(s) would run)."
+  exit 0
 fi
 
 # (The round state was persisted BEFORE dispatch — see the write block above. It deliberately no

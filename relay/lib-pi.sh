@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lib-pi.sh — the pi reviewer seats (pi_glm, pi_grok), shared by pr-review-relay and review-local.
 #
 # Why a shared lib: the same anti-drift reason as lib-opencode.sh and lib-grok.sh. Both callers
@@ -54,13 +55,13 @@ PI_EFFORT_LEVELS="off minimal low medium high xhigh max"
 # together with AGENT_TIMEOUT=900 or more.
 pi_resolve_model() { # <seat>
   case "$1" in
-    pi_glm)  panel_resolve PI_GLM_REVIEW_MODEL MODEL_pi_glm zai/glm-5.3 ;;
+    pi_glm) panel_resolve PI_GLM_REVIEW_MODEL MODEL_pi_glm zai/glm-5.3 ;;
     pi_grok) panel_resolve PI_GROK_REVIEW_MODEL MODEL_pi_grok xai/grok-4.7 ;;
   esac
 }
 pi_resolve_effort() { # <seat>
   case "$1" in
-    pi_glm)  panel_resolve PI_GLM_REVIEW_EFFORT EFFORT_pi_glm low ;;
+    pi_glm) panel_resolve PI_GLM_REVIEW_EFFORT EFFORT_pi_glm low ;;
     pi_grok) panel_resolve PI_GROK_REVIEW_EFFORT EFFORT_pi_grok low ;;
   esac
 }
@@ -68,12 +69,13 @@ pi_resolve_effort() { # <seat>
 # --- Reviewer selection ------------------------------------------------------
 # Reads $REVIEWERS and $AUTHOR from the caller. Same trim rules as opencode_is_selected.
 pi_is_selected() {
-  local _r; local -a _list=()
-  IFS=',' read -ra _list <<< "$REVIEWERS"
+  local _r
+  local -a _list=()
+  IFS=',' read -ra _list <<<"$REVIEWERS"
   for _r in ${_list[@]+"${_list[@]}"}; do
     _r="$(relay_trim "$_r")"
     case "$_r" in
-      pi_glm|pi_grok) [ "$_r" != "$AUTHOR" ] && return 0 ;;
+      pi_glm | pi_grok) [ "$_r" != "$AUTHOR" ] && return 0 ;;
     esac
   done
   return 1
@@ -101,7 +103,7 @@ pi_resolve_bin() {
       exit 2
     fi
   else
-    PI_BIN=pi   # keep the bare name so the caller's "not installed" path reports it
+    PI_BIN=pi # keep the bare name so the caller's "not installed" path reports it
   fi
 }
 
@@ -172,18 +174,22 @@ pi_review() {
   errf="$(opencode_abs_path "$errf")"
 
   case "$seat" in
-    pi_glm|pi_grok) ;;
-    *) echo "pi_review: unknown seat '$seat'" >> "$errf"; return 1 ;;
+    pi_glm | pi_grok) ;;
+    *)
+      echo "pi_review: unknown seat '$seat'" >>"$errf"
+      return 1
+      ;;
   esac
   model="$(pi_resolve_model "$seat")"
   effort="$(pi_resolve_effort "$seat")"
   # Exact alternatives, never a match against the list: the value is config text, so as a pattern
   # `low medium`, `*` or `l?w` would pass. Keep in step with PI_EFFORT_LEVELS (a test pins it).
   case "$effort" in
-    off|minimal|low|medium|high|xhigh|max) ;;
+    off | minimal | low | medium | high | xhigh | max) ;;
     *)
-      echo "pi: invalid effort '$effort' for $seat (EFFORT_$seat / $(printf '%s' "$seat" | tr '[:lower:]' '[:upper:]')_REVIEW_EFFORT); valid: $PI_EFFORT_LEVELS" >> "$errf"
-      return 1 ;;
+      echo "pi: invalid effort '$effort' for $seat (EFFORT_$seat / $(printf '%s' "$seat" | tr '[:lower:]' '[:upper:]')_REVIEW_EFFORT); valid: $PI_EFFORT_LEVELS" >>"$errf"
+      return 1
+      ;;
   esac
 
   # Resolve every binary BEFORE anything starts and before the cd: the model call never starts
@@ -193,28 +199,32 @@ pi_review() {
   pi_bin="$PI_BIN"
   case "$pi_bin" in
     /*) ;;
-    *) echo "pi: PI_BIN is not an absolute path ($pi_bin) — pi_resolve_bin did not run" >> "$errf"; return 1 ;;
+    *)
+      echo "pi: PI_BIN is not an absolute path ($pi_bin) — pi_resolve_bin did not run" >>"$errf"
+      return 1
+      ;;
   esac
   { [ -f "$pi_bin" ] && [ -x "$pi_bin" ]; } || {
-    echo "pi: '$pi_bin' is not an executable file" >> "$errf"
+    echo "pi: '$pi_bin' is not an executable file" >>"$errf"
     return 1
   }
   timeout_bin="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
   [ -n "$timeout_bin" ] || {
     # Without a wall-clock limit a hung pi burns the round forever. (macOS: brew install coreutils)
-    echo "pi: neither timeout nor gtimeout found — refuse to run without a wall-clock limit" >> "$errf"
+    echo "pi: neither timeout nor gtimeout found — refuse to run without a wall-clock limit" >>"$errf"
     return 1
   }
   timeout_bin="$(opencode_abs_path "$timeout_bin")"
   node_bin="$(command -v node 2>/dev/null || true)"
   [ -n "$node_bin" ] || {
-    echo "pi: node not found — it reads pi's json stream; refuse to start the model call without it" >> "$errf"
+    echo "pi: node not found — it reads pi's json stream; refuse to start the model call without it" >>"$errf"
     return 1
   }
   node_bin="$(opencode_abs_path "$node_bin")"
 
   # PATH from absolute entries only, so nothing resolves relative to iso_cwd after the cd.
-  _IFS="$IFS"; IFS=':'
+  _IFS="$IFS"
+  IFS=':'
   for _p in $PATH; do
     [ -n "$_p" ] || continue
     case "$_p" in
@@ -223,7 +233,8 @@ pi_review() {
         if [ -d "$_p" ]; then
           _abs="$(cd -- "$_p" 2>/dev/null && pwd)" || continue
           _np="${_np:+$_np:}$_abs"
-        fi ;;
+        fi
+        ;;
     esac
   done
   IFS="$_IFS"
@@ -232,11 +243,11 @@ pi_review() {
   # Isolated cwd under attach_dir, so the caller's EXIT trap (which removes ATTACH_DIR) cleans it
   # even when the run is interrupted. Outside any git checkout, and empty.
   iso_cwd="$(mktemp -d "$attach_dir/iso-pi.XXXXXX")" || {
-    echo "pi: cannot create an isolated cwd under $attach_dir" >> "$errf"
+    echo "pi: cannot create an isolated cwd under $attach_dir" >>"$errf"
     return 1
   }
   prompt_file="$(mktemp "$attach_dir/pi-prompt.XXXXXX")" || {
-    echo "pi: cannot create a prompt file under $attach_dir" >> "$errf"
+    echo "pi: cannot create a prompt file under $attach_dir" >>"$errf"
     return 1
   }
   iso_cwd="$(opencode_abs_path "$iso_cwd")"
@@ -251,14 +262,14 @@ pi_review() {
     "$diff")"
 
   # Write, then verify it is complete (same guard as grok's prompt file).
-  if ! printf '%s' "$body" > "$prompt_file"; then
-    echo "pi: failed to write the prompt file" >> "$errf"
+  if ! printf '%s' "$body" >"$prompt_file"; then
+    echo "pi: failed to write the prompt file" >>"$errf"
     return 1
   fi
   expected_bytes=$(printf '%s' "$body" | wc -c | tr -d ' ')
-  actual_bytes=$(wc -c < "$prompt_file" | tr -d ' ')
+  actual_bytes=$(wc -c <"$prompt_file" | tr -d ' ')
   if [ -z "$actual_bytes" ] || [ "$actual_bytes" = 0 ] || [ "$actual_bytes" != "$expected_bytes" ]; then
-    echo "pi: prompt file write incomplete (expected ${expected_bytes}B, got ${actual_bytes:-0}B)" >> "$errf"
+    echo "pi: prompt file write incomplete (expected ${expected_bytes}B, got ${actual_bytes:-0}B)" >>"$errf"
     return 1
   fi
 
@@ -272,8 +283,8 @@ pi_review() {
     "$timeout_bin" "$agent_timeout" "$pi_bin" -p --mode json --model "$model" --thinking "$effort" \
       --no-tools --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes \
       --no-context-files --no-approve --no-session --offline \
-      < "$prompt_file" 2>> "$errf" \
-    | "$node_bin" -e "$PI_FINAL_TEXT_JS" 2>> "$errf"
+      <"$prompt_file" 2>>"$errf" |
+      "$node_bin" -e "$PI_FINAL_TEXT_JS" 2>>"$errf"
     _ps=("${PIPESTATUS[@]}")
     [ "${_ps[0]}" -ne 0 ] && exit "${_ps[0]}"
     exit "${_ps[1]}"
