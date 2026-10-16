@@ -26,24 +26,38 @@ each driver agent (Claude, Codex, Cursor) gets a thin adapter that points at it,
 
 ## 🆕 What's new
 
-**Unreleased** — **pr-review-relay is now part of ship-feature**, in [`relay/`](relay/README.md)
+**v0.7.0** — **pr-review-relay is now part of ship-feature**, in [`relay/`](relay/README.md)
 (the older history stays in [hamen/pr-review-relay](https://github.com/hamen/pr-review-relay)). One
 clone and one `install.sh` give you everything: `install.sh` now also links
 `review-local`, `pr-review-relay` and their helpers into `~/.local/bin`. `ship-feature review` is the
 light lane's review step (a pass-through to `review-local`). The commands, flags, exit codes and
 `~/.config/pr-review-relay/config` do not change. Autonomous mode is gone: the light lane replaced it.
 
-**Unreleased** — **two lanes, and the light lane is the default.** A change that is not risky now
+**v0.7.0** — **two lanes, and the light lane is the default.** A change that is not risky now
 skips the plan, the PR and the human merge: one review round by the configured panel, then
 `ship-feature land`, which merges onto the default branch and pushes with the pre-push hook on the
 exact merged tree. Risky changes keep the gated pipeline, with one plan-review round and at most two
 cross-review rounds.
 
-**Unreleased** — **two plan-review seats on the `pi` runner: `pi_glm` (GLM 5.3) and `pi_grok`
+**v0.7.0** — **two plan-review seats on the `pi` runner: `pi_glm` (GLM 5.3) and `pi_grok`
 (Grok 4.7).** They are the relay's pi seats, pinned by the same keys (`MODEL_pi_*` / `EFFORT_pi_*` in
 the shared panel config), but they read your checkout with a read-only tool allowlist, so they can check
 a plan against the code. To use them, set `PLAN_REVIEWERS=codex,pi_glm,pi_grok` in
 `~/.config/pr-review-relay/config`. The `glm` and `grok` seats stay as they are.
+
+**v0.7.0** — **Codex now loads the skill.** Codex skips a `SKILL.md` that is a symlink to a file, so
+it never saw ship-feature. `install.sh` now links the skill directory itself, and it also links the
+skill where Antigravity, Cursor and Junie look for skills. The Codex block and the Cursor rule are now
+short pointers to the skill and `WORKFLOW.md`. They keep one rule: a human merges careful-lane changes.
+
+**v0.7.0** — **a reviewer that did not review no longer counts.** An answer must name a severity
+(Blocker, Should-fix or Nit) or say that the change looks good, and its last sentence must not announce
+work still to come. If it does not, the answer is not posted and the round fails with exit `3`. Before,
+any text at all counted as a verdict.
+
+**v0.7.0** — **`preflight` needs a committed pre-push hook.** It refuses a repository without a
+committed, executable `.githooks/pre-push` that git runs on push. For most clones the fix is
+`git config core.hooksPath .githooks`.
 
 **v0.6.0** — **every plan-review seat is pinned from the one shared config, and the seat names stop
 lying.** `claude` and `codex` ran bare in plan-review, so `MODEL_claude`, `MODEL_codex` and
