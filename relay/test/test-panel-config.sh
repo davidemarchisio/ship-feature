@@ -372,6 +372,7 @@ else bad "unset HOME aborted panel_config_load"; fi
 #
 # NOT via resolve(): that runs under `env -i PATH=/usr/bin:/bin` for config-precedence
 # reasons that do not apply here, and this helper needs the real PATH for grep/sed/tr.
+# shellcheck source=relay/lib-panel.sh
 . "$LIB"
 
 # want: yes | no | stall  — "stall" pins the THREE-valued contract (0 a review,

@@ -326,6 +326,8 @@ opencode_resolve_bin() {
     # "~" is shell syntax, so it reaches an env var as a literal character. Expand
     # it because users expect it to work — but only when HOME is actually set,
     # otherwise "~/bin/opencode" would silently become "/bin/opencode".
+    # The quoted tilde is the point: these patterns match a literal "~" in the value.
+    # shellcheck disable=SC2088
     case "$OPENCODE_BIN" in
       '~' | '~/'*)
         [ -n "${HOME:-}" ] || {

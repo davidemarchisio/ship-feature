@@ -43,11 +43,11 @@
 
 # relay_isolate_git <work-dir> [--allow-hooks]
 #
-# --allow-hooks omits the core.hooksPath key. Needed by test-gate.sh, whose entire purpose is to run
-# a real pre-push hook: env config OUTRANKS a repo's own `git config core.hooksPath`, so setting it
-# here disabled the hook under test and every refusal case passed vacuously. (The gate suite caught
-# this immediately, which is the point of having it.) Suites that pass this flag are pointing
-# hooksPath at their own fixture anyway, so ambient hooks still cannot reach them.
+# --allow-hooks omits the core.hooksPath key. It was for test-gate.sh (removed with autonomous mode),
+# which ran a real pre-push hook: env config OUTRANKS a repo's own `git config core.hooksPath`, so
+# setting it here disabled the hook under test and every refusal case passed vacuously. (The gate
+# suite caught this immediately, which is the point of having it.) No suite passes it today; a suite
+# that does must point hooksPath at its own fixture, so ambient hooks still cannot reach it.
 #
 # <work-dir> must already EXIST. core.hooksPath points at a child of it that does not exist, so hooks
 # are simply never found. An earlier draft used "${WORK:-/nonexistent}/no-such-hooks" — but WORK is
@@ -129,8 +129,8 @@ relay_require_git_2_31() {
   # The probe must run with git's ambient environment ALREADY cleared. Two ways it was wrong:
   #   * an inherited GIT_CONFIG_PARAMETERS overrides GIT_CONFIG_COUNT, so the probe read the ambient
   #     value and the suite refused to run on git 2.51 claiming it needed 2.31 — measured with
-  #     `GIT_CONFIG_PARAMETERS="'relay.probe=x'" bash test/test-gate.sh`, and it would fire exactly
-  #     when run from a hook, which is the case this whole file is about;
+  #     `GIT_CONFIG_PARAMETERS="'relay.probe=x'" bash test/test-gate.sh` (a suite since removed), and
+  #     it would fire exactly when run from a hook, which is the case this whole file is about;
   #   * on a git OLDER than 2.31, GIT_CONFIG_COUNT is ignored entirely, so an ambient
   #     `relay.probe = <expected>` in someone's ~/.gitconfig would satisfy it and the suite would run
   #     half-isolated. The expected value is therefore generated per run, so no config can hold it.

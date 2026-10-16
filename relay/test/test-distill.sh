@@ -93,7 +93,7 @@ STUB
 chmod +x "$BIN/cursor-agent"
 
 export PATH="$BIN:$PATH"
-cd "$WORK"
+cd "$WORK" || exit 1
 
 pass=0
 fail=0
@@ -195,7 +195,7 @@ fi
 # noticing. CURSOR_REVIEW_MODEL is cleared so an exported override cannot fake a pass.
 echo "test: cursor is pinned to a Cursor-pool model (not the Auto default)"
 rc=$(
-  CURSOR_REVIEW_MODEL= CURSOR_ARGS_FILE="$WORK/uargs" "$DISTILL" --agent cursor >"$WORK/out" 2>"$WORK/err"
+  CURSOR_REVIEW_MODEL='' CURSOR_ARGS_FILE="$WORK/uargs" "$DISTILL" --agent cursor >"$WORK/out" 2>"$WORK/err"
   echo $?
 )
 if [ "$rc" = 0 ] && grep -q -- '--model composer-2.5' "$WORK/uargs" 2>/dev/null; then
@@ -224,7 +224,7 @@ fi
 # repo has already been bitten by exactly this kind of drift between copies.
 echo "test: unset codex overrides add no argv here either"
 rc=$(
-  CODEX_REVIEW_MODEL= CODEX_REVIEW_EFFORT= CODEX_ARGS_FILE="$WORK/cargs" "$DISTILL" --agent codex >"$WORK/out" 2>"$WORK/err"
+  CODEX_REVIEW_MODEL='' CODEX_REVIEW_EFFORT='' CODEX_ARGS_FILE="$WORK/cargs" "$DISTILL" --agent codex >"$WORK/out" 2>"$WORK/err"
   echo $?
 )
 if [ "$rc" = 0 ] && ! grep -qE -- '(^| )-m ( |$)|model_reasoning_effort' "$WORK/cargs" 2>/dev/null; then
@@ -239,7 +239,7 @@ fi
 # variables cleared, so an exported value in a dev/CI env cannot fake a pass.
 echo "test: the claude model pin and its fallback reach the distill call"
 rc=$(
-  CLAUDE_REVIEW_MODEL= CLAUDE_REVIEW_EFFORT= CLAUDE_REVIEW_FALLBACK_MODEL= CLAUDE_ARGS_FILE="$WORK/cargs" "$DISTILL" --agent claude >"$WORK/out" 2>"$WORK/err"
+  CLAUDE_REVIEW_MODEL='' CLAUDE_REVIEW_EFFORT='' CLAUDE_REVIEW_FALLBACK_MODEL='' CLAUDE_ARGS_FILE="$WORK/cargs" "$DISTILL" --agent claude >"$WORK/out" 2>"$WORK/err"
   echo $?
 )
 if [ "$rc" = 0 ] && grep -q -- '--model opus' "$WORK/cargs" 2>/dev/null &&

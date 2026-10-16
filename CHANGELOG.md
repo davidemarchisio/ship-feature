@@ -14,6 +14,12 @@ All notable changes to **ship-feature** are documented here. This project follow
   of the pi json reader: about 125 fewer lines. One parser gives one meaning: an inline `# ...` in
   that file is now part of the value in ship-feature too, as it always was in the relay. A copy of
   `bin/ship-feature` with no `relay/` next to it stops with a message. Fizzy #1412.
+- **`bin/ci` lints and formats `relay/` too.** The relay never ran shellcheck or shfmt. One commit
+  holds the shfmt output only (listed in `.git-blame-ignore-revs`); a second one fixes what
+  shellcheck reported. Most fixes change no behaviour: shell and source directives, `''` for empty
+  values, three disables that say why, and removed variables that nothing read
+  (`PANEL_CONFIG_PATH`, `cfg_key`, `dl`). One does:
+  `pr-review-consensus` no longer runs a `gh repo view` whose answer it never used. Fizzy #1412.
 
 ### Removed
 

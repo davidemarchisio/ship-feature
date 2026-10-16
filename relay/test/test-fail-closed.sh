@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2319 # each check passes on the $? of the test line before it, on purpose
 # Fail-closed verdict tests for pr-review-relay.
 #
 # Stubs `gh` and the agent CLIs on PATH, runs the relay against a fake PR, and
@@ -5131,7 +5132,7 @@ av_count() { grep -c -- "$1" "$2" 2>/dev/null || true; }
 # Completeness, not just markers: every filler line of the context and every line of the diff must
 # reach the seat's stdin, once. (A prompt that lost most of a 98 KB diff would still carry its tail marker.)
 av_full() { # <label> <ctx file> <expected diff lines>
-  local cl dl
+  local cl
   cl=$(grep -c '^context filler line' "$2" 2>/dev/null || true)
   [ -n "$cl" ] || cl=0
   [ "$(grep -c '^context filler line' "$AV/stdin")" = "$cl" ] && [ "$cl" -gt 0 ] &&

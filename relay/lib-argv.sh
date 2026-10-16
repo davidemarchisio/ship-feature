@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lib-argv.sh — the argv size guard, shared by pr-review-relay, review-local and lib-opencode.sh.
 #
 # Linux caps ONE argv string at MAX_ARG_STRLEN = 131072 bytes, and that count includes the

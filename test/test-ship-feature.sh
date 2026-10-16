@@ -4390,10 +4390,14 @@ ci_work() { grep "^$1 " "$CISTUB_LOG" | grep -vc ' --version$' | tr -d ' '; }
 ci_files() {
   local line f miss=""
   line=" $(grep "^$1 " "$CISTUB_LOG" | grep -v ' --version$' | head -n 1) "
-  for f in .githooks/pre-push bin/ci bin/ship-feature install.sh scripts/scan-generic.sh scripts/scan-personal-data.sh test/test-ship-feature.sh; do
+  for f in .githooks/pre-push bin/ci bin/ship-feature install.sh scripts/scan-generic.sh scripts/scan-personal-data.sh test/test-ship-feature.sh \
+    relay/bin/ci relay/lib-argv.sh relay/lib-grok.sh relay/lib-opencode.sh relay/lib-panel.sh relay/lib-pi.sh \
+    relay/pr-review-collapse-comments relay/pr-review-consensus relay/pr-review-distill relay/pr-review-fetch \
+    relay/pr-review-relay relay/review-local relay/test/lib-hermetic.sh relay/test/test-distill.sh \
+    relay/test/test-fail-closed.sh relay/test/test-panel-config.sh; do
     case "$line" in *" ./$f "*) ;; *) miss="$miss missing:$f" ;; esac
   done
-  for f in README.md CHANGELOG.md LICENSE mise.toml test/fixtures/leaky.sample relay/; do
+  for f in README.md CHANGELOG.md LICENSE mise.toml test/fixtures/leaky.sample relay/wrap-collapsed-pr-comment.mjs relay/assets/; do
     case "$line" in *"$f"*) miss="$miss extra:$f" ;; esac
   done
   echo "${miss:-ok}"
@@ -4447,7 +4451,7 @@ printf '#!/usr/bin/env bash\necho relay >>"$CISTUB_LOG2"\nexit "${CISTUB_RELAY_R
 ci_commit "$_r" scripts/scan-generic.sh test/test-ship-feature.sh relay/bin/ci
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 ci_run "$_r/bin/ci"
 check "own bin/ci C8a: every stage passes -> exit 0, the leak scan runs, then the suite, then the relay's checks" "$_ci_rc|$(tr '\n' ' ' <"$CISTUB_LOG2")" "0|scan suite relay "
-check "own bin/ci C8a: relay/ is syntax-checked but kept out of lint and format" "$(ci_said 'syntax (4 files)')|$(ci_said 'lint (3 files)')|$(ci_said 'format (3 files)')" "said|said|said"
+check "own bin/ci C8a: relay/ is syntax-checked, linted and formatted like the rest" "$(ci_said 'syntax (4 files)')|$(ci_said 'lint (4 files)')|$(ci_said 'format (4 files)')" "said|said|said"
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_SCAN_RC=1 ci_run "$_r/bin/ci"
 check "own bin/ci C8b: a leak-scan failure -> fails at that stage, the suite does not run" "$_ci_rc|$(ci_said 'bin/ci [leak scan]')|$(tr '\n' ' ' <"$CISTUB_LOG2")" "nonzero|said|scan "
 CISTUB_SC_VERSION="$_sc_pin" CISTUB_FMT_VERSION="$_fmt_pin" CISTUB_SC_RC=0 CISTUB_FMT_RC=0 CISTUB_SUITE_RC=1 ci_run "$_r/bin/ci"

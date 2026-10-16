@@ -113,7 +113,6 @@ panel_config_load() {
     [ -n "${HOME:-}" ] || return 0
     cfg="$HOME/.config/pr-review-relay/config"
   fi
-  PANEL_CONFIG_PATH="$cfg"
   [ -e "$cfg" ] || return 0
   if [ ! -r "$cfg" ]; then
     echo "warning: panel config not readable: $cfg (using defaults)" >&2
@@ -190,7 +189,7 @@ panel_config_load() {
 # shell cannot make an assertion pass by accident. Treating that empty as "disabled" silently
 # unpins the model and the argv assertion fails with a bare `--model`.
 panel_resolve() {
-  local env_name="$1" cfg_key="$2" fallback="${3-}" cfg_name="PANEL_CFG_$2" v
+  local env_name="$1" fallback="${3-}" cfg_name="PANEL_CFG_$2" v
   eval "v=\${$env_name:-}"
   if [ -n "$v" ]; then
     printf '%s' "$v"
@@ -263,7 +262,7 @@ panel_resolve() {
 # `<<<`, refused a few lines down: `<<<` is a PARSE error, so it would take the whole
 # file down at SOURCE time rather than failing this one function at call time.
 review_looks_like_a_review() { # <text>   0 = a review, 1 = no verdict, 2 = verdict then stall
-  local _rlr_norm= _rlr_marker= _rlr_tail= _rlr_after=
+  local _rlr_norm='' _rlr_marker='' _rlr_tail='' _rlr_after=''
 
   # Collapse every whitespace run to one space and lowercase the lot. Both matter:
   # the prompt this guards against is hard-wrapped FIVE different ways across the

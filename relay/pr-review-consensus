@@ -91,7 +91,6 @@ command -v gh >/dev/null || {
 }
 
 PR_URL="$(gh pr view "$PR" --json url -q .url 2>/dev/null || true)"
-REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
 
 echo "▶ PR review consensus"
 echo "  pr:   #$PR ${PR_URL:+($PR_URL)}"

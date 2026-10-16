@@ -66,6 +66,7 @@ PANEL_LIB="$SCRIPT_DIR/lib-panel.sh"
   echo "missing $PANEL_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-panel.sh
 . "$PANEL_LIB"
 panel_config_load
 
@@ -74,12 +75,14 @@ OPENCODE_LIB="$SCRIPT_DIR/lib-opencode.sh"
   echo "missing $OPENCODE_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-opencode.sh
 . "$OPENCODE_LIB"
 ARGV_LIB="$SCRIPT_DIR/lib-argv.sh"
 [ -r "$ARGV_LIB" ] || {
   echo "missing $ARGV_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-argv.sh
 . "$ARGV_LIB"
 argv_limit_check || exit 2
 GROK_LIB="$SCRIPT_DIR/lib-grok.sh"
@@ -87,12 +90,14 @@ GROK_LIB="$SCRIPT_DIR/lib-grok.sh"
   echo "missing $GROK_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-grok.sh
 . "$GROK_LIB"
 PI_LIB="$SCRIPT_DIR/lib-pi.sh"
 [ -r "$PI_LIB" ] || {
   echo "missing $PI_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-pi.sh
 . "$PI_LIB"
 
 DEFAULT_REVIEWERS="claude,codex,grok,opencode"

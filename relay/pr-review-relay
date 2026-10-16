@@ -121,6 +121,7 @@ PANEL_LIB="$SCRIPT_DIR/lib-panel.sh"
   echo "missing $PANEL_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-panel.sh
 . "$PANEL_LIB"
 panel_config_load
 
@@ -129,24 +130,28 @@ OPENCODE_LIB="$SCRIPT_DIR/lib-opencode.sh"
   echo "missing $OPENCODE_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-opencode.sh
 . "$OPENCODE_LIB"
 ARGV_LIB="$SCRIPT_DIR/lib-argv.sh"
 [ -r "$ARGV_LIB" ] || {
   echo "missing $ARGV_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-argv.sh
 . "$ARGV_LIB"
 GROK_LIB="$SCRIPT_DIR/lib-grok.sh"
 [ -r "$GROK_LIB" ] || {
   echo "missing $GROK_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-grok.sh
 . "$GROK_LIB"
 PI_LIB="$SCRIPT_DIR/lib-pi.sh"
 [ -r "$PI_LIB" ] || {
   echo "missing $PI_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-pi.sh
 . "$PI_LIB"
 
 # The default panel is FOUR VENDORS, EVERY SEAT ON A FLAT-RATE SUBSCRIPTION: Anthropic, OpenAI,
@@ -494,6 +499,9 @@ else ROUND_DIR="${TMPDIR:-/tmp}/pr-review-relay-$(id -u)"; fi
 # It no longer is: it now holds REVIEW TEXT and per-run logs, so a directory that is group-writable
 # (a bad umask, a restored backup, a shared build account) would leak review content and let someone
 # plant a symlink for any of the files we create. Same checks, every branch.
+# -m reaches only the last directory, and that is the one that must be private: the parents are
+# $XDG_CACHE_HOME, ~/.cache or $TMPDIR, and the checks below test the leaf alone.
+# shellcheck disable=SC2174
 mkdir -m 700 -p "$ROUND_DIR" 2>/dev/null
 if [ -L "$ROUND_DIR" ] || [ ! -d "$ROUND_DIR" ] || [ ! -O "$ROUND_DIR" ]; then
   echo "✖ refusing to use round-state dir '$ROUND_DIR': not a directory owned by this user." >&2

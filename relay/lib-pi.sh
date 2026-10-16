@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lib-pi.sh — the pi reviewer seats (pi_glm, pi_grok), shared by pr-review-relay and review-local.
 #
 # Why a shared lib: the same anti-drift reason as lib-opencode.sh and lib-grok.sh. Both callers

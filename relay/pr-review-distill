@@ -94,6 +94,7 @@ PANEL_LIB="$SCRIPT_DIR/lib-panel.sh"
   echo "missing $PANEL_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-panel.sh
 . "$PANEL_LIB"
 panel_config_load
 
@@ -102,6 +103,7 @@ OPENCODE_LIB="$SCRIPT_DIR/lib-opencode.sh"
   echo "missing $OPENCODE_LIB (keep it next to this script)" >&2
   exit 1
 }
+# shellcheck source=relay/lib-opencode.sh
 . "$OPENCODE_LIB"
 
 # Before ANY external command is trusted (awk in --help, gh, git, timeout, the agent CLIs):

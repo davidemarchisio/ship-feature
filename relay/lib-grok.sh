@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lib-grok.sh — the Grok reviewer, shared by pr-review-relay and review-local.
 #
 # Why a shared lib: the same anti-drift reason as lib-opencode.sh. Both callers
