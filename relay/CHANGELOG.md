@@ -1,7 +1,7 @@
 # Changelog
 
-All notable changes to **pr-review-relay** are documented here. This project follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+The notable changes to **pr-review-relay** up to its move into ship-feature are documented here.
+It followed [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **This file is closed.** It is the history of pr-review-relay up to 2026-10-15, when the relay

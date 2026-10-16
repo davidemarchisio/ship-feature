@@ -18,7 +18,7 @@ All notable changes to **ship-feature** are documented here. This project follow
   code. `bin/ci` runs `relay/bin/ci` as a new last stage; `relay/` is syntax-checked but stays out
   of shellcheck and shfmt until a commit of pure tool output brings it in. The relay's own pre-push
   hook and its test suite go: ship-feature's hook guards the repository. The commands, flags, exit
-  codes and `~/.config/pr-review-relay/config` do not change. `relay/CHANGELOG.md` is the closed
+  codes and `~/.config/pr-review-relay/config` do not change. [`relay/CHANGELOG.md`](relay/CHANGELOG.md) is the closed
   history of the old repo, with its last unreleased changes; relay changes are recorded here.
 
 - **Two lanes; the light lane is the default.** A change that is not risky skips the plan, the plan

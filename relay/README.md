@@ -303,8 +303,8 @@ bash pr-review-relay --dry-run --author claude
 bash review-local --author claude
 ```
 
-Run it from **inside the repo you want reviewed** (`cd` there first) — not from inside the
-ship-feature clone itself — since the relay resolves the PR for the current working repo's branch.
+Run it from **inside the repo you want reviewed** (`cd` there first), since the relay resolves the
+PR for the current working repo's branch.
 
 `wrap-collapsed-pr-comment.mjs` and `lib-opencode.sh` still need to sit next to the scripts, same as on Linux/macOS.
 
