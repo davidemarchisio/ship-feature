@@ -39,7 +39,10 @@ export CDPATH
 opencode_abs_path() {
   local _dir _base _parent
   case "$1" in
-    /*) printf '%s' "$1"; return;;
+    /*)
+      printf '%s' "$1"
+      return
+      ;;
   esac
   # If the directory doesn't exist the cd fails and $(...) is empty, which would
   # fabricate "/opencode" and make the validation error name a file the user never
@@ -48,7 +51,8 @@ opencode_abs_path() {
   # git reports a PHYSICAL path. Entering the checkout through a symlink would
   # otherwise give /symlink/opencode vs /real/repo — no prefix match, guard bypassed.
   _dir="$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" || _dir=""
-  if [ -n "$_dir" ]; then printf '%s/%s' "$_dir" "$(basename "$1")"
+  if [ -n "$_dir" ]; then
+    printf '%s/%s' "$_dir" "$(basename "$1")"
   else printf '%s' "$1"; fi
 }
 
@@ -80,8 +84,8 @@ opencode_resolve_symlinks() {
     fi
     _t="$(readlink "$_p")" || break
     case "$_t" in
-      /*) _p="$_t";;
-      *)  _p="$(dirname "$_p")/$_t";;
+      /*) _p="$_t" ;;
+      *) _p="$(dirname "$_p")/$_t" ;;
     esac
     _n=$((_n + 1))
   done
@@ -100,7 +104,7 @@ opencode_target_in_repo() {
   [ -n "$_root" ] || return 1
   _root="$(cd -P "$_root" 2>/dev/null && pwd -P)" || return 1
   _target="$(opencode_resolve_symlinks "$1")" || return 1
-  case "$_target" in "$_root"/*) printf '%s' "$_target";; *) return 1;; esac
+  case "$_target" in "$_root"/*) printf '%s' "$_target" ;; *) return 1 ;; esac
 }
 
 # An explicit path pointing INTO the checkout is REFUSED, not merely warned about.
@@ -126,7 +130,7 @@ opencode_reject_explicit_in_repo() {
 opencode_reject_if_in_repo() {
   local _root _target
   _root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  [ -n "$_root" ] || return 0          # no worktree → nothing under review to contain
+  [ -n "$_root" ] || return 0 # no worktree → nothing under review to contain
   _root="$(cd -P "$_root" 2>/dev/null && pwd -P)" || return 0
   # Check what the name actually RESOLVES to, not the name itself: a trusted PATH
   # directory can hold `opencode -> <reviewed-repo>/malicious`, and canonicalizing
@@ -226,7 +230,10 @@ relay_worktree_root() {
   # same predicate, or a HEAD-less /.git would still become the root, which is this bug at the
   # largest blast radius there is.
   relay_is_git_root "" && _found="/"
-  [ -n "$_found" ] && { printf '%s' "$_found"; return 0; }
+  [ -n "$_found" ] && {
+    printf '%s' "$_found"
+    return 0
+  }
   return 1
 }
 
@@ -238,26 +245,32 @@ relay_print_header() {
   local _file="$1" _max="${2:-0}" _line _n=0
   while IFS= read -r _line; do
     _n=$((_n + 1))
-    [ "$_n" = 1 ] && continue                    # shebang
+    [ "$_n" = 1 ] && continue # shebang
     [ "$_max" != 0 ] && [ "$_n" -gt "$_max" ] && break
     case "$_line" in
-      '#'*) _line="${_line#\#}"; printf '%s\n' "${_line# }";;
-      *) [ "$_max" = 0 ] && break;;
+      '#'*)
+        _line="${_line#\#}"
+        printf '%s\n' "${_line# }"
+        ;;
+      *) [ "$_max" = 0 ] && break ;;
     esac
-  done < "$_file"
+  done <"$_file"
 }
 
 # Walk up until something exists, so a not-yet-created PATH entry is still judged
 # against where it WOULD live. Builtins only, same reason as relay_worktree_root.
 relay_nearest_existing_dir() {
   local _d="$1"
-  case "$_d" in /*) ;; *) _d="$(pwd -P)/$_d";; esac
+  case "$_d" in /*) ;; *) _d="$(pwd -P)/$_d" ;; esac
   # No lexical ".." collapsing. Through a symlink it gives the WRONG answer:
   # for `link -> repo/sub`, "link/.." is textually the link's parent but physically
   # `repo`. Trimming segments and letting `cd -P` resolve each candidate gets the
   # directory that would really be used.
   while [ -n "$_d" ] && [ "$_d" != "/" ]; do
-    if [ -d "$_d" ]; then (cd -P "$_d" 2>/dev/null && pwd -P); return 0; fi
+    if [ -d "$_d" ]; then
+      (cd -P "$_d" 2>/dev/null && pwd -P)
+      return 0
+    fi
     _d="${_d%/*}"
     [ -n "$_d" ] || _d="/"
   done
@@ -273,12 +286,15 @@ relay_assert_path_outside_repo() {
   # directory" — so "PATH=/usr/bin:" would have sailed past this check while the
   # shell happily resolved commands from the checkout. Same for a leading or
   # doubled colon. The sentinel makes every field, including empty ones, iterate.
-  [ -n "${PATH:-}" ] || { echo "✖ PATH is empty — refusing to run." >&2; exit 2; }
+  [ -n "${PATH:-}" ] || {
+    echo "✖ PATH is empty — refusing to run." >&2
+    exit 2
+  }
   _rest="$PATH:"
   while [ -n "$_rest" ]; do
     _entry="${_rest%%:*}"
     _rest="${_rest#*:}"
-    [ -n "$_entry" ] || _entry="."          # empty field == current directory
+    [ -n "$_entry" ] || _entry="." # empty field == current directory
     # An entry that does not exist YET is not safe to skip: the unsandboxed
     # reviewers run with write access, so one of them can create it mid-round and
     # every later command resolves from there. Judge it by its nearest existing
@@ -286,11 +302,12 @@ relay_assert_path_outside_repo() {
     _resolved="$(cd -P "$_entry" 2>/dev/null && pwd -P)" || _resolved="$(relay_nearest_existing_dir "$_entry")"
     [ -n "$_resolved" ] || continue
     case "$_resolved" in
-      "$_root"|"$_root"/*)
+      "$_root" | "$_root"/*)
         echo "✖ PATH entry '$_entry' is inside the repository being reviewed." >&2
         echo "  Every command the relay runs (gh, git, timeout, node, …) would be resolved from" >&2
         echo "  the branch under review. Remove that entry from PATH and re-run." >&2
-        exit 2;;
+        exit 2
+        ;;
     esac
   done
 }
@@ -310,22 +327,24 @@ opencode_resolve_bin() {
     # it because users expect it to work — but only when HOME is actually set,
     # otherwise "~/bin/opencode" would silently become "/bin/opencode".
     case "$OPENCODE_BIN" in
-      '~'|'~/'*)
+      '~' | '~/'*)
         [ -n "${HOME:-}" ] || {
           echo "✖ PR_RELAY_OPENCODE_BIN=${PR_RELAY_OPENCODE_BIN} starts with ~ but HOME is unset." >&2
           exit 2
         }
         case "$OPENCODE_BIN" in
-          '~')  OPENCODE_BIN="$HOME";;
-          *)    OPENCODE_BIN="$HOME/${OPENCODE_BIN#\~/}";;
-        esac;;
+          '~') OPENCODE_BIN="$HOME" ;;
+          *) OPENCODE_BIN="$HOME/${OPENCODE_BIN#\~/}" ;;
+        esac
+        ;;
     esac
     case "$OPENCODE_BIN" in
       */*)
         OPENCODE_BIN="$(opencode_abs_path "$OPENCODE_BIN")"
         # A typed path is contained too: refused if it lands inside the checkout,
         # with PR_RELAY_OPENCODE_ALLOW_IN_REPO=1 as the deliberate way through.
-        opencode_reject_explicit_in_repo "$OPENCODE_BIN";;
+        opencode_reject_explicit_in_repo "$OPENCODE_BIN"
+        ;;
       *)
         # A BARE name means "on PATH", so resolve it there and nowhere else — never
         # fall back to the literal name, which opencode_abs_path would turn into
@@ -338,7 +357,8 @@ opencode_resolve_bin() {
           exit 2
         }
         OPENCODE_BIN="$(opencode_abs_path "$OPENCODE_BIN")"
-        opencode_reject_if_in_repo "$OPENCODE_BIN";;
+        opencode_reject_if_in_repo "$OPENCODE_BIN"
+        ;;
     esac
     # Fail fast: a user-supplied override that cannot run is a configuration error,
     # not something to surface minutes later as a vague "not installed" skip.
@@ -363,7 +383,7 @@ opencode_resolve_bin() {
     # third time a branch was missing it.
     opencode_reject_if_in_repo "$OPENCODE_BIN"
   else
-    OPENCODE_BIN=opencode   # keep the bare name so the caller's "not installed" path reports it
+    OPENCODE_BIN=opencode # keep the bare name so the caller's "not installed" path reports it
   fi
 }
 
@@ -490,11 +510,12 @@ relay_assert_tmpdir_outside_repo() {
   _root="$(cd -P "$_root" 2>/dev/null && pwd -P)" || return 0
   _dir="$(cd -P "$1" 2>/dev/null && pwd -P)" || return 0
   case "$_dir" in
-    "$_root"/*|"$_root")
+    "$_root"/* | "$_root")
       echo "✖ the attachment dir '$_dir' is inside the repository being reviewed." >&2
       echo "  TMPDIR points into the checkout, so the reviewer would run there. Set TMPDIR" >&2
       echo "  to a path outside the repository." >&2
-      exit 2;;
+      exit 2
+      ;;
   esac
 }
 
@@ -509,7 +530,8 @@ opencode_review() {
   local diff_file oc_prompt _abs_path _rest _pe
   local -a model=()
   # Through opencode_resolve_model so ~/.config/pr-review-relay/config can pin this seat like any other.
-  local _m; _m="$(opencode_resolve_model)"
+  local _m
+  _m="$(opencode_resolve_model)"
   [ -n "$_m" ] && model=(-m "$_m")
 
   # UNIQUE per invocation. A fixed name races: both callers dedupe their reviewer
@@ -519,7 +541,8 @@ opencode_review() {
   # a failed one because it still looks like a verdict. mktemp inside the
   # already-private attach dir keeps the EXIT-trap cleanup working unchanged.
   diff_file="$(mktemp "$attach_dir/oc-diff.XXXXXX")" || {
-    echo "cannot create the diff attachment in $attach_dir" >&2; return 1
+    echo "cannot create the diff attachment in $attach_dir" >&2
+    return 1
   }
   # Canonicalize before the cd below: with a RELATIVE TMPDIR, mktemp hands back a
   # relative path, and `<"$diff_file"` / `2>"$errf"` would then resolve against
@@ -529,7 +552,10 @@ opencode_review() {
   # A failed or short write (full disk, I/O error) would hand the agent a truncated
   # diff; it would still produce a confident-looking review of half a change, and
   # the relay would count that as a clean reviewer. Fail instead.
-  printf '%s' "$diff" > "$diff_file" || { echo "cannot write the diff attachment" >&2; return 1; }
+  printf '%s' "$diff" >"$diff_file" || {
+    echo "cannot write the diff attachment" >&2
+    return 1
+  }
 
   # The file is fed on STDIN, not with `-f`. opencode injects only the first ~1035
   # lines of an attachment and then leaves the agent to fetch the rest — which it
@@ -556,7 +582,8 @@ opencode_review() {
     echo "opencode: lib-argv.sh is not loaded, so the argv size guard is missing — refusing to start the seat" >&2
     return 1
   fi
-  local _oc_n; _oc_n="$(argv_bytes "$oc_prompt")"
+  local _oc_n
+  _oc_n="$(argv_bytes "$oc_prompt")"
   if ! argv_fits "$_oc_n"; then
     argv_refuse opencode "$_oc_n" "shorten the --context-file or use another seat"
     return 75
@@ -569,7 +596,8 @@ opencode_review() {
   _abs_path=""
   _rest="$PATH:"
   while [ -n "$_rest" ]; do
-    _pe="${_rest%%:*}"; _rest="${_rest#*:}"
+    _pe="${_rest%%:*}"
+    _rest="${_rest#*:}"
     [ -n "$_pe" ] || _pe="."
     _pe="$(cd -P "$_pe" 2>/dev/null && pwd -P)" || continue
     _abs_path="${_abs_path:+$_abs_path:}$_pe"
@@ -580,12 +608,16 @@ opencode_review() {
     return 1
   }
   (
-    cd "$attach_dir" 2>/dev/null || { echo "cannot enter the attachment dir $attach_dir" >&2; exit 1; }
+    cd "$attach_dir" 2>/dev/null || {
+      echo "cannot enter the attachment dir $attach_dir" >&2
+      exit 1
+    }
     PATH="$_abs_path"
     OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
-    timeout "$agent_timeout" "$OPENCODE_BIN" --pure run \
+      timeout "$agent_timeout" "$OPENCODE_BIN" --pure run \
       --agent pr-review-relay-ro ${model[@]+"${model[@]}"} -- "$oc_prompt" \
-      <"$diff_file" 2>"$errf" )
+      <"$diff_file" 2>"$errf"
+  )
   # The redirect is not cosmetic, and it is a REPLACEMENT for `</dev/null`, never a
   # removal: opencode reads non-TTY stdin and appends it to the prompt. The relay
   # pipes data to other reviewers, so without a redirect here whatever it was
@@ -606,11 +638,16 @@ opencode_review() {
 # into "opencode" and silently select a reviewer nobody named — and if the two
 # call sites disagree about this, a name can skip binary resolution here and then
 # still be dispatched as opencode later.
-relay_trim() { local _s="$1"; _s="${_s#"${_s%%[![:space:]]*}"}"; printf '%s' "${_s%"${_s##*[![:space:]]}"}"; }
+relay_trim() {
+  local _s="$1"
+  _s="${_s#"${_s%%[![:space:]]*}"}"
+  printf '%s' "${_s%"${_s##*[![:space:]]}"}"
+}
 
 opencode_is_selected() {
-  local _r; local -a _list=()
-  IFS=',' read -ra _list <<< "$REVIEWERS"
+  local _r
+  local -a _list=()
+  IFS=',' read -ra _list <<<"$REVIEWERS"
   # ${arr[@]+"${arr[@]}"} looks unquoted but is not: the outer +-form only guards
   # against an empty array under `set -u` (Bash 3.2 errors on "${arr[@]}" when the
   # array is empty), while the inner quotes preserve elements verbatim. Verified

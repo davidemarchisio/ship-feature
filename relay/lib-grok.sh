@@ -33,14 +33,15 @@
 # The default does not follow whatever xAI ships latest: a default that moves on its own changes
 # what the panel says without anyone deciding it. It moved once on purpose, grok-4.5 -> grok-4.6
 # on 2026-09-25, so that an unpinned `grok` runs the same model here and in ship-feature.
-grok_resolve_model()  { panel_resolve GROK_REVIEW_MODEL MODEL_grok grok-4.6; }
+grok_resolve_model() { panel_resolve GROK_REVIEW_MODEL MODEL_grok grok-4.6; }
 grok_resolve_effort() { panel_resolve GROK_REVIEW_EFFORT EFFORT_grok medium; }
 
 # --- Reviewer selection ------------------------------------------------------
 # Reads $REVIEWERS and $AUTHOR from the caller. Same trim rules as opencode_is_selected.
 grok_is_selected() {
-  local _r; local -a _list=()
-  IFS=',' read -ra _list <<< "$REVIEWERS"
+  local _r
+  local -a _list=()
+  IFS=',' read -ra _list <<<"$REVIEWERS"
   for _r in ${_list[@]+"${_list[@]}"}; do
     _r="$(relay_trim "$_r")"
     [ "$_r" = grok ] && [ "$_r" != "$AUTHOR" ] && return 0
@@ -85,7 +86,7 @@ grok_review() {
     echo "grok_review: 'grok' is not an executable file ($grok_bin)" >&2
     return 127
   }
-  case "$grok_bin" in /*) ;; *) grok_bin="$(cd -- "$(dirname "$grok_bin")" && pwd)/$(basename "$grok_bin")";; esac
+  case "$grok_bin" in /*) ;; *) grok_bin="$(cd -- "$(dirname "$grok_bin")" && pwd)/$(basename "$grok_bin")" ;; esac
   # Refuse a PATH symlink (or binary) that resolves inside the repo under review —
   # same containment as opencode_reject_if_in_repo (already sourced via lib-opencode).
   if command -v opencode_reject_if_in_repo >/dev/null 2>&1; then
@@ -100,11 +101,11 @@ grok_review() {
   fi
   case "$timeout_bin" in
     /*) ;;
-    *) timeout_bin="$(cd -- "$(dirname "$timeout_bin")" && pwd)/$(basename "$timeout_bin")";;
+    *) timeout_bin="$(cd -- "$(dirname "$timeout_bin")" && pwd)/$(basename "$timeout_bin")" ;;
   esac
 
   # Absolute errf before cd (relative TMPDIR would otherwise write into iso_cwd).
-  case "$errf" in /*) ;; *) errf="$(cd -- "$(dirname "$errf")" && pwd)/$(basename "$errf")";; esac
+  case "$errf" in /*) ;; *) errf="$(cd -- "$(dirname "$errf")" && pwd)/$(basename "$errf")" ;; esac
 
   # Pin PATH to absolute entries so nothing resolves relative to iso_cwd after cd.
   local _p _np="" _IFS="$IFS"
@@ -112,12 +113,13 @@ grok_review() {
   for _p in $PATH; do
     [ -n "$_p" ] || continue
     case "$_p" in
-      /*) _np="${_np:+$_np:}$_p";;
+      /*) _np="${_np:+$_np:}$_p" ;;
       *)
         if [ -d "$_p" ]; then
           _abs="$(cd -- "$_p" 2>/dev/null && pwd)" || continue
           _np="${_np:+$_np:}$_abs"
-        fi;;
+        fi
+        ;;
     esac
   done
   IFS="$_IFS"
@@ -134,8 +136,8 @@ grok_review() {
     echo "grok_review: cannot create prompt-file under $attach_dir" >&2
     return 1
   }
-  case "$prompt_file" in /*) ;; *) prompt_file="$(cd -- "$(dirname "$prompt_file")" && pwd)/$(basename "$prompt_file")";; esac
-  case "$iso_cwd" in /*) ;; *) iso_cwd="$(cd -- "$iso_cwd" && pwd)";; esac
+  case "$prompt_file" in /*) ;; *) prompt_file="$(cd -- "$(dirname "$prompt_file")" && pwd)/$(basename "$prompt_file")" ;; esac
+  case "$iso_cwd" in /*) ;; *) iso_cwd="$(cd -- "$iso_cwd" && pwd)" ;; esac
 
   # Build the full prompt. ALWAYS embed the complete diff — Grok cannot run gh
   # under --sandbox read-only, and headless ignores stdin. Do not reuse the
@@ -146,12 +148,12 @@ grok_review() {
     "$diff")"
 
   # Write + verify complete (same class of guard as opencode's attach path).
-  if ! printf '%s' "$body" > "$prompt_file"; then
+  if ! printf '%s' "$body" >"$prompt_file"; then
     echo "grok_review: failed to write prompt-file" >&2
     return 1
   fi
   expected_bytes=$(printf '%s' "$body" | wc -c | tr -d ' ')
-  actual_bytes=$(wc -c < "$prompt_file" | tr -d ' ')
+  actual_bytes=$(wc -c <"$prompt_file" | tr -d ' ')
   if [ -z "$actual_bytes" ] || [ "$actual_bytes" = 0 ] || [ "$actual_bytes" != "$expected_bytes" ]; then
     echo "grok_review: prompt-file write incomplete (expected ${expected_bytes}B, got ${actual_bytes:-0}B)" >&2
     return 1

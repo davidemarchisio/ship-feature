@@ -19,8 +19,11 @@ ARG_STRLEN_KERNEL=131072
 # run `set -u`, so the variable is read with a default.
 argv_limit() {
   local v="${PR_RELAY_ARGV_MAX_BYTES:-}"
-  if [ -z "$v" ]; then printf '%s\n' "$ARG_STRLEN_DEFAULT"; return 0; fi
-  case "$v" in *[!0-9]*) return 1;; esac
+  if [ -z "$v" ]; then
+    printf '%s\n' "$ARG_STRLEN_DEFAULT"
+    return 0
+  fi
+  case "$v" in *[!0-9]*) return 1 ;; esac
   [ "$v" -ge 1 ] && [ "$v" -le "$ARG_STRLEN_KERNEL" ] || return 1
   printf '%s\n' "$v"
 }
@@ -37,9 +40,10 @@ argv_bytes() { printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '; }
 
 # True when an argv element of $1 bytes (plus its NUL) is within the limit.
 argv_fits() {
-  case "${1:-}" in ''|*[!0-9]*) return 1;; esac   # fail closed: an empty or non-numeric size never "fits"
-  local lim; lim="$(argv_limit)" || return 1
-  [ $(( $1 + 1 )) -le "$lim" ]
+  case "${1:-}" in '' | *[!0-9]*) return 1 ;; esac # fail closed: an empty or non-numeric size never "fits"
+  local lim
+  lim="$(argv_limit)" || return 1
+  [ $(($1 + 1)) -le "$lim" ]
 }
 
 # The refusal: a named reason on STDERR only. Stdout stays empty, because a non-empty stdout is

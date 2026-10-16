@@ -82,7 +82,7 @@ panel_reset_cfg() {
   # it to a zsh or dash child, and a `[ -n "$BASH_VERSION" ]` guard then runs `${!PANEL_CFG_@}`
   # there anyway — `bad substitution`, and under dash the whole load aborts. The eval'd string is
   # a fixed literal, never anything read from the config file.
-  if ( eval 'set -- ${!PANEL_CFG_@}' ) 2>/dev/null; then
+  if (eval 'set -- ${!PANEL_CFG_@}') 2>/dev/null; then
     eval 'for _k in ${!PANEL_CFG_@}; do unset "$_k"; done'
   fi
   PANEL_CFG_KEYS=
@@ -103,7 +103,7 @@ panel_config_load() {
   # caller with a config file it believes was read. Probed rather than inferred from a shell name,
   # because BASH_VERSION can be exported into another shell by a parent. The probe runs AFTER the
   # reset, so the "cannot load" path still cannot leave an inherited value standing.
-  if ! ( printf -v _panel_probe '%s' x ) 2>/dev/null; then
+  if ! (printf -v _panel_probe '%s' x) 2>/dev/null; then
     echo "warning: this shell has no 'printf -v'; lib-panel.sh loaded no config" >&2
     return 0
   fi
@@ -126,10 +126,16 @@ panel_config_load() {
     line="${line#$'\xef\xbb\xbf'}"
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
-    case "$line" in ''|'#'*) continue;; esac
+    case "$line" in '' | '#'*) continue ;; esac
     case "$line" in
-      *=*) key="${line%%=*}"; val="${line#*=}" ;;
-      *) echo "warning: ignoring malformed line in $cfg: $line" >&2; continue ;;
+      *=*)
+        key="${line%%=*}"
+        val="${line#*=}"
+        ;;
+      *)
+        echo "warning: ignoring malformed line in $cfg: $line" >&2
+        continue
+        ;;
     esac
     key="${key%"${key##*[![:space:]]}"}"
     val="${val#"${val%%[![:space:]]*}"}"
@@ -138,19 +144,21 @@ panel_config_load() {
     # like MODEL_x[$(id)] would execute the command substitution while merely "parsing" the file.
     # The whole point of not sourcing this file is that reading it must not run anything.
     case "$key" in
-      ''|*[!A-Za-z0-9_]*)
-        echo "warning: ignoring invalid key in $cfg: $key" >&2; continue ;;
+      '' | *[!A-Za-z0-9_]*)
+        echo "warning: ignoring invalid key in $cfg: $key" >&2
+        continue
+        ;;
     esac
     case "$key" in
-      REVIEWERS|PLAN_REVIEWERS|AGENT_TIMEOUT) ;;
-      MODEL_*|EFFORT_*)
+      REVIEWERS | PLAN_REVIEWERS | AGENT_TIMEOUT) ;;
+      MODEL_* | EFFORT_*)
         # The documented rule is that the suffix is the SEAT name you pass to --reviewers. One
         # seat broke it: antigravity's variable is AGY_REVIEW_MODEL, so the call site read
         # MODEL_agy and MODEL_antigravity was accepted, stored, and never read by anything —
         # a setting that vanishes in silence, which is the failure this whole file exists to
         # prevent. The seat name is now the real key and `agy` is folded into it.
         case "$key" in
-          MODEL_agy)  key=MODEL_antigravity ;;
+          MODEL_agy) key=MODEL_antigravity ;;
           EFFORT_agy) key=EFFORT_antigravity ;;
         esac
         # A suffix that is not a seat is still stored — ship-feature reads this same file and may
@@ -161,12 +169,15 @@ panel_config_load() {
           *) echo "warning: no reviewer seat named '${key#*_}' in $cfg: $key (stored, but nothing here reads it)" >&2 ;;
         esac
         ;;
-      *) echo "warning: unknown key in $cfg: $key" >&2; continue ;;
+      *)
+        echo "warning: unknown key in $cfg: $key" >&2
+        continue
+        ;;
     esac
     # An empty value means "not configured" — the resolver falls through to the script default.
     printf -v "PANEL_CFG_$key" '%s' "$val"
     PANEL_CFG_KEYS="${PANEL_CFG_KEYS:+$PANEL_CFG_KEYS }$key"
-  done < "$cfg"
+  done <"$cfg"
 }
 
 # Resolve one setting through the precedence list. $1 = env var name, $2 = config key,
@@ -181,9 +192,15 @@ panel_config_load() {
 panel_resolve() {
   local env_name="$1" cfg_key="$2" fallback="${3-}" cfg_name="PANEL_CFG_$2" v
   eval "v=\${$env_name:-}"
-  if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  if [ -n "$v" ]; then
+    printf '%s' "$v"
+    return 0
+  fi
   eval "v=\${$cfg_name:-}"
-  if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  if [ -n "$v" ]; then
+    printf '%s' "$v"
+    return 0
+  fi
   printf '%s' "$fallback"
 }
 
@@ -289,14 +306,14 @@ review_looks_like_a_review() { # <text>   0 = a review, 1 = no verdict, 2 = verd
   # `should[- ]fix(es)?` and not `fixe?s?`, which also matched `should-fixs`.
   # `verdict: clean` counts as an approval too: a reviewer may still end with it, and
   # "No issues. VERDICT: clean" names no severity and never says "looks good".
-  printf '%s' "$_rlr_norm" \
-    | grep -E '(^|[^a-z0-9_])(blockers?|nits?|should[- ]fix(es)?)([^a-z0-9_]|$)' >/dev/null \
-    && _rlr_marker=1
-  printf '%s' "$_rlr_norm" \
-    | grep -E '(^|[^a-z0-9_])(lgtm|looks good|no findings|nothing to flag|none found|verdict: clean)([^a-z0-9_]|$)' >/dev/null \
-    && _rlr_marker=1
+  printf '%s' "$_rlr_norm" |
+    grep -E '(^|[^a-z0-9_])(blockers?|nits?|should[- ]fix(es)?)([^a-z0-9_]|$)' >/dev/null &&
+    _rlr_marker=1
+  printf '%s' "$_rlr_norm" |
+    grep -E '(^|[^a-z0-9_])(lgtm|looks good|no findings|nothing to flag|none found|verdict: clean)([^a-z0-9_]|$)' >/dev/null &&
+    _rlr_marker=1
 
-  [ -n "$_rlr_marker" ] || return 1   # nothing that claims a verdict
+  [ -n "$_rlr_marker" ] || return 1 # nothing that claims a verdict
 
   # The exemption for a review that ends in a verdict is checked on the CLOSING
   # SENTENCE below, not on the body. Exempting the whole body was too wide: "Looks
@@ -386,7 +403,7 @@ review_looks_like_a_review() { # <text>   0 = a review, 1 = no verdict, 2 = verd
     '(^|[^a-z0-9_])(blockers?|nits?|should[- ]fix(es)?|lgtm|looks good|no findings|nothing to flag|none found|verdict: clean)([^a-z0-9_]|$)' \
     >/dev/null && return 0
 
-  return 2   # claims a verdict, then says it is still working
+  return 2 # claims a verdict, then says it is still working
 }
 
 # " (model=…, effort=…)" for a seat's dispatch line, from the SAME values its call site passes.
@@ -405,24 +422,31 @@ panel_seat_pins() { # <seat>
   case "$1" in
     claude)
       printf ' (model=%s, fallback=%s, effort=%s)' "${CLAUDE_REVIEW_MODEL:-cli default}" \
-        "${CLAUDE_REVIEW_FALLBACK_MODEL:-none}" "${CLAUDE_REVIEW_EFFORT:-cli default}" ;;
+        "${CLAUDE_REVIEW_FALLBACK_MODEL:-none}" "${CLAUDE_REVIEW_EFFORT:-cli default}"
+      ;;
     codex)
-      printf ' (model=%s, effort=%s)' "${CODEX_REVIEW_MODEL:-cli default}" "${CODEX_REVIEW_EFFORT:-cli default}" ;;
+      printf ' (model=%s, effort=%s)' "${CODEX_REVIEW_MODEL:-cli default}" "${CODEX_REVIEW_EFFORT:-cli default}"
+      ;;
     cursor)
-      printf ' (model=%s)' "${CURSOR_REVIEW_MODEL:-cli default}" ;;
-    antigravity|agy)
-      printf ' (model=%s)' "${AGY_REVIEW_MODEL:-cli default}" ;;
+      printf ' (model=%s)' "${CURSOR_REVIEW_MODEL:-cli default}"
+      ;;
+    antigravity | agy)
+      printf ' (model=%s)' "${AGY_REVIEW_MODEL:-cli default}"
+      ;;
     grok)
       command -v grok_resolve_model >/dev/null 2>&1 || return 0
-      printf ' (model=%s, effort=%s)' "$(grok_resolve_model)" "$(grok_resolve_effort)" ;;
+      printf ' (model=%s, effort=%s)' "$(grok_resolve_model)" "$(grok_resolve_effort)"
+      ;;
     opencode)
       command -v opencode_resolve_model >/dev/null 2>&1 || return 0
       _psp_m="$(opencode_resolve_model)"
-      printf ' (model=%s)' "${_psp_m:-cli default}" ;;
-    pi_glm|pi_grok)
+      printf ' (model=%s)' "${_psp_m:-cli default}"
+      ;;
+    pi_glm | pi_grok)
       # effort= like every other seat, and like the EFFORT_<seat> key; pi receives it as --thinking.
       command -v pi_resolve_model >/dev/null 2>&1 || return 0
-      printf ' (model=%s, effort=%s)' "$(pi_resolve_model "$1")" "$(pi_resolve_effort "$1")" ;;
+      printf ' (model=%s, effort=%s)' "$(pi_resolve_model "$1")" "$(pi_resolve_effort "$1")"
+      ;;
   esac
   return 0
 }
