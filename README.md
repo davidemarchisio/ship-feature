@@ -30,8 +30,9 @@ each driver agent (Claude, Codex, Cursor) gets a thin adapter that points at it,
 (the older history stays in [hamen/pr-review-relay](https://github.com/hamen/pr-review-relay)). One
 clone and one `install.sh` give you everything: `install.sh` now also links
 `review-local`, `pr-review-relay` and their helpers into `~/.local/bin`. `ship-feature review` is the
-light lane's review step (a pass-through to `review-local`). The commands, flags, exit codes and
-`~/.config/pr-review-relay/config` do not change. Autonomous mode is gone: the light lane replaced it.
+light lane's review step (a pass-through to `review-local`). The move does not change the commands,
+flags, exit codes or `~/.config/pr-review-relay/config`. Autonomous mode is gone: the light lane
+replaced it.
 
 **v0.7.0** — **two lanes, and the light lane is the default.** A change that is not risky now
 skips the plan, the PR and the human merge: one review round by the configured panel, then
@@ -56,8 +57,8 @@ work still to come. If it does not, the answer is not posted and the round fails
 any text at all counted as a verdict.
 
 **v0.7.0** — **`preflight` needs a committed pre-push hook.** It refuses a repository without a
-committed, executable `.githooks/pre-push` that git runs on push. For most clones the fix is
-`git config core.hooksPath .githooks`.
+committed, executable `.githooks/pre-push` that git runs on push. When the hook is committed but
+git does not run it, the fix is `git config core.hooksPath .githooks`.
 
 **v0.6.0** — **every plan-review seat is pinned from the one shared config, and the seat names stop
 lying.** `claude` and `codex` ran bare in plan-review, so `MODEL_claude`, `MODEL_codex` and
