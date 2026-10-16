@@ -245,10 +245,9 @@ pi_review() {
   # The full prompt. ALWAYS the complete diff: the seat has no checkout, no tool and no network.
   # Do not reuse the relay's size-thresholded $PROMPT, which may omit the diff and tell agents to
   # fetch it.
-  body="$(printf '%s\n\nYou are reviewing %s.\nYou have no checkout, no tools and no network. The COMPLETE change is in the fenced DIFF section below: review that content only. DO NOT modify anything. Look for correctness bugs, security issues, broken edge cases, regressions, missing or inadequate tests for the behaviour the change touches, and clear design or maintainability problems. Give a file and line reference for every finding where one applies. Report missing tests as Should-fix, unless the untested path is itself a Blocker. Be concise. Group findings by severity: Blocker / Should-fix / Nit. If it looks good, say so in one line.%s\n\n--- DIFF ---\n```diff\n%s\n```\n--- END DIFF ---\n' \
+  body="$(printf '%s\n\nYou are reviewing %s.\nYou have no checkout, no tools and no network. The COMPLETE change is in the fenced DIFF section below: review that content only. DO NOT modify anything. Look for correctness bugs, security issues, broken edge cases, regressions, missing or inadequate tests for the behaviour the change touches, and clear design or maintainability problems. Give a file and line reference for every finding where one applies. Report missing tests as Should-fix, unless the untested path is itself a Blocker. Be concise. Group findings by severity: Blocker / Should-fix / Nit. If it looks good, say so in one line.\n\n--- DIFF ---\n```diff\n%s\n```\n--- END DIFF ---\n' \
     "${context_block}" \
     "$subject" \
-    "${PR_RELAY_VERDICT_RULES:+ $PR_RELAY_VERDICT_RULES}" \
     "$diff")"
 
   # Write, then verify it is complete (same guard as grok's prompt file).
