@@ -193,9 +193,9 @@ a file the codex seat reads goes to OpenAI — `--sandbox read-only` restricts w
 is printed to your terminal only; nothing posts it. The one seat that never reads the checkout is
 `antigravity`/`gemini`, which is fully isolated and sees the plan text only, so review a plan for a
 repository you do not trust with that seat, or not at all.
-Exit `0` = every reviewer responded, `3` = a
-reviewer failed/timed out/returned empty (re-run — see the two-consecutive-failure rule below), `1` =
-usage error. The single-reviewer default still works too:
+Exit `0` = every reviewer returned a review, `3` = a reviewer failed/timed out/returned empty/answered
+without a verdict (re-run — see the two-consecutive-failure rule below), `1` = usage error. The
+single-reviewer default still works too:
 `cat ~/.config/ship-feature/plans/<repo>-<slug>.md | codex exec --sandbox read-only`.
 
 Read the feedback and revise — but only within the cap below, not without limit. The reviewers catch
@@ -209,13 +209,14 @@ exists, not a **PR** under cross-review, so "plan-qualifying" below is a distinc
 "qualifying Should-fix" (correctness / safety / deployability / verification) — do not conflate the two.
 
 - **A round** is one `plan-review` invocation where every dispatched reviewer returned a review (exit
-  `0`). Exit `3` (a reviewer failed, timed out, or returned empty) does **not** count as a round —
-  re-run it. If the **same** reviewer hits exit `3` on **two consecutive attempts** at the same round,
-  stop retrying that reviewer, drop that reviewer for the round, and proceed with the remaining panel
-  — but **tell the human about the reduced panel** before Gate 1, the same way a benched reviewer in
-  step 5's initial or closing round is the human's call, not a silent substitution. **If dropping the
-  reviewer leaves zero reviewers, that is not a completed round at all** — stop and take the failure
-  itself to Gate 1 (a plan nobody reviewed is not "the agreed plan").
+  `0`). Exit `3` (a reviewer failed, timed out, returned empty, or answered without a verdict) does
+  **not** count as a round — re-run it. If the **same** reviewer hits exit `3` on **two consecutive
+  attempts** at the same round, stop retrying that reviewer, drop that reviewer for the round, and
+  proceed with the remaining panel — but **tell the human about the reduced panel** before Gate 1,
+  the same way a benched reviewer in step 5's initial or closing round is the human's call, not a
+  silent substitution. **If dropping the reviewer leaves zero reviewers, that is not a completed
+  round at all** — stop and take the failure itself to Gate 1 (a plan nobody reviewed is not "the
+  agreed plan").
 - **Cap: 1 round.** One round with the full configured panel (`SHIP_FEATURE_PLAN_REVIEWERS`, or a
   `--reviewers` override). Fix each Blocker and each plan-qualifying Should-fix in the plan, then go to
   Gate 1 with the revised plan and a short list of what changed and why. Do not run a second round on

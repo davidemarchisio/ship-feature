@@ -739,6 +739,7 @@ for ((_i=0; _i<\${#_args[@]}; _i++)); do
     break
   fi
 done
+echo "Looks good."
 exit ${2:-0}
 STUB
   chmod +x "$PBIN/$3"
@@ -833,6 +834,7 @@ lockedsame=no
 cmp -s "$GEMINI_CLI_HOME/.gemini/settings.json" .gemini/settings.json && lockedsame=yes
 echo "GEMINI-ISO cwd=$PWD locked=$locked homeiso=$homeiso credsafe=$credsafe sysiso=$sysiso xdg=${XDG_CONFIG_HOME-UNSET} envstop=$envstop gca=$gca homecreds=$homecreds credmode=$credmode lockedsame=$lockedsame stdinbytes=$stdinbytes stdinmagic=$stdinmagic cae=${CODE_ASSIST_ENDPOINT-UNSET} gburl=${GEMINI_BASE_URL-UNSET} ggburl=${GOOGLE_GEMINI_BASE_URL-UNSET} credwalk=$credwalk"
 echo "REVIEW-gemini argv=[$*]"
+echo "Looks good."
 exit 0
 GEMINISTUB
 chmod +x "$PBIN/gemini"
@@ -2264,6 +2266,7 @@ cat >"$PBIN/grok" <<'STUB'
 #!/usr/bin/env bash
 echo "info: sandbox profile read-only applied; namespace ready" >&2
 echo "REVIEW-grok argv=[$*] CWD=[${PWD}]"
+echo "Looks good."
 exit 0
 STUB
 chmod +x "$PBIN/grok"
@@ -2387,6 +2390,30 @@ done
 check "plan-review missing grok binary → fail (3)" $? 3
 make_reviewer grok 0 grok # restore
 
+# --- an answer that is not a review fails the round (the relay's gate, relay/lib-panel.sh) -------
+# Any text at all used to count as a seat's verdict. Two shapes from real runs: no verdict at all,
+# and a verdict followed by "still reading". Each must exit 3, be labelled, and never appear under
+# the "(plan review)" banner, where the reader would take it for a review.
+gate_case() { # <label> <body> <expected label text>
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\nexit 0\n' "$2" >"$PBIN/claude"
+  chmod +x "$PBIN/claude"
+  out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude 2>&1)
+  check "$1" "$?|$(printf '%s' "$out" | grep -c "$3")|$(printf '%s' "$out" | grep -cF "│ $2")|$(printf '%s' "$out" | grep -c 'Claude (plan review)')" "3|1|1|0"
+}
+gate_case "plan-review: an answer with no verdict fails the round (3)" \
+  "Reading the plan before reviewing." "names no severity"
+gate_case "plan-review: a verdict followed by more reading fails the round (3)" \
+  "Blocker: none in the first half. Let me read the rest before concluding." "still reading"
+# The accept side, not only "Looks good.": a review that names a severity passes, and reading
+# mentioned EARLIER in the answer is fine while the answer ends on a finding.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\nexit 0\n' $'I read the plan twice before I wrote this.\nShould-fix: the rollback step has no owner.' >"$PBIN/claude"
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude 2>&1)
+check "plan-review: a review that names a severity passes the gate (0), under the banner" \
+  "$?|$(printf '%s' "$out" | grep -c 'Claude (plan review)')|$(printf '%s' "$out" | grep -c 'rollback step has no owner')" "0|1|1"
+make_reviewer claude 0 claude # restore
+printf 'plan\n' | PATH="$PBIN:$PATH" bash "$CLI" plan-review --reviewers claude >/dev/null 2>&1
+check "plan-review: the restored claude stub, which says it looks good, passes the gate (0)" $? 0
+
 # --- pi seats: pi_glm and pi_grok, one `pi` binary with a model each ---------------------------
 # The panel runs both seats in parallel, so the stub keeps its records PER SEAT, keyed from its
 # --model value: split on / and -, exactly one part must be `glm` or `grok`. Any other value prints
@@ -2439,7 +2466,7 @@ const ok = () => {
   out({ type: "session", version: 3 });
   end("toolUse", "THINKING-TEXT");
   out({ type: "tool_execution_end", toolName: "read" });
-  end("stop", "REVIEW-pi-" + model + "\nThe plan is sound.");
+  end("stop", "REVIEW-pi-" + model + "\nThe plan is sound. Looks good.");
 };
 switch (mode) {
   case "garbage": process.stdout.write("not json\n{\"broken\n"); ok(); process.stdout.write("trailing text\n"); break;
@@ -3271,6 +3298,7 @@ echo "start" >> "$OVERLAP_LOG"
 sleep 1
 echo "end" >> "$OVERLAP_LOG"
 echo "REVIEW-$_slow"
+echo "Looks good."
 SLOWSTUB
   chmod +x "$PBIN/$_slow"
 done
@@ -4540,7 +4568,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=508
+EXPECTED=512
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
