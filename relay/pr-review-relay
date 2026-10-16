@@ -661,9 +661,9 @@ unset _origin_url _origin _oname _oowner
 # would silently skip) or "."/".." — either would reopen a fail-open hole.
 status_key() { printf 'k_%s' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"; }
 
-# One EXIT handler for everything this script creates. It does NOT call `exit`: bash then leaves
-# with the status it was already leaving with, and a signal stays that signal (an `exit` inside the
-# handler is how a TERM'd shell can end up reporting 0).
+# One EXIT handler for everything this script creates. It does NOT call `exit`, so the relay leaves
+# with the status it was already leaving with. (A signal stays that signal either way: measured on
+# bash 5.2, a TERM'd shell dies of the signal even when its EXIT trap calls `exit`.)
 relay_exit() {
   rm -rf "${STATUS_DIR:-}" ${ATTACH_DIR:+"$ATTACH_DIR"}
 }

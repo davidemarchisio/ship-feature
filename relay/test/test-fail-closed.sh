@@ -3184,11 +3184,12 @@ else
 fi
 
 # --- a SIGTERM still kills the relay, and the handler still cleans up -----------------------------
-# relay_exit must not call `exit`: inside an EXIT handler that turns a TERM'd run into an ordinary
-# exit status, so whatever killed the relay sees it "finish". It must still remove both temp dirs
-# (grok is in the panel, so ATTACH_DIR exists). TERM the relay alone while the stub sits in `gh pr
-# diff`, after both dirs exist, and WAIT for it so the handler has finished; the group KILL after
-# that only reaps the stub left hanging.
+# Whatever killed the relay must see it die of the signal (status 143), not "finish"; a TERM trap
+# that exits would break that. The EXIT handler must still remove both temp dirs (grok is in the
+# panel, so ATTACH_DIR exists). An `exit` inside the EXIT handler does NOT trip the status check:
+# measured on bash 5.2, a TERM'd shell dies of the signal whatever its EXIT trap does. TERM the
+# relay alone while the stub sits in `gh pr diff`, after both dirs exist, and WAIT for it so the
+# handler has finished; the group KILL after that only reaps the stub left hanging.
 if ( set -m ) 2>/dev/null; then
   s_reset; rm -f "$WORK/hangmark" "$WORK/kstatus"; rm -rf "$WORK/ktmp"; mkdir -p "$WORK/ktmp"
   ( set -m
