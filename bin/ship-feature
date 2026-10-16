@@ -44,6 +44,27 @@ die() {
 warn() { echo "  ! $*" >&2; }
 ok() { echo "  ✓ $*"; }
 
+# The relay ships in this checkout (relay/). ship-feature reads the shared panel config with the
+# relay's own parser (lib-panel.sh: panel_config_load, PANEL_CFG_*) and runs the pi seats with the
+# relay's json reader (lib-pi.sh: PI_FINAL_TEXT_JS, PI_EFFORT_LEVELS), so one file cannot mean two
+# things in the two tools. install.sh links this script into ~/.local/bin: follow the links to find
+# the checkout. Sourcing defines functions and four variables and runs nothing else. Built-ins
+# only, except readlink for a link: tests run this script with a PATH that has no dirname.
+sf_dir_of() { case "$1" in */*) printf '%s' "${1%/*}" ;; *) printf '.' ;; esac }
+sf_self="${BASH_SOURCE[0]}"
+while [ -L "$sf_self" ]; do
+  sf_link="$(readlink -- "$sf_self")" || die "cannot resolve the link $sf_self"
+  case "$sf_link" in /*) sf_self="$sf_link" ;; *) sf_self="$(sf_dir_of "$sf_self")/$sf_link" ;; esac
+done
+SF_RELAY_DIR="$(cd -- "$(sf_dir_of "$sf_self")/../relay" 2>/dev/null && pwd -P)" ||
+  die "no relay/ next to $sf_self: install ship-feature from a full clone (install.sh)"
+[ -f "$SF_RELAY_DIR/lib-panel.sh" ] && [ -f "$SF_RELAY_DIR/lib-pi.sh" ] ||
+  die "relay/lib-panel.sh or relay/lib-pi.sh is missing in $SF_RELAY_DIR: the clone is incomplete"
+# shellcheck source=relay/lib-panel.sh
+. "$SF_RELAY_DIR/lib-panel.sh"
+# shellcheck source=relay/lib-pi.sh
+. "$SF_RELAY_DIR/lib-pi.sh"
+
 # Kill a process AND its whole descendant tree, children first. Walking by PPID
 # (`pgrep -P`) rather than by process group is deliberate: `timeout` puts its child in
 # a NEW process group, so a group-kill of the backgrounded job would miss the reviewer
@@ -220,198 +241,80 @@ load_config() {
   load_shared_panel_config
 }
 
-# The SHARED PANEL config: pr-review-relay's own file, read here as the LAST fallback — who sits on
-# the panel (REVIEWERS, PLAN_REVIEWERS), what each seat runs (MODEL_*), and how long each gets
-# (AGENT_TIMEOUT).
+# The SHARED PANEL config: pr-review-relay's own file (PR_RELAY_CONFIG, or
+# ~/.config/pr-review-relay/config), read here as the LAST fallback: who sits on the panel
+# (REVIEWERS, PLAN_REVIEWERS), what each seat runs (MODEL_<seat> / EFFORT_<seat>), and how long
+# each gets (AGENT_TIMEOUT). The relay's own panel_config_load (relay/lib-panel.sh) parses it, so
+# the file means the same thing in both tools: the last value of a key wins, a BOM is stripped, a
+# last line with no newline counts, and an inline "# ..." is part of the value.
 #
-# Renamed from load_shared_model_pins: it stopped being only about model pins when REVIEWERS and
-# PLAN_REVIEWERS moved here, and a name that lies is how the next key ends up in a fourth place.
-#
-# Both tools review with the same seats on the same accounts, so which model a seat runs is a
-# property of the machine, not of the tool that happens to be invoking it. pr-review-relay
-# already keeps that in one place, keyed by SEAT name, and it has carried this seat's key since
-# 2026-08-14 with a comment saying it would take effect once ship-feature learned to read this
-# file. This is that. (The key was `MODEL_kimi3` until the seat was renamed; see the deprecated
-# arm in the parser below.)
-#
-# Keyed by seat means keyed by seat. `grok` is ONE seat in both tools since 2026-09 (plan-review
-# called it `grok45high` and ran it at a hardcoded high effort until then), so `MODEL_grok` /
-# `EFFORT_grok` pin it for the plan review and the PR review alike. The same holds for `claude`
-# and `codex`, whose plan-review calls used to take no pin at all.
-#
-# Without it the pin lives in two files at once and they drift: whichever one you edit, the
-# other keeps its old value and nothing complains, because both are valid config.
-#
-# Precedence, lowest last: environment > ship-feature's own config > this file. It is called at
-# the END of load_config for exactly that reason — by the time it runs, every key it touches is
-# already set if either higher source provided one.
+# Precedence, lowest last: environment > ship-feature's own config > this file. load_config calls
+# this function last for that reason: a variable that a higher source set is already set here, and
+# sf_take_shared leaves it alone.
 #
 # `MODEL_opencode` is deliberately NOT mapped. That seat belongs to pr-review-relay, which reads
-# this file itself; exporting PR_RELAY_OPENCODE_MODEL from here would push an environment value
-# on top of the relay's own config and beat it, which is the opposite of consolidating.
+# this file itself; exporting PR_RELAY_OPENCODE_MODEL from here would put an environment value on
+# top of the relay's own config and beat it.
 load_shared_panel_config() {
-  # ${HOME:-}, not $HOME: under `set -u` an unset HOME aborts the whole command, and a caller
-  # that sets both ship-feature paths explicitly has every right not to have one.
-  local cfg="${PR_RELAY_CONFIG:-${HOME:-}/.config/pr-review-relay/config}" key val
-  # LAST VALUE WINS within this file, as in pr-review-relay's own parser. Guarding only on "is it
-  # set" would keep the FIRST of two `REVIEWERS=` lines here while the relay kept the last — a
-  # valid file handing the two tools different panels, which is exactly what reading one file is
-  # meant to prevent. These flags say "a HIGHER source already provided this", which is the thing
-  # that must not be overwritten; a later line of this same file may.
-  local from_env_glm=1 from_env_cursor=1 from_env_rev=1 from_env_plan=1 from_env_timeout=1
-  local from_env_gemini=1
-  local from_env_claude_m=1 from_env_claude_e=1 from_env_codex_m=1 from_env_codex_e=1 from_env_grok_m=1 from_env_grok_e=1
-  local from_env_pi_glm_m=1 from_env_pi_glm_e=1 from_env_pi_grok_m=1 from_env_pi_grok_e=1
-  # GLM_REVIEW_MODEL and nothing else. Arming this from the seat's OLD name would let a stale
-  # KIMI3_REVIEW_MODEL left in a shell profile mark the pin as "already provided by a higher
-  # source", so MODEL_glm in the shared file would be skipped — the silent drop this rename
-  # exists to remove, rebuilt inside the fix for it.
-  [ -n "${GLM_REVIEW_MODEL:-}" ] || from_env_glm=0
-  [ -n "${CURSOR_REVIEW_MODEL:-}" ] || from_env_cursor=0
-  # The relay's own environment names (pr-review-relay, lib-grok.sh), so one export pins the seat
-  # in both tools. Each flag is armed from its NEW name only — never from GROK45HIGH_REVIEW_MODEL:
-  # a stale export of the old name would otherwise mark MODEL_grok as "already provided" and the
-  # shared pin would be skipped without a word, the trap the glm comment above describes.
-  [ -n "${CLAUDE_REVIEW_MODEL:-}" ] || from_env_claude_m=0
-  [ -n "${CLAUDE_REVIEW_EFFORT:-}" ] || from_env_claude_e=0
-  [ -n "${CODEX_REVIEW_MODEL:-}" ] || from_env_codex_m=0
-  [ -n "${CODEX_REVIEW_EFFORT:-}" ] || from_env_codex_e=0
-  [ -n "${GROK_REVIEW_MODEL:-}" ] || from_env_grok_m=0
-  [ -n "${GROK_REVIEW_EFFORT:-}" ] || from_env_grok_e=0
-  # The pi seats' environment names are pr-review-relay's own (lib-pi.sh), for the same reason.
-  [ -n "${PI_GLM_REVIEW_MODEL:-}" ] || from_env_pi_glm_m=0
-  [ -n "${PI_GLM_REVIEW_EFFORT:-}" ] || from_env_pi_glm_e=0
-  [ -n "${PI_GROK_REVIEW_MODEL:-}" ] || from_env_pi_grok_m=0
-  [ -n "${PI_GROK_REVIEW_EFFORT:-}" ] || from_env_pi_grok_e=0
-  [ -n "${SHIP_FEATURE_GEMINI_MODEL:-}" ] || from_env_gemini=0
-  [ -n "${SHIP_FEATURE_REVIEWERS+x}" ] || from_env_rev=0
-  [ -n "${SHIP_FEATURE_PLAN_REVIEWERS+x}" ] || from_env_plan=0
-  # BOTH names, because both sit ABOVE this file on the ladder: SHIP_FEATURE_PLAN_TIMEOUT (rungs 1-2)
-  # and PR_RELAY_AGENT_TIMEOUT (rung 3, the relay's own documented environment override). Guard on
-  # only the first and a machine exporting the second gets that value in pr-review-relay and this
-  # file's value here — the same inputs producing two different timeouts, which is the whole failure
-  # this mapping exists to remove.
-  [ -n "${SHIP_FEATURE_PLAN_TIMEOUT:-}" ] || [ -n "${PR_RELAY_AGENT_TIMEOUT:-}" ] || from_env_timeout=0
-  [ -f "$cfg" ] || return 0
-  while IFS='=' read -r key val || [ -n "$key$val" ]; do
-    # Strip a leading UTF-8 BOM, as pr-review-relay's own parser does (lib-panel.sh). Without it
-    # the first key of a BOM'd file reads as "\ufeffMODEL_glm" here and as "MODEL_glm" there:
-    # one file, two different models, which is the whole failure this change removes.
-    key="${key#$'\xef\xbb\xbf'}"
-    case "$key" in '' | \#*) continue ;; esac
-    key="$(printf '%s' "$key" | tr -d '[:space:]')"
-    val="${val%%[[:space:]]#*}" # strip an inline "# comment"
-    val="${val#"${val%%[![:space:]]*}"}"
-    val="${val%"${val##*[![:space:]]}"}" # trim surrounding space
-    # NON-EMPTY here, not merely DEFINED. The SHIP_FEATURE_* keys use ${VAR+x} so that an
-    # explicitly empty value can DISABLE a setting on purpose; a model pin has no such meaning —
-    # an empty one is just absent. With ${VAR+x}, `CURSOR_REVIEW_MODEL=` would block this file and
-    # leave ship-feature on its built-in default while pr-review-relay used the shared value: the
-    # same inputs, two different models.
-    case "$key" in
-      MODEL_glm) [ "$from_env_glm" = 1 ] || export GLM_REVIEW_MODEL="$val" ;;
-      # The seat's old key. Recorded and DROPPED — see the KIMI3_REVIEW_MODEL arm in load_config.
-      # pr-review-relay still lists `kimi3` in its own PANEL_SEATS, so this key stays valid THERE
-      # until that repo's follow-up lands; it just no longer configures anything here.
-      MODEL_kimi3) sf_note_deprecated shared:MODEL_kimi3 ;;
-      MODEL_cursor) [ "$from_env_cursor" = 1 ] || export CURSOR_REVIEW_MODEL="$val" ;;
-      # The seat's old key, recorded and DROPPED like MODEL_kimi3 above. Honouring it as a fallback
-      # would keep two keys alive for one seat, and the next edit would change only one of them.
-      MODEL_grok45high) sf_note_deprecated shared:MODEL_grok45high ;;
-      # claude, codex and grok. NOT exported, unlike the pins above, for the reason AGENT_TIMEOUT
-      # gives below: pr-review-relay reads these same keys from this same file, and an environment
-      # value pushed at the `relay` child would sit on top of its own config. They only have to
-      # reach cmd_plan_review, in this process. `export -n` in the copying branch only, because a
-      # plain assignment keeps an inherited export attribute — an exported EMPTY
-      # `CODEX_REVIEW_MODEL=` would otherwise carry this file's value into the child.
-      MODEL_claude) [ "$from_env_claude_m" = 1 ] || {
-        export -n CLAUDE_REVIEW_MODEL 2>/dev/null || true
-        CLAUDE_REVIEW_MODEL="$val"
-      } ;;
-      EFFORT_claude) [ "$from_env_claude_e" = 1 ] || {
-        export -n CLAUDE_REVIEW_EFFORT 2>/dev/null || true
-        CLAUDE_REVIEW_EFFORT="$val"
-      } ;;
-      MODEL_codex) [ "$from_env_codex_m" = 1 ] || {
-        export -n CODEX_REVIEW_MODEL 2>/dev/null || true
-        CODEX_REVIEW_MODEL="$val"
-      } ;;
-      EFFORT_codex) [ "$from_env_codex_e" = 1 ] || {
-        export -n CODEX_REVIEW_EFFORT 2>/dev/null || true
-        CODEX_REVIEW_EFFORT="$val"
-      } ;;
-      MODEL_grok) [ "$from_env_grok_m" = 1 ] || {
-        export -n GROK_REVIEW_MODEL 2>/dev/null || true
-        GROK_REVIEW_MODEL="$val"
-      } ;;
-      EFFORT_grok) [ "$from_env_grok_e" = 1 ] || {
-        export -n GROK_REVIEW_EFFORT 2>/dev/null || true
-        GROK_REVIEW_EFFORT="$val"
-      } ;;
-      # The pi seats, exactly like grok above: NOT exported, and `export -n` first. Do not copy the
-      # MODEL_glm arm, which exports — a pi pin pushed into the `relay` child would sit on top of
-      # pr-review-relay's own reading of this same file.
-      MODEL_pi_glm) [ "$from_env_pi_glm_m" = 1 ] || {
-        export -n PI_GLM_REVIEW_MODEL 2>/dev/null || true
-        PI_GLM_REVIEW_MODEL="$val"
-      } ;;
-      EFFORT_pi_glm) [ "$from_env_pi_glm_e" = 1 ] || {
-        export -n PI_GLM_REVIEW_EFFORT 2>/dev/null || true
-        PI_GLM_REVIEW_EFFORT="$val"
-      } ;;
-      MODEL_pi_grok) [ "$from_env_pi_grok_m" = 1 ] || {
-        export -n PI_GROK_REVIEW_MODEL 2>/dev/null || true
-        PI_GROK_REVIEW_MODEL="$val"
-      } ;;
-      EFFORT_pi_grok) [ "$from_env_pi_grok_e" = 1 ] || {
-        export -n PI_GROK_REVIEW_EFFORT 2>/dev/null || true
-        PI_GROK_REVIEW_EFFORT="$val"
-      } ;;
-      # `MODEL_gemini`, not `MODEL_antigravity`. The relay already maps MODEL_antigravity onto its
-      # own agy seat; this one is the `gemini` binary. One key for two binaries would mean one of
-      # them silently getting a model id its CLI does not accept. NOT exported, unlike the pins
-      # above: nothing downstream reads it from the environment, and the isolated gemini child
-      # should inherit no name we did not deliberately put there.
-      MODEL_gemini) [ "$from_env_gemini" = 1 ] || SHIP_FEATURE_GEMINI_MODEL="$val" ;;
-      # WHO sits on the panel, from the same file for the same reason the models are. These two
-      # were already duplicated across the two configs — identical today, free to drift tomorrow,
-      # with nothing to notice it because both files are valid. A panel that differs between the
-      # plan gate and the PR gate is the kind of difference you discover from a verdict.
-      #
-      # ${VAR+x} semantics here, unlike the model pins above: an explicitly empty
-      # SHIP_FEATURE_REVIEWERS means "no injected quorum" on purpose, and that has to survive a
-      # value in this file. (Captured in the flags above, before the loop.)
-      #
-      # NOT exported, unlike the model pins: the panel is passed to pr-review-relay as
-      # `--reviewers` ARGUMENTS, in-process. The pins have to cross into the child, these do not.
-      REVIEWERS) [ "$from_env_rev" = 1 ] || SHIP_FEATURE_REVIEWERS="$val" ;;
-      PLAN_REVIEWERS) [ "$from_env_plan" = 1 ] || SHIP_FEATURE_PLAN_REVIEWERS="$val" ;;
-      # HOW LONG a reviewer gets, from the same file for the same reason as WHO reviews and WHAT
-      # they run. pr-review-relay reads this key already; ship-feature did not, so `AGENT_TIMEOUT`
-      # in that file configured one tool of the two and every plan review silently kept the old
-      # default. That is not a loud failure — a timed-out reviewer exits 3 and says so — but the
-      # round returns no findings, and "no findings" reads exactly like a clean plan.
-      #
-      # Mapped onto SHIP_FEATURE_PLAN_TIMEOUT because that is the name the resolver at the top of
-      # cmd_plan_review actually reads; mapping it onto PR_RELAY_AGENT_TIMEOUT would put an
-      # environment value on top of the relay's own config, which MODEL_opencode below exists to
-      # warn against.
-      #
-      # A PLAIN ASSIGNMENT, never `export` — unlike the model pins, which have to cross into the
-      # pr-review-relay child. This must NOT: the relay reads this same file itself, and pushing a
-      # value at it would beat its own config.
-      #
-      # `export -n` first, because a plain assignment does NOT clear an inherited export attribute.
-      # A caller that exported the name (even empty) would otherwise have this resolved value cross
-      # into the child anyway, quietly defeating the line above.
-      AGENT_TIMEOUT)
-        if [ "$from_env_timeout" != 1 ]; then
-          export -n SHIP_FEATURE_PLAN_TIMEOUT 2>/dev/null || true
-          SHIP_FEATURE_PLAN_TIMEOUT="$val"
-        fi
-        ;;
-    esac
-  done <"$cfg"
+  panel_config_load
+  # The seats' old keys, recorded and DROPPED (see the KIMI3_REVIEW_MODEL arm in load_config).
+  # Honouring one as a fallback would keep two keys alive for one seat.
+  case " ${PANEL_CFG_KEYS:-} " in *" MODEL_kimi3 "*) sf_note_deprecated shared:MODEL_kimi3 ;; esac
+  case " ${PANEL_CFG_KEYS:-} " in *" MODEL_grok45high "*) sf_note_deprecated shared:MODEL_grok45high ;; esac
+  # Exported: a pr-review-relay child reads these environment names too.
+  sf_take_shared MODEL_glm GLM_REVIEW_MODEL export nonempty
+  sf_take_shared MODEL_cursor CURSOR_REVIEW_MODEL export nonempty
+  # Not exported: the relay reads these keys from this same file, and an environment value pushed
+  # at a `relay` child would sit on top of its own config. Only cmd_plan_review needs them.
+  sf_take_shared MODEL_claude CLAUDE_REVIEW_MODEL local nonempty
+  sf_take_shared EFFORT_claude CLAUDE_REVIEW_EFFORT local nonempty
+  sf_take_shared MODEL_codex CODEX_REVIEW_MODEL local nonempty
+  sf_take_shared EFFORT_codex CODEX_REVIEW_EFFORT local nonempty
+  sf_take_shared MODEL_grok GROK_REVIEW_MODEL local nonempty
+  sf_take_shared EFFORT_grok GROK_REVIEW_EFFORT local nonempty
+  sf_take_shared MODEL_pi_glm PI_GLM_REVIEW_MODEL local nonempty
+  sf_take_shared EFFORT_pi_glm PI_GLM_REVIEW_EFFORT local nonempty
+  sf_take_shared MODEL_pi_grok PI_GROK_REVIEW_MODEL local nonempty
+  sf_take_shared EFFORT_pi_grok PI_GROK_REVIEW_EFFORT local nonempty
+  # `MODEL_gemini` is the `gemini` binary behind plan-review's antigravity seat. The relay's
+  # MODEL_antigravity is its `agy` seat: two binaries, two keys.
+  sf_take_shared MODEL_gemini SHIP_FEATURE_GEMINI_MODEL local nonempty
+  # `set`, not `nonempty`: an explicitly empty SHIP_FEATURE_REVIEWERS means "no injected quorum"
+  # on purpose, and that must survive a value in this file.
+  sf_take_shared REVIEWERS SHIP_FEATURE_REVIEWERS local set
+  sf_take_shared PLAN_REVIEWERS SHIP_FEATURE_PLAN_REVIEWERS local set
+  # Onto the name cmd_plan_review reads. PR_RELAY_AGENT_TIMEOUT, the relay's own environment
+  # override, also outranks this file: otherwise one machine gets two timeouts.
+  sf_take_shared AGENT_TIMEOUT SHIP_FEATURE_PLAN_TIMEOUT local nonempty PR_RELAY_AGENT_TIMEOUT
+}
+
+# sf_take_shared <key> <variable> <export|local> <set|nonempty> [<variable that also outranks it>]
+# Copy PANEL_CFG_<key> into <variable>, unless the file has no such key or a higher source already
+# gave the variable. `set` asks "is it defined" (an empty value disables on purpose); `nonempty`
+# asks "does it hold a value" (an empty pin or timeout means absent). `local` runs `export -n`
+# first: a plain assignment keeps an inherited export attribute, so an exported empty name would
+# carry this file's value into a pr-review-relay child. The names are fixed literals from the
+# calls above, never text from the file, so eval only reads variables.
+sf_take_shared() {
+  local _key="$1" _dst="$2" _how="$3" _test="$4" _also="${5-}" _have _val
+  case " ${PANEL_CFG_KEYS:-} " in *" $_key "*) ;; *) return 0 ;; esac
+  if [ "$_test" = set ]; then
+    eval "_have=\${$_dst+x}"
+  else
+    eval "_have=\${$_dst:-}"
+  fi
+  [ -z "$_have" ] || return 0
+  if [ -n "$_also" ]; then
+    eval "_have=\${$_also:-}"
+    [ -z "$_have" ] || return 0
+  fi
+  eval "_val=\${PANEL_CFG_$_key-}"
+  if [ "$_how" = export ]; then
+    export "$_dst=$_val"
+  else
+    export -n "${_dst?}" 2>/dev/null || true
+    printf -v "$_dst" '%s' "$_val"
+  fi
 }
 
 default_branch() {
@@ -638,56 +541,12 @@ plan_tool_for() { case "$1" in
   claude) echo claude ;; codex) echo codex ;; cursor) echo cursor-agent ;; glm) echo opencode ;;
   grok) echo grok ;; antigravity) echo gemini ;; pi_glm | pi_grok) echo pi ;; *) echo "" ;; esac }
 
-# The levels pi accepts for --thinking, from its own "Invalid thinking level" warning (measured against
-# pi 1.1.0 and 1.2.0). The `case` in cmd_plan_review names the same words; a test pins the two together.
-SF_PI_EFFORT_LEVELS="off minimal low medium high xhigh max"
+# The pi seats take two names from relay/lib-pi.sh: PI_EFFORT_LEVELS, the --thinking levels pi
+# accepts (the `case` in cmd_plan_review names the same words, and a test pins the two together),
+# and PI_FINAL_TEXT_JS, the node reader of pi's json stream (the final assistant text on stdout,
+# or one reason line on stderr and exit 3, because pi's own exit code does not say whether a
+# review came back).
 
-# pi's --mode json event stream on stdin, read by node. A copy of PI_FINAL_TEXT_JS in pr-review-relay's
-# lib-pi.sh, taken at fd89591: copied rather than sourced, because plan-review runs without the relay
-# installed, and sourcing a file from another checkout would let that checkout change this seat. Diff
-# the two when either changes.
-#
-# Why a reader at all: pi's exit code does not say whether a review came back. In json mode an API
-# error exits 0, and a cut-off answer exits 0 (1.1.0) or 1 (1.2.0). The reader keeps the LAST
-# message_end whose message.role is "assistant" (each tool turn ends with one, stopReason "toolUse"):
-#   stop + non-blank text -> print the text, exit 0
-#   anything else         -> nothing on stdout, ONE reason line on stderr, exit 3
-# A line that is not JSON is skipped. A missing field never throws.
-# `|| true`: `read -d ''` returns 1 at the end of its input. Nothing here runs under errexit, and this
-# keeps it that way if errexit is ever turned on.
-IFS= read -r -d '' SF_PI_FINAL_TEXT_JS <<'JS' || true
-const rl = require("readline").createInterface({ input: process.stdin, crlfDelay: Infinity });
-let last = null;
-rl.on("line", (line) => {
-  let e;
-  try { e = JSON.parse(line); } catch (_) { return; }
-  if (e && e.type === "message_end" && e.message && e.message.role === "assistant") last = e.message;
-});
-rl.on("close", () => {
-  if (!last) {
-    process.stderr.write("pi: the event stream ended without a final assistant message\n");
-    process.exitCode = 3;
-    return;
-  }
-  const parts = Array.isArray(last.content) ? last.content : [];
-  const text = parts
-    .filter((p) => p && p.type === "text" && typeof p.text === "string")
-    .map((p) => p.text)
-    .join("\n");
-  const stop = typeof last.stopReason === "string" ? last.stopReason : "?";
-  if (stop === "stop" && text.trim() !== "") {
-    process.stdout.write(text.endsWith("\n") ? text : text + "\n");
-    return;
-  }
-  const tokens = last.usage && last.usage.output != null ? String(last.usage.output) : "?";
-  let reason = `pi: no usable review (stopReason=${stop}, output tokens=${tokens}, text chars=${text.length})`;
-  if (typeof last.errorMessage === "string" && last.errorMessage !== "") {
-    reason += ": " + last.errorMessage.replace(/[\r\n]+/g, " ");
-  }
-  process.stderr.write(reason + "\n");
-  process.exitCode = 3;
-});
-JS
 # Named but deliberately not run in plan-review (available in `relay`). Note: `glm` IS a
 # supported plan reviewer (read-only plan agent) and runs through the same `opencode` binary;
 # only the bare `opencode` name is relay-only, because a bare `opencode run` uses the all-allow
@@ -986,8 +845,8 @@ have found something serious, write it down before you go looking for the next t
   # lib-pi.sh refuses the same values, so the two tools agree on what a valid pin is.
   #
   # Exact `case` alternatives, never a match against the list: the value is config text, so as a
-  # pattern `low medium`, `*` or `l?w` would pass. Keep in step with SF_PI_EFFORT_LEVELS (a test
-  # pins it).
+  # pattern `low medium`, `*` or `l?w` would pass. Keep in step with PI_EFFORT_LEVELS in
+  # relay/lib-pi.sh (a test pins it).
   #
   # Only for a pi seat that is ON THE PANEL: a pi pin that a later pi makes valid (a new level, before
   # this list learns it) must not stop a review whose panel has no pi seat. The split is the dispatch
@@ -1012,7 +871,7 @@ have found something serious, write it down before you go looking for the next t
     _pv="${!_pi_e}"
     case "$_pv" in
       off | minimal | low | medium | high | xhigh | max) ;;
-      *) die "invalid $_pi_e: '$_pv' (EFFORT_$_ps_r in the shared panel config, or $_pi_e) — pi does not refuse an unknown level, so this does. Valid: $SF_PI_EFFORT_LEVELS" ;;
+      *) die "invalid $_pi_e: '$_pv' (EFFORT_$_ps_r in the shared panel config, or $_pi_e) — pi does not refuse an unknown level, so this does. Valid: $PI_EFFORT_LEVELS" ;;
     esac
   done
   # Arrays so an unset pin adds NO argument, not an empty one. Expanded with ${A[@]+"${A[@]}"}:
@@ -1573,7 +1432,7 @@ have found something serious, write it down before you go looking for the next t
                 --tools read,grep,find,ls \
                 --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes \
                 --no-context-files --no-approve --no-session --offline 2>>"$errf" |
-              node -e "$SF_PI_FINAL_TEXT_JS" 2>>"$errf"
+              node -e "$PI_FINAL_TEXT_JS" 2>>"$errf"
             _ps=("${PIPESTATUS[@]}")
             [ "${_ps[1]}" -ne 0 ] && exit "${_ps[1]}"
             exit "${_ps[2]}"

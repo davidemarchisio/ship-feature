@@ -6,6 +6,15 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ## [Unreleased]
 
+### Changed
+
+- **ship-feature reads the shared panel config with the relay's own parser.** `bin/ship-feature`
+  sources `relay/lib-panel.sh` and `relay/lib-pi.sh` from its own checkout, through the
+  `~/.local/bin` link, and drops its second parser of `~/.config/pr-review-relay/config` and its copy
+  of the pi json reader: about 125 fewer lines. One parser gives one meaning: an inline `# ...` in
+  that file is now part of the value in ship-feature too, as it always was in the relay. A copy of
+  `bin/ship-feature` with no `relay/` next to it stops with a message. Fizzy #1412.
+
 ### Removed
 
 - **`pr-review-relay --verdict-file`**: the machine-readable round record, written only for

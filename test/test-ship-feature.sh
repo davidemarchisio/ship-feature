@@ -167,6 +167,21 @@ check() { # check <desc> <actual_rc> <want_rc>
 
 echo "ship-feature tests:"
 
+# --- the relay libraries come from the script's own checkout, through links ---------------------
+# install.sh links bin/ship-feature into ~/.local/bin, and the script sources relay/lib-panel.sh and
+# relay/lib-pi.sh from its checkout. An absolute link and a relative link to that link must both
+# resolve to the checkout; a copy with no relay/ next to it must stop and say so.
+mkdir -p "$WORK/linkbin" "$WORK/lonely/bin"
+ln -s "$CLI" "$WORK/linkbin/ship-feature"
+ln -s ship-feature "$WORK/linkbin/sf-relative"
+bash "$WORK/linkbin/ship-feature" help >/dev/null 2>&1
+check "a linked ship-feature finds relay/ in its checkout" $? 0
+bash "$WORK/linkbin/sf-relative" help >/dev/null 2>&1
+check "a relative link to that link finds relay/ too" $? 0
+cp "$CLI" "$WORK/lonely/bin/ship-feature"
+out=$(bash "$WORK/lonely/bin/ship-feature" help 2>&1)
+check "a copy with no relay/ next to it stops and says so" "$?|$(printf '%s' "$out" | grep -c 'no relay/ next to')" "1|1"
+
 # --- build a real remote + clone + feature worktree --------------------------
 REMOTE="$WORK/remote.git"
 git init -q --bare "$REMOTE"
@@ -1301,15 +1316,45 @@ printf '%s' "$sh8" | grep 'REVIEW-glm' | grep -q -- "-m openrouter/z-ai/glm-9.9"
   }
 # HOME unset must not abort the command under `set -u`. A caller that passes both paths
 # explicitly has every right not to have one.
-env -u HOME PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/shared1" SHIP_FEATURE_PLANS_DIR="$WORK/plans" \
-  bash "$CLI" plan-review --reviewers glm </dev/null >/dev/null 2>&1
-[ $? -ne 2 ] && {
+nh0=$(printf 'plan\n' | env -u HOME PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/shared1" SHIP_FEATURE_PLANS_DIR="$WORK/plans" \
+  bash "$CLI" plan-review --reviewers glm 2>&1)
+# An unbound variable exits 1 in a script, like an ordinary refusal, so the exit code cannot tell
+# them apart: read the error itself. And send a plan: an empty one is refused before any seat code
+# runs, which left this test unable to fail.
+! printf '%s' "$nh0" | grep -q 'unbound variable' && printf '%s' "$nh0" | grep -q 'REVIEW-glm' && {
   echo "  ok   [-] an unset HOME does not abort the run"
   PASS=$((PASS + 1))
 } || {
   echo "  FAIL unset HOME aborted (unbound variable)"
   FAIL=$((FAIL + 1))
 }
+# The same with NO PR_RELAY_CONFIG: the shared file's default path is built from HOME, so this is
+# the path that needs the guard in relay/lib-panel.sh. An unbound variable exits 1 in a script, the
+# same code as an ordinary failure, so read the error itself and require the seat to have run.
+nh=$(printf 'plan\n' | env -u HOME -u PR_RELAY_CONFIG PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null SHIP_FEATURE_PLANS_DIR="$WORK/plans" \
+  bash "$CLI" plan-review --reviewers glm 2>&1)
+nhrc=$?
+if [ "$nhrc" = 0 ] && ! printf '%s' "$nh" | grep -q 'unbound variable' && printf '%s' "$nh" | grep -q 'REVIEW-glm'; then
+  echo "  ok   [-] an unset HOME with no PR_RELAY_CONFIG still runs the seat"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL unset HOME with no PR_RELAY_CONFIG (rc=$nhrc): $(printf '%s' "$nh" | tail -n 3)"
+  FAIL=$((FAIL + 1))
+fi
+# An inline `# ...` is part of the value in the shared file. The relay's parser has always read it
+# that way, and ship-feature reads the file with that parser now; stripping it here again would give
+# one line two meanings, one per tool.
+printf 'MODEL_glm=openrouter/z-ai/glm-9.9 # pinned\n' >"$CFGDIR/shared-inline"
+shi=$(printf 'plan\n' | PATH="$PBIN:$PATH" PR_RELAY_CONFIG="$CFGDIR/shared-inline" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+printf '%s' "$shi" | grep 'REVIEW-glm' | grep -qF -- "-m openrouter/z-ai/glm-9.9 # pinned" &&
+  {
+    echo "  ok   [-] an inline comment in the shared file stays part of the value"
+    PASS=$((PASS + 1))
+  } ||
+  {
+    echo "  FAIL the shared value lost its inline '# ...': $(printf '%s' "$shi" | grep 'REVIEW-glm')"
+    FAIL=$((FAIL + 1))
+  }
 # WHO sits on the panel comes from the shared file too. It was duplicated in both configs —
 # identical today, free to drift tomorrow, and a panel that differs between the plan gate and the
 # PR gate is something you discover from a verdict.
@@ -1753,8 +1798,8 @@ printf '%s' "$dep4" | grep 'REVIEW-glm' | grep -q -- "-m opencode-go/glm-5.3]" &
   }
 
 # 5. MIXED: a stale KIMI3_REVIEW_MODEL in the environment must NOT suppress a valid MODEL_glm in
-# the shared file. from_env_glm keys off GLM_REVIEW_MODEL alone; if it were armed by the old name,
-# the shared pin would be skipped as "already provided by a higher source" — the very silent drop
+# the shared file. Only GLM_REVIEW_MODEL outranks MODEL_glm; if the old name did, the shared pin
+# would be skipped as "already provided by a higher source", the very silent drop
 # this rename removes, rebuilt inside the fix for it.
 printf 'MODEL_glm=openrouter/z-ai/glm-5.2\n' >"$CFGDIR/deprecated3"
 dep5=$(printf 'plan\n' | PATH="$PBIN:$PATH" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_CONFIG="$CFGDIR/deprecated3" KIMI3_REVIEW_MODEL=openrouter/z-ai/glm-9.9 bash "$CLI" plan-review --reviewers glm 2>&1)
@@ -2021,9 +2066,9 @@ timeout_case 470 "an empty SHIP_FEATURE_PLAN_TIMEOUT does not block the shared f
 timeout_case 470 "an empty PR_RELAY_AGENT_TIMEOUT does not block the shared file" \
   PR_RELAY_CONFIG="$CFGDIR/shared-t1" SHIP_FEATURE_CONFIG=/dev/null PR_RELAY_AGENT_TIMEOUT=
 
-# 7. LAST value wins inside the shared file, as in pr-review-relay's own parser. This is what the
-# from_env_* flag being set BEFORE the loop protects: an inline "is it already set" test in the case
-# arm would keep the FIRST line here while the relay kept the last — one valid file, two timeouts.
+# 7. LAST value wins inside the shared file. ship-feature reads it with the relay's own parser now,
+# so this holds by construction; the test keeps it true if the two ever split again:
+# one valid file, two timeouts.
 printf 'AGENT_TIMEOUT=430\nAGENT_TIMEOUT=440\n' >"$CFGDIR/shared-t2"
 timeout_case 440 "the last AGENT_TIMEOUT in the shared file wins" \
   PR_RELAY_CONFIG="$CFGDIR/shared-t2" SHIP_FEATURE_CONFIG=/dev/null
@@ -2547,17 +2592,17 @@ for v in 'low medium' 'medium high' '*' 'l?w' '?high' '[lm]ow' 'LOW'; do
   check "pi: effort '$v' is refused before any seat starts" \
     "$?|$(printf '%s' "$prow" | grep -c 'Valid: off minimal low medium high xhigh max')|$(pi_ran pi_glm)" "1|1|no"
 done
-_levels=$(sed -n 's/^SF_PI_EFFORT_LEVELS="\(.*\)"$/\1/p' "$CLI")
+_levels=$(sed -n 's/^PI_EFFORT_LEVELS="\(.*\)"$/\1/p' "$HERE/../relay/lib-pi.sh")
 _bad=""
 for v in $_levels; do
   pi_clear
   printf 'plan\n' | PATH="$PBIN:$PATH" PI_GROK_REVIEW_EFFORT="$v" bash "$CLI" plan-review --reviewers pi_grok >/dev/null 2>&1 || _bad="$_bad $v(rc)"
   [ "$(pi_arg pi_grok --thinking)" = "$v" ] || _bad="$_bad $v(argv)"
 done
-check "pi: every level in SF_PI_EFFORT_LEVELS is accepted and reaches --thinking${_bad:+ (failed:$_bad)}" "${_levels:-empty}|${_bad:-none}" "off minimal low medium high xhigh max|none"
+check "pi: every level in PI_EFFORT_LEVELS (relay/lib-pi.sh) is accepted and reaches --thinking${_bad:+ (failed:$_bad)}" "${_levels:-empty}|${_bad:-none}" "off minimal low medium high xhigh max|none"
 # The case arms and the list in the message must name the same words.
 _arms=$(awk '/_pv="\$\{!_pi_e\}"/ { f = 1 } f && /\) ;;$/ { sub(/\) ;;$/, ""); gsub(/ \| /, " "); sub(/^ +/, ""); print; exit }' "$CLI")
-check "pi: the effort case arms match SF_PI_EFFORT_LEVELS" "$_arms" "$_levels"
+check "pi: the effort case arms match PI_EFFORT_LEVELS (relay/lib-pi.sh)" "$_arms" "$_levels"
 # T.10: a model that would be parsed as a flag.
 prow=$(printf 'plan\n' | PATH="$PBIN:$PATH" PI_GROK_REVIEW_MODEL=-x bash "$CLI" plan-review --reviewers pi_grok 2>&1)
 check "pi: a model starting with '-' is refused" "$?|$(printf '%s' "$prow" | grep -c "invalid PI_GROK_REVIEW_MODEL: '-x'")" "1|1"
@@ -4495,7 +4540,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=503
+EXPECTED=508
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
