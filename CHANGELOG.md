@@ -6,6 +6,8 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-16
+
 ### Added
 
 - **pr-review-relay is part of ship-feature now**, in `relay/`, imported as one commit from
@@ -657,6 +659,7 @@ First release.
   and gitleaks. (`scan-personal-data.sh` needs a private deny-list, so it runs locally pre-publication,
   not in CI.)
 
+[0.7.0]: https://github.com/hamen/ship-feature/releases/tag/v0.7.0
 [0.6.0]: https://github.com/hamen/ship-feature/releases/tag/v0.6.0
 [0.5.0]: https://github.com/hamen/ship-feature/releases/tag/v0.5.0
 [0.4.0]: https://github.com/hamen/ship-feature/releases/tag/v0.4.0
