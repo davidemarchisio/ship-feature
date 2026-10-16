@@ -182,7 +182,7 @@ chmod +x "$BIN/pr-review-relay" "$BIN/review-local" "$BIN/pr-review-fetch" "$BIN
 # make sure ~/.local/bin is on your PATH
 ```
 
-`pr-review-relay`, `pr-review-collapse-comments`, and `pr-review-consensus` expect `wrap-collapsed-pr-comment.mjs` in the same directory as those scripts (as in this repo). If you install only into `$BIN`, keep the `.mjs` file there too. `review-local` doesn't need it (it never posts anywhere).
+`pr-review-relay`, `pr-review-collapse-comments`, and `pr-review-consensus` expect `wrap-collapsed-pr-comment.mjs` in the same directory as those scripts (as in `relay/`). If you install only into `$BIN`, keep the `.mjs` file there too. `review-local` doesn't need it (it never posts anywhere).
 
 `pr-review-relay` and `review-local` both source **`lib-opencode.sh`**, **`lib-grok.sh`** and **`lib-pi.sh`** from their own directory — shared OpenCode, Grok and pi reviewer policies so the two scripts cannot drift on security-relevant settings. Both refuse to start if any of the three is missing.
 
@@ -230,7 +230,7 @@ MODEL_opencode=openrouter/z-ai/glm-5.2
 
 Each seat's dispatch line shows what it resolved to — `→ grok reviewing… (model=grok-4.7, effort=medium)` — and so does `--dry-run`'s `would run:` line, so a pin can be checked without running a review.
 
-A `MODEL_<seat>` key uses the **seat** name you pass to `--reviewers`, so you never need to know that opencode's variable is `PR_RELAY_OPENCODE_MODEL` and antigravity's is `AGY_REVIEW_MODEL`. (`MODEL_agy` still works as an alias of `MODEL_antigravity`.) A suffix that names no seat is kept — ship-feature reads this same file and knows seats this repo does not — but it is reported on stderr, so a typo cannot pass for a setting that quietly had no effect.
+A `MODEL_<seat>` key uses the **seat** name you pass to `--reviewers`, so you never need to know that opencode's variable is `PR_RELAY_OPENCODE_MODEL` and antigravity's is `AGY_REVIEW_MODEL`. (`MODEL_agy` still works as an alias of `MODEL_antigravity`.) A suffix that names no seat is kept — ship-feature's own `plan-review` reads this same file and knows seats the relay does not — but it is reported on stderr, so a typo cannot pass for a setting that quietly had no effect.
 
 The two pi seats share one binary, so each has its own pair of keys:
 
@@ -262,19 +262,20 @@ The scripts are bash-only (`#!/usr/bin/env bash`) — there is no native PowerSh
 [Git for Windows](https://git-scm.com/download/win) for its bundled Git Bash, which is enough to
 run everything below.
 
-1. `git clone` this repo somewhere permanent, e.g. `C:\Users\<you>\Project\Work\pr-review-relay`.
-   This repo ships a `.gitattributes` that forces LF line endings on the scripts, so a normal
-   `git clone` is safe even if your global `core.autocrlf` is set to `true` — no CRLF-related
-   `\r`-in-shebang errors under Bash. (If you instead download a ZIP, its extracted files won't go
-   through Git's checkout filters, so verify the scripts have LF endings before running them.)
-2. Add that repo folder to your **user PATH** so the scripts can be found by name from any directory.
+1. `git clone https://github.com/hamen/ship-feature` somewhere permanent, e.g.
+   `C:\Users\<you>\Project\Work\ship-feature`. The relay's scripts are in its `relay` folder.
+   `relay/.gitattributes` forces LF line endings on them, so a normal `git clone` is safe even if
+   your global `core.autocrlf` is set to `true` — no CRLF-related `\r`-in-shebang errors under Bash.
+   (If you instead download a ZIP, its extracted files won't go through Git's checkout filters, so
+   verify the scripts have LF endings before running them.)
+2. Add the clone's `relay` folder to your **user PATH** so the scripts can be found by name from any directory.
    Read and update the *user*-scoped PATH explicitly — don't use `$env:Path`, since that's the merged
    effective PATH (machine + user) for the current process, and writing it back would copy
    machine-level entries into the user PATH and bloat it over time. Guard the append so re-running
    this doesn't duplicate the entry:
 
    ```powershell
-   $repoDir = 'C:\Users\<you>\Project\Work\pr-review-relay'
+   $repoDir = 'C:\Users\<you>\Project\Work\ship-feature\relay'
    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
    if ($userPath -notlike "*$repoDir*") {
      [Environment]::SetEnvironmentVariable('Path', "$userPath;$repoDir", 'User')
@@ -302,8 +303,8 @@ bash pr-review-relay --dry-run --author claude
 bash review-local --author claude
 ```
 
-Run it from **inside the repo you want reviewed** (`cd` there first) — not from inside the
-pr-review-relay repo itself — since the relay resolves the PR for the current working repo's branch.
+Run it from **inside the repo you want reviewed** (`cd` there first), since the relay resolves the
+PR for the current working repo's branch.
 
 `wrap-collapsed-pr-comment.mjs` and `lib-opencode.sh` still need to sit next to the scripts, same as on Linux/macOS.
 
@@ -546,7 +547,7 @@ warning. Raise the per-agent budget with `PR_DISTILL_AGENT_TIMEOUT` (default 300
 
 ## 🔵 Why the Cursor model is pinned
 
-Every `cursor-agent` call in this repo passes `--model "$CURSOR_REVIEW_MODEL"`
+Every `cursor-agent` call in the relay passes `--model "$CURSOR_REVIEW_MODEL"`
 (default `composer-2.5`). Left off, `cursor-agent` uses the model in your
 `~/.cursor/cli-config.json`, which out of the box is **Auto**. Auto routes to the frontier models,
 and that breaks two things at once:
