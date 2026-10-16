@@ -3191,7 +3191,7 @@ fi
 # relay alone while the stub sits in `gh pr diff`, after both dirs exist, and WAIT for it so the
 # handler has finished; the group KILL after that only reaps the stub left hanging.
 if ( set -m ) 2>/dev/null; then
-  s_reset; rm -f "$WORK/hangmark" "$WORK/kstatus"; rm -rf "$WORK/ktmp"; mkdir -p "$WORK/ktmp"
+  s_reset; rm -f "$WORK/hangmark" "$WORK/kstatus" "$WORK/kbefore"; rm -rf "$WORK/ktmp"; mkdir -p "$WORK/ktmp"
   ( set -m
     env PATH="$BIN:$PATH" TMPDIR="$WORK/ktmp" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" \
       GH_FIXED_SHA="$SHA_A" GH_DIFF_HANG=1 GH_HANG_MARK="$WORK/hangmark" \
@@ -3200,6 +3200,9 @@ if ( set -m ) 2>/dev/null; then
     _pgid=$(ps -o pgid= -p "$_kid" 2>/dev/null | tr -d ' ')
     _w=0
     while [ "$_w" -lt 200 ] && [ ! -e "$WORK/hangmark" ]; do sleep 0.1; _w=$((_w+1)); done
+    # What the handler has to remove, counted before the TERM: an empty TMPDIR afterwards proves
+    # nothing unless both dirs were there to begin with.
+    ls -A "$WORK/ktmp" 2>/dev/null | wc -l | tr -d ' ' > "$WORK/kbefore"
     kill -TERM "$_kid" 2>/dev/null
     wait "$_kid" 2>/dev/null; echo "$?" > "$WORK/kstatus"
     kill -9 -"$_pgid" 2>/dev/null || kill -9 "$_kid" 2>/dev/null
@@ -3208,11 +3211,13 @@ if ( set -m ) 2>/dev/null; then
   [ -e "$WORK/hangmark" ]; ok_if $? "SIGTERM: the relay was inside \`gh pr diff\` when it was killed" "-"
   [ "$(cat "$WORK/kstatus" 2>/dev/null)" = 143 ]
   ok_if $? "SIGTERM: the relay still dies of the signal (status 143)" "status=$(cat "$WORK/kstatus" 2>/dev/null)"
+  [ "$(cat "$WORK/kbefore" 2>/dev/null)" = 2 ]
+  ok_if $? "SIGTERM: STATUS_DIR and ATTACH_DIR both existed when the TERM was sent" "entries=$(cat "$WORK/kbefore" 2>/dev/null)"
   [ -z "$(ls -A "$WORK/ktmp" 2>/dev/null)" ]
   ok_if $? "SIGTERM: the handler removed STATUS_DIR and ATTACH_DIR" "left: $(ls -A "$WORK/ktmp" 2>/dev/null | tr '\n' ' ')"
 else
   echo "  skip [-] SIGTERM test: no job control (set -m) available in this shell"
-  SKIP=$((SKIP+3))
+  SKIP=$((SKIP+4))
 fi
 
 # --- the cleanup trap is armed as soon as STATUS_DIR exists ---------------------------------------

@@ -11,9 +11,10 @@ All notable changes to **ship-feature** are documented here. This project follow
 - **`pr-review-relay --verdict-file`**: the machine-readable round record, written only for
   autonomous mode's merge gate. Autonomous mode is gone and nothing else reads it. The review
   prompts no longer ask for a `VERDICT:` line; a review that still ends with `VERDICT: clean` counts
-  as an approval, as before. `relay/test/test-verdict.sh` goes with it; its two exit-handler checks
-  (a signal still kills the relay, the trap is armed before the attachments directory) move to
-  `test-fail-closed.sh`.
+  as an approval, as before. `relay/test/test-verdict.sh` and its golden prompt capture go with it;
+  a last run of that capture against this change matched byte for byte, so a round without the flag
+  sends the same prompts as before. Its two exit-handler checks (a signal still kills the relay, the
+  trap is armed before the attachments directory) move to `test-fail-closed.sh`.
 
 ## [0.7.0] — 2026-10-16
 
