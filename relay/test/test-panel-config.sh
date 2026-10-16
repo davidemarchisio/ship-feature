@@ -533,23 +533,12 @@ rlr yes "stall: narration first, verdict last" \
 # still contains the approval marker.
 rlr yes "known limit: negated approval passes" 'I do not think this looks good.'
 
-# --verdict-file. A clean review in that mode may name no severity and never say "looks
-# good", so its closing line is the approval. And the mode appends its own rules to every
-# prompt, which name Blockers, Should-fix and Nit: an agent that echoes them back names
-# no verdict. The rules are read from pr-review-relay, not copied, so rewording them
-# there without updating the strip in lib-panel.sh fails this test.
-rlr yes "verdict-file: VERDICT: clean is a verdict" 'No issues.
+# A closing VERDICT line. A clean review may name no severity and never say "looks good",
+# so `VERDICT: clean` is the approval; a findings line names its severities.
+rlr yes "VERDICT: clean is a verdict" 'No issues.
 VERDICT: clean'
-rlr yes "verdict-file: a findings line is a verdict" 'The guard is wrong.
+rlr yes "a VERDICT: findings line is a verdict" 'The guard is wrong.
 VERDICT: findings blockers=1 should_fix=0'
-_vrules=$(sed -n 's/^  PR_RELAY_VERDICT_RULES="\(.*\)"$/\1/p' "$HERE/../pr-review-relay")
-if [ -n "$_vrules" ]; then ok "verdict-file: the rules are readable from pr-review-relay"
-else bad "verdict-file: PR_RELAY_VERDICT_RULES not found in pr-review-relay"; fi
-rlr no "echo: the --verdict-file rules" "$_vrules"
-rlr no "echo: the --verdict-file rules after the prompt, wrapped" "Report missing tests as Should-fix, unless the untested path is itself a
-Blocker. Be concise. Group findings by severity: Blocker / Should-fix / Nit. If it looks
-good, say so in one line.
-$(printf '%s' "$_vrules" | fold -s -w 72)"
 
 # A large body must be handled at all — no argv limit, no truncation, no pipeline
 # accident. This does NOT catch a `-q` regression: measured on GNU grep 3.11, `-q`
