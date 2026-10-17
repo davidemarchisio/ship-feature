@@ -121,6 +121,14 @@ make_agent() {
 #!/usr/bin/env bash
 self="\$(basename "\$0")"
 case "\$self" in cursor-agent) key=cursor;; agy) key=antigravity;; *) key="\$self";; esac
+# The opencode seat probes its binary for --pure before every review (issue #38). Answer the
+# probe before any failure knob below, which models the REVIEW, not the start-up check.
+if [ "\$self" = opencode ]; then
+  case "\${1:-}" in
+    --help) printf 'Options:\n      --pure          run without external plugins\n'; exit 0;;
+    --version) echo 1.18.25; exit 0;;
+  esac
+fi
 case ",\${SLEEP_KEYS:-}," in *",\$key,"*) sleep 5;; esac        # outlast a short timeout → rc 124
 case ",\${FAIL_EMPTY:-}," in *",\$key,"*) exit 0;; esac      # empty output, rc 0 → "no review"
 case ",\${WS_ONLY:-}," in *",\$key,"*) printf '\t\n  \n';  exit 0;; esac  # whitespace-only "review"
@@ -902,6 +910,27 @@ make_strict_opencode() { # $1 = dir to install the stub into
   mkdir -p "$1"
   cat >"$1/opencode" <<'OC'
 #!/usr/bin/env bash
+# The --pure probe (issue #38) comes first, and never overwrites the review's argv log.
+# The probe records where it ran, because it is an opencode start-up too and must be as
+# isolated as the review. OC_HELP picks the help it answers with:
+#   (unset)     the 1.18.25 layout, which lists --pure
+#   nopure      a CLI from before the flag (a near miss, --purely-cosmetic, is listed)
+#   comma-ansi  another layout that has it: `-p, --pure`, in colour
+#   fail        --help itself fails (exit 2, an error on stderr)
+#   hang        --help never answers; exec, so the seat's timeout kills this process
+case "${1:-}" in
+  --help)
+    printf 'cwd=%s projcfg=%s\n' "$PWD" "${OPENCODE_DISABLE_PROJECT_CONFIG:-}" >> "${OC_ARGV_FILE:?}.probe"
+    case "${OC_HELP:-}" in
+      nopure) printf 'Options:\n      --print-logs    print logs to stderr\n      --purely-cosmetic  not the flag\n' ;;
+      comma-ansi) printf 'Options:\n  -l, --print-logs  print logs to stderr\n  -p, \033[1m--pure\033[0m  run without external plugins\n' ;;
+      fail) echo "Error: the opencode config is broken" >&2; exit 2 ;;
+      hang) exec sleep 30 ;;
+      *) printf 'Options:\n      --print-logs    print logs to stderr\n      --pure          run without external plugins\n' ;;
+    esac
+    exit 0 ;;
+  --version) echo "${OC_VERSION:-1.18.25}"; exit 0 ;;
+esac
 # Record argv so the test can assert on it, then enforce the contract.
 printf '%s\n' "$*" > "${OC_ARGV_FILE:?}"
 # Record stdin. The diff is DELIVERED there, so argv alone cannot tell "fed the
@@ -981,7 +1010,8 @@ oc_run() { # oc_run <expected_exit> <desc> [VAR=val ...] [-- <relay args...>]
     FAIL=$((FAIL + 1))
   fi
 }
-# The stub writes FIVE files per run — the argv log plus four sidecars beside it.
+# The stub writes SIX files per run — the argv log plus five sidecars beside it (the sixth,
+# .probe, is the --pure probe's own record, issue #38).
 # Every reset site used to hand-list the ones it happened to care about, in three
 # different shapes, and #36 had to fix one of them (the relative-TMPDIR run) purely
 # because a name had been left off. One list, one place to add the sixth.
@@ -990,10 +1020,10 @@ oc_run() { # oc_run <expected_exit> <desc> [VAR=val ...] [-- <relay args...>]
 # silently redirect the wipe onto $OC_ARGV instead of the caller's target.
 #
 # The empty prefix then has to be REFUSED, not merely allowed to fail. `rm -f ""` is
-# a silent no-op on GNU coreutils — exit 0, no diagnostic — while the four names
-# beside it collapse to the RELATIVE paths `.cfg .cwd .projcfg .stdin` and are
+# a silent no-op on GNU coreutils — exit 0, no diagnostic — while the five names
+# beside it collapse to the RELATIVE paths `.cfg .cwd .projcfg .stdin .probe` and are
 # deleted from whatever directory the suite is standing in. Measured: a directory
-# holding those four files plus one other keeps only the other, and `rm` still
+# holding those files plus one other keeps only the other, and `rm` still
 # reports success. So the guard is the whole protection; there is nothing
 # downstream to catch it.
 oc_reset() { # oc_reset [prefix]  (defaults to $OC_ARGV)
@@ -1003,7 +1033,7 @@ oc_reset() { # oc_reset [prefix]  (defaults to $OC_ARGV)
     FAIL=$((FAIL + 1))
     return 1
   }
-  rm -f "$f" "$f.cfg" "$f.cwd" "$f.projcfg" "$f.stdin"
+  rm -f "$f" "$f.cfg" "$f.cwd" "$f.projcfg" "$f.stdin" "$f.probe"
 }
 
 oc_assert() { # oc_assert <desc> <grep-mode: has|hasnt> <pattern>
@@ -1053,22 +1083,22 @@ oc_stdin() { # oc_stdin <desc> <has|hasnt> <pattern>
 # wrong path makes tests pass by erasing evidence, and no pass-count check would
 # show it: a successful dispatch rewrites the sidecars either way.
 _ocr="$WORK/oc-reset-probe"
-for _sfx in "" .cfg .cwd .projcfg .stdin; do : >"$_ocr$_sfx"; done
+for _sfx in "" .cfg .cwd .projcfg .stdin .probe; do : >"$_ocr$_sfx"; done
 oc_reset "$_ocr"
 _left=""
-for _sfx in "" .cfg .cwd .projcfg .stdin; do [ -e "$_ocr$_sfx" ] && _left="$_left $_ocr$_sfx"; done
+for _sfx in "" .cfg .cwd .projcfg .stdin .probe; do [ -e "$_ocr$_sfx" ] && _left="$_left $_ocr$_sfx"; done
 if [ -z "$_left" ]; then
-  echo "  ok   [-] oc_reset clears the argv log and all four sidecars"
+  echo "  ok   [-] oc_reset clears the argv log and all five sidecars"
   PASS=$((PASS + 1))
 else
   echo "  FAIL oc_reset left:$_left"
   FAIL=$((FAIL + 1))
 fi
 # The default argument, which twelve of the thirteen call sites rely on.
-for _sfx in "" .cfg .cwd .projcfg .stdin; do : >"$OC_ARGV$_sfx"; done
+for _sfx in "" .cfg .cwd .projcfg .stdin .probe; do : >"$OC_ARGV$_sfx"; done
 oc_reset
 _left=""
-for _sfx in "" .cfg .cwd .projcfg .stdin; do [ -e "$OC_ARGV$_sfx" ] && _left="$_left $OC_ARGV$_sfx"; done
+for _sfx in "" .cfg .cwd .projcfg .stdin .probe; do [ -e "$OC_ARGV$_sfx" ] && _left="$_left $OC_ARGV$_sfx"; done
 if [ -z "$_left" ]; then
   echo "  ok   [-] oc_reset with no argument defaults to \$OC_ARGV"
   PASS=$((PASS + 1))
@@ -1082,12 +1112,12 @@ fi
 # exits 0 — a test helper quietly removing files that are not its own.
 _ocrdir="$WORK/oc-reset-empty"
 mkdir -p "$_ocrdir"
-for _sfx in .cfg .cwd .projcfg .stdin bystander; do : >"$_ocrdir/$_sfx"; done
+for _sfx in .cfg .cwd .projcfg .stdin .probe bystander; do : >"$_ocrdir/$_sfx"; done
 # Subshell: the guard's own FAIL increment is deliberately not counted here — this
 # assertion is about the files, and the guard firing is the expected path.
 (cd "$_ocrdir" && oc_reset "") >/dev/null 2>&1
 _survived=1
-for _sfx in .cfg .cwd .projcfg .stdin bystander; do [ -e "$_ocrdir/$_sfx" ] || _survived=0; done
+for _sfx in .cfg .cwd .projcfg .stdin .probe bystander; do [ -e "$_ocrdir/$_sfx" ] || _survived=0; done
 if [ "$_survived" = 1 ]; then
   echo "  ok   [-] oc_reset refuses an empty prefix instead of clearing the cwd"
   PASS=$((PASS + 1))
@@ -1161,6 +1191,15 @@ else
   echo "  FAIL opencode ran in the repo cwd — project opencode.json/mcp would be honoured"
   FAIL=$((FAIL + 1))
 fi
+# The --pure probe is an opencode start-up as well, so it gets the same isolation.
+_probe="$(head -n 1 "$OC_ARGV.probe" 2>/dev/null || true)"
+if [ -n "$_probe" ] && [ "$_probe" = "cwd=$(cat "$OC_ARGV.cwd") projcfg=1" ]; then
+  echo "  ok   [-] the --pure probe runs in the review's cwd with project config disabled"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL the --pure probe ran elsewhere or with project config on ($_probe)"
+  FAIL=$((FAIL + 1))
+fi
 
 # Shell is denied, so the reviewer can never fetch the PR: the diff must reach it on
 # STDIN in both modes. It used to be an `-f` attachment, and opencode injects only
@@ -1188,6 +1227,71 @@ oc_assert "does not deny the delivery it just used" hasnt "nothing is on stdin"
 oc_assert "does not tell it nothing follows" hasnt "nothing is appended below"
 oc_assert "tells the agent the diff is appended" has "APPENDED BELOW"
 oc_assert "never tells it to run gh" hasnt "gh pr view"
+
+# --- the --pure probe fails closed, and names the cause (issue #38) ---------------
+# A CLI without --pure prints its top-level help for `opencode --pure run` and exits 0.
+# The non-review gate rejected that, so the round failed every time and nothing named the
+# CLI as the cause. Now the seat fails with the reason, and the review run never starts.
+# A --help that itself fails or hangs is a different cause, so it must not be reported
+# as a missing flag: "upgrade" would be the wrong fix for a CLI that is fine.
+oc_probe_fails() { # oc_probe_fails <desc> <message...> -- <VAR=val ...>
+  local desc="$1" out rc m missing=""
+  local -a msgs=()
+  shift
+  while [ "$1" != "--" ]; do
+    msgs+=("$1")
+    shift
+  done
+  shift
+  oc_reset
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  out="$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+    PR_RELAY_OPENCODE_MODEL= OC_ARGV_FILE="$OC_ARGV" "$@" \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode 2>&1)"
+  rc=$?
+  for m in "${msgs[@]}"; do grep -qF -- "$m" <<<"$out" || missing="$missing [$m]"; done
+  if [ "$rc" = 3 ] && [ -z "$missing" ] && [ ! -e "$OC_ARGV" ]; then
+    echo "  ok   [3] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $desc (rc $rc, want 3; missing:${missing:- none}; review ran: $([ -e "$OC_ARGV" ] && echo yes || echo no))"
+    FAIL=$((FAIL + 1))
+  fi
+}
+oc_probe_fails "an opencode without --pure fails the round, names the version, runs no review" \
+  'opencode 1.2.27 has no --pure flag' 'Upgrade OpenCode' -- OC_HELP=nopure OC_VERSION=1.2.27
+oc_probe_fails "a --help that fails is reported as that, with its error, not as a missing flag" \
+  '`opencode --help` exited 2' 'the opencode config is broken' -- OC_HELP=fail
+oc_probe_fails "a --help that hangs is a timeout, not a missing flag" \
+  'did not finish within 2s' 'raise PR_RELAY_AGENT_TIMEOUT' -- OC_HELP=hang PR_RELAY_AGENT_TIMEOUT=2
+# The two failures above must not borrow the old-CLI wording.
+oc_reset
+rm -rf "$WORK/cache"
+mkdir -p "$WORK/cache"
+rm -f "$WORK/sha_counter"
+_probe_out="$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+  PR_RELAY_OPENCODE_MODEL= OC_ARGV_FILE="$OC_ARGV" OC_HELP=fail \
+  bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode 2>&1)"
+if ! grep -qF 'has no --pure flag' <<<"$_probe_out"; then
+  echo "  ok   [-] a failed --help never says the flag is missing"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL a failed --help was reported as a missing --pure"
+  FAIL=$((FAIL + 1))
+fi
+# Another help layout that HAS the flag must pass the probe, so a working CLI is never
+# turned away because its help is laid out or coloured differently.
+oc_run 0 "a help that lists '-p, --pure' in colour passes the probe" OC_HELP=comma-ansi
+if [ -s "$OC_ARGV" ]; then
+  echo "  ok   [-] the review ran after that probe"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL the probe turned away a CLI whose help lists -p, --pure"
+  FAIL=$((FAIL + 1))
+fi
+unset _probe _probe_out
 
 oc_run 0 "opencode runs read-only, diff mode" -- --diff
 oc_assert "diff-mode argv still read-only" has "--agent pr-review-relay-ro"
@@ -2104,6 +2208,20 @@ if [ -f "$RL" ]; then
   rl_assert "review-local: default-deny policy" has '"\*":"deny"' "$OC_ARGV.cfg"
   rl_assert "review-local: never allows bash" hasnt '"bash":"allow"' "$OC_ARGV.cfg"
   rl_assert "review-local: defines its own agent" has '"pr-review-relay-ro"' "$OC_ARGV.cfg"
+  # The same lib runs the seat here, so an old CLI must fail with the same named reason
+  # (issue #38 was first seen on a local review round).
+  oc_reset
+  rl_old=$(cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" OC_HELP=nopure OC_VERSION=1.2.27 \
+    bash "$RL" --base mainline --reviewers opencode 2>&1)
+  rl_old_rc=$?
+  if [ "$rl_old_rc" = 3 ] && grep -qF 'opencode 1.2.27 has no --pure flag' <<<"$rl_old" && [ ! -e "$OC_ARGV" ]; then
+    echo "  ok   [$rl_old_rc] review-local names an opencode without --pure and does not run it"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL review-local on an old opencode (rc $rl_old_rc; want 3, the named reason, no review run): $(grep -i opencode <<<"$rl_old" | tail -n 3)"
+    FAIL=$((FAIL + 1))
+  fi
+  unset rl_old rl_old_rc
 
   # The same gate, the other caller. review-local posts nowhere, so its stdout banner
   # IS the delivery: a rejected body must not go out under "===== Name review =====",

@@ -33,6 +33,14 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Fixed
 
+- **An OpenCode CLI without `--pure` failed the `opencode` seat with no reason.** On such a CLI
+  (seen with 1.2.27), `opencode --pure run …` prints the top-level help and exits `0`, so the
+  non-review gate rejected every round and nothing named the CLI. The seat of `pr-review-relay` and
+  `review-local` now checks that `opencode --help` lists `--pure` before it runs, with the same
+  isolation as the run, and fails with "opencode 1.2.27 has no --pure flag … Upgrade OpenCode".
+  A `--help` that fails or hangs gets its own message (its exit code and error, or a timeout),
+  never the upgrade advice. The probe finds `--pure` in other help layouts too (`-p, --pure`,
+  colour). The review run never starts when the probe fails. Issue #38.
 - **A plan-review seat that did not review could still count as a review.** `plan-review` failed a
   seat only on an empty answer, so "Reading the plan before reviewing." made a clean round. It now
   runs the relay's gate (`review_looks_like_a_review` in `relay/lib-panel.sh`), as `pr-review-relay`
