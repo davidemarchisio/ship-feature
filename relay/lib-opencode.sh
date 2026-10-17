@@ -620,12 +620,31 @@ opencode_review() {
     # gate then rejects that "review", so the round fails every time, and nothing says the
     # CLI is too old. `--help` lists every global flag, so ask it. The probe is an opencode
     # start-up too, so it runs in the same cwd, config lock and timeout as the review.
+    _oc_help_rc=0
     _oc_help="$(OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
-      timeout "$agent_timeout" "$OPENCODE_BIN" --help </dev/null 2>&1)"
-    if ! printf '%s\n' "$_oc_help" | grep -qE '^[[:space:]]*--pure([[:space:]]|$)'; then
+      timeout "$agent_timeout" "$OPENCODE_BIN" --help </dev/null 2>&1)" || _oc_help_rc=$?
+    # A `--help` that failed says nothing about the flag, and "no --pure, upgrade" would
+    # send the reader to replace a CLI that may be fine. So the failure gets its own
+    # message and keeps its output. Exit 1 even on a timeout: the seat report hides
+    # stderr after a 124 (it is a review's partial transcript then), and this line is
+    # the only thing that says it was the probe, not the review, that hung.
+    if [ "$_oc_help_rc" -ne 0 ]; then
+      if [ "$_oc_help_rc" -eq 124 ]; then
+        echo "\`opencode --help\` did not finish within ${agent_timeout}s, so the seat could not check for --pure. No review ran. If the CLI is only slow to start, raise PR_RELAY_AGENT_TIMEOUT." >"$errf"
+      else
+        echo "\`opencode --help\` exited $_oc_help_rc, so the seat could not check for --pure. No review ran. Its output:" >"$errf"
+        printf '%s\n' "$_oc_help" | tail -n 5 >>"$errf"
+      fi
+      exit 1
+    fi
+    # The flag as a word anywhere on a line, because help layouts differ (`--pure   …`,
+    # `-p, --pure`, `--pure=`), with colour codes stripped first. `--purely` is not it.
+    _oc_esc="$(printf '\033')"
+    if ! printf '%s\n' "$_oc_help" | sed "s/${_oc_esc}\[[0-9;]*m//g" |
+      grep -qE '(^|[^[:alnum:]_-])--pure([^[:alnum:]_-]|$)'; then
       _oc_ver="$(OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
         timeout "$agent_timeout" "$OPENCODE_BIN" --version </dev/null 2>/dev/null | head -n 1)"
-      echo "opencode ${_oc_ver:-(version unknown)} has no --pure flag (\`opencode --help\` does not list it), so it would print its help instead of a review. Upgrade OpenCode: 1.18.25 has the flag." >"$errf"
+      echo "opencode ${_oc_ver:-(version unknown)} has no --pure flag (\`opencode --help\` does not list it), so it would print its help instead of a review. Upgrade OpenCode (1.18.25 is known to have the flag)." >"$errf"
       exit 1
     fi
     OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \

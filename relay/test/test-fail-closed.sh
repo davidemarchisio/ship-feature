@@ -911,17 +911,23 @@ make_strict_opencode() { # $1 = dir to install the stub into
   cat >"$1/opencode" <<'OC'
 #!/usr/bin/env bash
 # The --pure probe (issue #38) comes first, and never overwrites the review's argv log.
-# OC_NO_PURE models a CLI from before the flag: its help does not list --pure. The probe
-# records where it ran, because it is an opencode start-up too and must be as isolated
-# as the review.
+# The probe records where it ran, because it is an opencode start-up too and must be as
+# isolated as the review. OC_HELP picks the help it answers with:
+#   (unset)     the 1.18.25 layout, which lists --pure
+#   nopure      a CLI from before the flag (a near miss, --purely-cosmetic, is listed)
+#   comma-ansi  another layout that has it: `-p, --pure`, in colour
+#   fail        --help itself fails (exit 2, an error on stderr)
+#   hang        --help never answers; exec, so the seat's timeout kills this process
 case "${1:-}" in
   --help)
     printf 'cwd=%s projcfg=%s\n' "$PWD" "${OPENCODE_DISABLE_PROJECT_CONFIG:-}" >> "${OC_ARGV_FILE:?}.probe"
-    if [ -n "${OC_NO_PURE:-}" ]; then
-      printf 'Options:\n      --print-logs    print logs to stderr\n      --purely-cosmetic  not the flag\n'
-    else
-      printf 'Options:\n      --print-logs    print logs to stderr\n      --pure          run without external plugins\n'
-    fi
+    case "${OC_HELP:-}" in
+      nopure) printf 'Options:\n      --print-logs    print logs to stderr\n      --purely-cosmetic  not the flag\n' ;;
+      comma-ansi) printf 'Options:\n  -l, --print-logs  print logs to stderr\n  -p, \033[1m--pure\033[0m  run without external plugins\n' ;;
+      fail) echo "Error: the opencode config is broken" >&2; exit 2 ;;
+      hang) exec sleep 30 ;;
+      *) printf 'Options:\n      --print-logs    print logs to stderr\n      --pure          run without external plugins\n' ;;
+    esac
     exit 0 ;;
   --version) echo "${OC_VERSION:-1.18.25}"; exit 0 ;;
 esac
@@ -1017,7 +1023,7 @@ oc_run() { # oc_run <expected_exit> <desc> [VAR=val ...] [-- <relay args...>]
 # a silent no-op on GNU coreutils — exit 0, no diagnostic — while the five names
 # beside it collapse to the RELATIVE paths `.cfg .cwd .projcfg .stdin .probe` and are
 # deleted from whatever directory the suite is standing in. Measured: a directory
-# holding those four files plus one other keeps only the other, and `rm` still
+# holding those files plus one other keeps only the other, and `rm` still
 # reports success. So the guard is the whole protection; there is nothing
 # downstream to catch it.
 oc_reset() { # oc_reset [prefix]  (defaults to $OC_ARGV)
@@ -1222,40 +1228,70 @@ oc_assert "does not tell it nothing follows" hasnt "nothing is appended below"
 oc_assert "tells the agent the diff is appended" has "APPENDED BELOW"
 oc_assert "never tells it to run gh" hasnt "gh pr view"
 
-# --- an OpenCode CLI without --pure (issue #38) -----------------------------------
-# Such a CLI prints its top-level help for `opencode --pure run` and exits 0. The
-# non-review gate rejected that, so the round failed every time and nothing named the
-# CLI as the cause. The seat must now fail with that reason, and never start the run.
+# --- the --pure probe fails closed, and names the cause (issue #38) ---------------
+# A CLI without --pure prints its top-level help for `opencode --pure run` and exits 0.
+# The non-review gate rejected that, so the round failed every time and nothing named the
+# CLI as the cause. Now the seat fails with the reason, and the review run never starts.
+# A --help that itself fails or hangs is a different cause, so it must not be reported
+# as a missing flag: "upgrade" would be the wrong fix for a CLI that is fine.
+oc_probe_fails() { # oc_probe_fails <desc> <message...> -- <VAR=val ...>
+  local desc="$1" out rc m missing=""
+  local -a msgs=()
+  shift
+  while [ "$1" != "--" ]; do
+    msgs+=("$1")
+    shift
+  done
+  shift
+  oc_reset
+  rm -rf "$WORK/cache"
+  mkdir -p "$WORK/cache"
+  rm -f "$WORK/sha_counter"
+  out="$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+    PR_RELAY_OPENCODE_MODEL= OC_ARGV_FILE="$OC_ARGV" "$@" \
+    bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode 2>&1)"
+  rc=$?
+  for m in "${msgs[@]}"; do grep -qF -- "$m" <<<"$out" || missing="$missing [$m]"; done
+  if [ "$rc" = 3 ] && [ -z "$missing" ] && [ ! -e "$OC_ARGV" ]; then
+    echo "  ok   [3] $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $desc (rc $rc, want 3; missing:${missing:- none}; review ran: $([ -e "$OC_ARGV" ] && echo yes || echo no))"
+    FAIL=$((FAIL + 1))
+  fi
+}
+oc_probe_fails "an opencode without --pure fails the round, names the version, runs no review" \
+  'opencode 1.2.27 has no --pure flag' 'Upgrade OpenCode' -- OC_HELP=nopure OC_VERSION=1.2.27
+oc_probe_fails "a --help that fails is reported as that, with its error, not as a missing flag" \
+  '`opencode --help` exited 2' 'the opencode config is broken' -- OC_HELP=fail
+oc_probe_fails "a --help that hangs is a timeout, not a missing flag" \
+  'did not finish within 2s' 'raise PR_RELAY_AGENT_TIMEOUT' -- OC_HELP=hang PR_RELAY_AGENT_TIMEOUT=2
+# The two failures above must not borrow the old-CLI wording.
 oc_reset
 rm -rf "$WORK/cache"
 mkdir -p "$WORK/cache"
 rm -f "$WORK/sha_counter"
-_oldoc_out="$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
-  PR_RELAY_OPENCODE_MODEL= OC_ARGV_FILE="$OC_ARGV" OC_NO_PURE=1 OC_VERSION=1.2.27 \
+_probe_out="$(env PATH="$BIN:$PATH" XDG_CACHE_HOME="$WORK/cache" GH_SHA_COUNTER="$WORK/sha_counter" \
+  PR_RELAY_OPENCODE_MODEL= OC_ARGV_FILE="$OC_ARGV" OC_HELP=fail \
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode 2>&1)"
-_oldoc_rc=$?
-if [ "$_oldoc_rc" = 3 ]; then
-  echo "  ok   [3] an opencode without --pure fails the round"
+if ! grep -qF 'has no --pure flag' <<<"$_probe_out"; then
+  echo "  ok   [-] a failed --help never says the flag is missing"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL [got $_oldoc_rc, want 3] an opencode without --pure"
+  echo "  FAIL a failed --help was reported as a missing --pure"
   FAIL=$((FAIL + 1))
 fi
-if grep -qF 'opencode 1.2.27 has no --pure flag' <<<"$_oldoc_out"; then
-  echo "  ok   [-] the failure names the CLI version and the missing flag"
+# Another help layout that HAS the flag must pass the probe, so a working CLI is never
+# turned away because its help is laid out or coloured differently.
+oc_run 0 "a help that lists '-p, --pure' in colour passes the probe" OC_HELP=comma-ansi
+if [ -s "$OC_ARGV" ]; then
+  echo "  ok   [-] the review ran after that probe"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL no named reason for the old CLI: $(grep -i opencode <<<"$_oldoc_out" | tail -n 3)"
+  echo "  FAIL the probe turned away a CLI whose help lists -p, --pure"
   FAIL=$((FAIL + 1))
 fi
-if [ ! -e "$OC_ARGV" ]; then
-  echo "  ok   [-] the review run never starts on an old CLI"
-  PASS=$((PASS + 1))
-else
-  echo "  FAIL the review ran anyway: $(cat "$OC_ARGV")"
-  FAIL=$((FAIL + 1))
-fi
-unset _probe _oldoc_out _oldoc_rc
+unset _probe _probe_out
 
 oc_run 0 "opencode runs read-only, diff mode" -- --diff
 oc_assert "diff-mode argv still read-only" has "--agent pr-review-relay-ro"
@@ -2175,7 +2211,7 @@ if [ -f "$RL" ]; then
   # The same lib runs the seat here, so an old CLI must fail with the same named reason
   # (issue #38 was first seen on a local review round).
   oc_reset
-  rl_old=$(cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" OC_NO_PURE=1 OC_VERSION=1.2.27 \
+  rl_old=$(cd "$RLREPO" && env PATH="$BIN:$PATH" OC_ARGV_FILE="$OC_ARGV" OC_HELP=nopure OC_VERSION=1.2.27 \
     bash "$RL" --base mainline --reviewers opencode 2>&1)
   rl_old_rc=$?
   if [ "$rl_old_rc" = 3 ] && grep -qF 'opencode 1.2.27 has no --pure flag' <<<"$rl_old" && [ ! -e "$OC_ARGV" ]; then
