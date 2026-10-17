@@ -615,6 +615,19 @@ opencode_review() {
       exit 1
     }
     PATH="$_abs_path"
+    # PROBE FOR --pure FIRST (issue #38). An OpenCode CLI that predates the flag does not
+    # refuse it: it prints its top-level help and exits 0 (seen on 1.2.27). The non-review
+    # gate then rejects that "review", so the round fails every time, and nothing says the
+    # CLI is too old. `--help` lists every global flag, so ask it. The probe is an opencode
+    # start-up too, so it runs in the same cwd, config lock and timeout as the review.
+    _oc_help="$(OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
+      timeout "$agent_timeout" "$OPENCODE_BIN" --help </dev/null 2>&1)"
+    if ! printf '%s\n' "$_oc_help" | grep -qE '^[[:space:]]*--pure([[:space:]]|$)'; then
+      _oc_ver="$(OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
+        timeout "$agent_timeout" "$OPENCODE_BIN" --version </dev/null 2>/dev/null | head -n 1)"
+      echo "opencode ${_oc_ver:-(version unknown)} has no --pure flag (\`opencode --help\` does not list it), so it would print its help instead of a review. Upgrade OpenCode: 1.18.25 has the flag." >"$errf"
+      exit 1
+    fi
     OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
       timeout "$agent_timeout" "$OPENCODE_BIN" --pure run \
       --agent pr-review-relay-ro ${model[@]+"${model[@]}"} -- "$oc_prompt" \
