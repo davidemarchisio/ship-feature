@@ -5411,6 +5411,81 @@ _m=$(av_max agy)
 [ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -gt 20000 ]
 av_ok "T7 antigravity, --diff mode, 20 KB diff: still runs, element ${_m:-?} B" $?
 
+# =============================================================================
+# review-local --context-file (#1429). The relay has the flag; review-local, which is what
+# `ship-feature review` runs, did not, so a plan never reached the light-lane panel. Every seat must
+# get the document exactly once, and a seat that would take it as an oversize argv string is
+# refused with a named reason, as in the relay.
+# =============================================================================
+echo "review-local --context-file:"
+for a in claude codex cursor-agent agy opencode qwen grok; do make_agent "$a"; done
+make_pi_agent "$BIN"
+CF="$WORK/rl-context-file"
+rm -rf "$CF"
+mkdir -p "$CF"
+printf 'Plan: CF-PLAN-MARKER-7d1f\n- step one\n' >"$CF/plan.md"
+cf_run() { # cf_run [env assignments...] -- <review-local args...>  → $CF_RC, $CF/{argv,max,stdin,pf,oc,out,err}
+  local -a envs=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    envs+=("$1")
+    shift
+  done
+  [ "${1:-}" = -- ] && shift
+  rm -f "$CF"/argv "$CF"/max "$CF"/stdin "$CF"/pf "$CF"/oc "$CF"/oc.* "$CF"/out "$CF"/err
+  : >"$CF/argv"
+  : >"$CF/max"
+  : >"$CF/stdin"
+  : >"$CF/pf"
+  (cd "$RLREPO2" && env PATH="$BIN:$PATH" HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/xdg" XDG_CACHE_HOME="$WORK/cache" TMPDIR="$WORK/tmp" \
+    ARGV_LOG="$CF/argv" ARGV_MAX_LOG="$CF/max" STDIN_LOG="$CF/stdin" PROMPT_FILE_LOG="$CF/pf" \
+    OC_ARGV_FILE="$CF/oc" PR_RELAY_OPENCODE_BIN="$BIN_OCA/opencode" \
+    PI_GLM_REVIEW_MODEL= PI_GLM_REVIEW_EFFORT= PI_GROK_REVIEW_MODEL= PI_GROK_REVIEW_EFFORT= \
+    ${envs[@]+"${envs[@]}"} bash "$RL" --base HEAD~1 "$@" >"$CF/out" 2>"$CF/err" </dev/null)
+  CF_RC=$?
+}
+# Everything any seat was given (its argv, its stdin, grok's prompt file, opencode's argv), in ONE
+# file: `cat | grep -q` would take SIGPIPE under pipefail.
+cf_seen() { cat "$CF/argv" "$CF/stdin" "$CF/pf" "$CF/oc" >"$CF/seen" 2>/dev/null || true; }
+for _s in claude codex cursor antigravity qwen grok opencode pi_glm pi_grok; do
+  cf_run -- --reviewers "$_s" --context-file "$CF/plan.md"
+  cf_seen
+  _n=$(grep -c 'CF-PLAN-MARKER-7d1f' "$CF/seen")
+  [ "$CF_RC" = 0 ] && [ "$_n" = 1 ] && grep -q '## Provided context — read this and verify the branch against it' "$CF/seen" &&
+    grep -q "context: $CF/plan.md ([0-9]* bytes)" "$CF/out"
+  ok_if $? "review-local --context-file: $_s gets the plan, once" "rc=$CF_RC, marker seen $_n times; err: $(head -3 "$CF/err")"
+done
+unset _s _n
+# The control: the same seats with no flag see no plan and no preamble. Without it, a stub that
+# echoed a stale log would pass every check above.
+cf_run -- --reviewers claude,codex,cursor,antigravity,qwen,grok,opencode,pi_glm,pi_grok
+cf_seen
+[ "$CF_RC" = 0 ] && [ -s "$CF/seen" ] && ! grep -q 'CF-PLAN-MARKER-7d1f\|## Provided context' "$CF/seen" && ! grep -q 'context:' "$CF/out"
+ok_if $? "review-local with no --context-file: no seat sees a plan or the preamble" "rc=$CF_RC"
+cf_run -- --reviewers codex --context-file "$CF/no-such-plan.md"
+[ "$CF_RC" = 1 ] && grep -qF "context file not found: $CF/no-such-plan.md" "$CF/err" && [ ! -s "$CF/max" ]
+ok_if $? "review-local: a missing context file is exit 1, before any seat starts" "rc=$CF_RC"
+cf_run -- --reviewers codex --context-file
+[ "$CF_RC" = 2 ] && grep -q 'missing value for --context-file' "$CF/err" && [ ! -s "$CF/max" ]
+ok_if $? "review-local: --context-file with no value is exit 2" "rc=$CF_RC"
+bash "$RL" --help 2>/dev/null | grep -- '--context-file' >/dev/null
+ok_if $? "review-local --help names --context-file" "-"
+# Oversize: 140 KB of plan. claude, codex and qwen take the prompt as one argv string here, and
+# antigravity takes prompt + diff; all four are refused before they start. cursor reads stdin, so
+# it still reviews. --sequential, with cursor last: a refusal that used `exit` would stop the loop.
+cf_run -- --reviewers claude,codex,qwen,antigravity,cursor --sequential --context-file "$AV/ctx140k"
+[ "$CF_RC" = 3 ] && ! grep -qE '^(claude|codex|qwen|agy) ' "$CF/max" && grep -q '^cursor-agent ' "$CF/max" &&
+  grep -q 'LGTM from cursor.' "$CF/out" && grep -q 'CTX-MARKER-END' "$CF/stdin"
+ok_if $? "review-local, 140 KB context: the argv seats never start, cursor still reviews, round exit 3" "rc=$CF_RC; max: $(tr '\n' ',' <"$CF/max")"
+for _s in claude codex qwen; do
+  grep -q "$_s: prompt is [0-9]* B, over the argv limit.*shorten the --context-file" "$CF/err"
+  ok_if $? "review-local, 140 KB context: $_s is refused with the named reason" "$(head -5 "$CF/err")"
+done
+unset _s
+grep -q 'antigravity: prompt is [0-9]* B, over the argv limit.*a shorter --context-file' "$CF/err"
+ok_if $? "review-local, 140 KB context: antigravity is refused with the named reason" "$(head -5 "$CF/err")"
+! grep -q 'over the argv limit' "$CF/out"
+ok_if $? "review-local: the refusals stay on stderr, not under a review banner" "-"
+
 echo "-------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" = 0 ]

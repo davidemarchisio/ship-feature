@@ -13,8 +13,9 @@
 #
 # Usage:
 #   review-local [--author claude|codex|cursor|antigravity|opencode|qwen|grok|pi_glm|pi_grok] [--base <ref>] \
-#                [--reviewers claude,codex,grok,opencode] [--sequential]
+#                [--reviewers claude,codex,grok,opencode] [--sequential] [--context-file <path>]
 #                (opencode, qwen, grok, pi_glm and pi_grok are also supported, opt-in: name them explicitly)
+#   (--context-file prepends a document, e.g. the plan, to every reviewer's prompt, as the relay does)
 #   (reviewers run in PARALLEL by default; --sequential runs them one at a time, in panel order;
 #    --parallel is still accepted; the last of the two wins)
 #   (run from inside the repo, on the branch you want reviewed)
@@ -104,6 +105,7 @@ DEFAULT_REVIEWERS="claude,codex,grok,opencode"
 # PARALLEL by default, as in pr-review-relay — see the note there.
 AUTHOR=""
 BASE="main"
+CONTEXT_FILE=""
 PARALLEL=1
 REVIEWERS_EXPLICIT=0
 REVIEWERS="$(panel_resolve PR_RELAY_REVIEWERS REVIEWERS "$DEFAULT_REVIEWERS")"
@@ -185,6 +187,11 @@ while [ $# -gt 0 ]; do
       REVIEWERS_EXPLICIT=1
       shift 2
       ;;
+    --context-file)
+      need_value "$@"
+      CONTEXT_FILE="$2"
+      shift 2
+      ;;
     --parallel)
       PARALLEL=1
       shift
@@ -193,10 +200,10 @@ while [ $# -gt 0 ]; do
       PARALLEL=0
       shift
       ;;
-    # 20, not the old 15: the usage block grew by the lines about --sequential, and a --help that
-    # stops before the flag line is how a new flag goes unseen. The test asserts both flags print.
+    # 21: the usage block grew by the lines about --sequential and --context-file, and a --help that
+    # stops before the flag line is how a new flag goes unseen. The test asserts the flags print.
     -h | --help)
-      relay_print_header "$0" 20
+      relay_print_header "$0" 21
       exit 0
       ;;
     *)
@@ -283,6 +290,21 @@ Be concise. Group findings by severity: Blocker / Should-fix / Nit. If it looks
 good, say so in one line.
 P
 
+# --context-file: the same preamble the relay builds, so a plan reaches every seat. claude, codex,
+# qwen, cursor and antigravity get it at the head of $PROMPT; opencode, grok and the pi seats build
+# their own prompt, so they get the block as an argument. Checked before any seat starts.
+CONTEXT_BLOCK=""
+if [ -n "$CONTEXT_FILE" ]; then
+  [ -f "$CONTEXT_FILE" ] || {
+    echo "context file not found: $CONTEXT_FILE" >&2
+    exit 1
+  }
+  CONTEXT_BLOCK=$(printf '## Provided context — read this and verify the branch against it\n\n%s\n\n---\n\n' "$(cat "$CONTEXT_FILE")")
+  echo "  context: $CONTEXT_FILE ($(wc -c <"$CONTEXT_FILE") bytes)"
+  # $(...) strips the block's trailing newlines; put the blank line back before the prompt.
+  PROMPT="$CONTEXT_BLOCK"$'\n\n'"$PROMPT"
+fi
+
 tool_for() { case "$1" in claude) echo claude ;; codex) echo codex ;; cursor) echo cursor-agent ;; antigravity | agy) echo agy ;; opencode) echo "$OPENCODE_BIN" ;; qwen) echo qwen ;; grok) echo grok ;; pi_glm | pi_grok) echo "$PI_BIN" ;; *) echo "" ;; esac }
 
 # Agents that read stdin (claude / codex / cursor / qwen) get the diff piped in, so a
@@ -295,6 +317,28 @@ tool_for() { case "$1" in claude) echo claude ;; codex) echo codex ;; cursor) ec
 # pi_glm / pi_grok get the full prompt on stdin, from an isolated cwd, with no tools (lib-pi.sh).
 review_with() {
   local name="$1" out="" rc=0 errf
+  # ARGV GUARD (lib-argv.sh), as in the relay. Here claude, codex and qwen take the prompt as ONE
+  # argv string, and antigravity takes prompt + diff. A --context-file (or, for antigravity, a big
+  # diff) can push that string over the kernel's per-string cap; exec then fails with E2BIG and the
+  # seat reports a bare exit 126. Refuse it with a named reason instead, before it starts, and
+  # `return`, never `exit` (in --sequential this runs in the current shell). opencode checks
+  # inside opencode_review; grok and the pi seats do not take the prompt on argv.
+  local _argv_el="" _argv_n _argv_hint="shorten the --context-file or use another seat"
+  case "$name" in
+    claude | codex | qwen) _argv_el="$PROMPT" ;;
+    antigravity)
+      _argv_el="$(printf '%s\n\n%s' "$PROMPT" "$DIFF")"
+      _argv_hint="use a smaller diff, a shorter --context-file, or another seat"
+      ;;
+  esac
+  if [ -n "$_argv_el" ]; then
+    _argv_n="$(argv_bytes "$_argv_el")"
+    if ! argv_fits "$_argv_n"; then
+      argv_refuse "$name" "$_argv_n" "$_argv_hint"
+      printf 'fail' >"$FAILDIR/k_$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_')"
+      return 0
+    fi
+  fi
   errf="$(mktemp)"
   case "$name" in
     claude)
@@ -318,19 +362,19 @@ review_with() {
       rc=$?
       ;;
     opencode)
-      out=$(opencode_review "$ATTACH_DIR" "$DIFF" "" \
+      out=$(opencode_review "$ATTACH_DIR" "$DIFF" "$CONTEXT_BLOCK" \
         "the in-progress local branch '$BRANCH_LABEL', diffed against '$BASE'" \
         "$errf" "$AGENT_TIMEOUT")
       rc=$?
       ;;
     grok)
-      out=$(grok_review "$ATTACH_DIR" "$DIFF" "" \
+      out=$(grok_review "$ATTACH_DIR" "$DIFF" "$CONTEXT_BLOCK" \
         "the in-progress local branch '$BRANCH_LABEL', diffed against '$BASE'" \
         "$errf" "$AGENT_TIMEOUT")
       rc=$?
       ;;
     pi_glm | pi_grok)
-      out=$(pi_review "$name" "$ATTACH_DIR" "$DIFF" "" \
+      out=$(pi_review "$name" "$ATTACH_DIR" "$DIFF" "$CONTEXT_BLOCK" \
         "the in-progress local branch '$BRANCH_LABEL', diffed against '$BASE'" \
         "$errf" "$AGENT_TIMEOUT")
       rc=$?

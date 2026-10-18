@@ -374,6 +374,7 @@ review-local --author claude                        # claude wrote this branch �
 review-local --author claude --base develop          # diff against a different base ref (default: main)
 review-local --author claude --reviewers codex,agy   # pick specific reviewers
 review-local --author claude --sequential            # one reviewer at a time
+review-local --author claude --context-file plan.md  # every reviewer checks the branch against plan.md
 ```
 
 Flags:
@@ -385,12 +386,20 @@ Flags:
 | `--reviewers a,b,c` | Which agents review. Default: `claude,codex,grok,opencode` — four vendors, every seat on a flat-rate subscription. `cursor`, `antigravity`, and `qwen` are supported but opt-in — name them explicitly to include them. |
 | `--sequential` | Run the reviewers one at a time, in panel order. The default is **parallel**. |
 | `--parallel` | The default; still accepted. With both flags, the last one wins. |
+| `--context-file <path>` | Prepend a document (the plan, a spec) to every reviewer's prompt, as `pr-review-relay --context-file` does: each seat gets it once, under `## Provided context`. A missing file is exit 1, before any reviewer starts. |
 
 Reviewers that read stdin (`claude` / `codex` / `cursor` / `qwen`) get the diff piped in, so a large branch
 scales the same way `pr-review-relay --diff` does; `agy` takes it as an argument (it doesn't read a
 prompt from stdin); `opencode` reads it from stdin too, staged in a file rather than piped, and
 reviews it in isolation from the repo (see the OpenCode note under [Notes & caveats](#-notes--caveats)). Nothing is pushed or posted
 anywhere — `review-local` only ever prints to your terminal.
+
+Unlike the relay, `review-local` still gives `claude`, `codex` and `qwen` the *prompt* as one argv
+string, and `agy` gets the prompt and the diff as one. With a large `--context-file` (or, for `agy`, a
+large diff) that string can pass the kernel's limit, so these four seats are guarded as in the relay
+(see [How each seat receives its prompt](#how-each-seat-receives-its-prompt)): over `122880` bytes, the
+seat does not start, prints the reason on stderr, and the round exits `3`. `cursor`, `grok` and the pi
+seats cannot hit the limit; `opencode` keeps its own guard.
 
 ## 🔁 Make it automatic (the handoff)
 
@@ -808,8 +817,8 @@ picked a `bash` through `PATH` before the first line runs. Nothing a script does
 | Code | Meaning |
 |------|---------|
 | `0` | every dispatched reviewer produced a review |
-| `3` | a reviewer produced nothing usable (empty / whitespace-only / timed out / non-zero), **or** an explicitly requested reviewer was missing, **or** no reviewer ran at all |
-| `1`/`2` | precondition or usage error (not a repo, unknown base ref, bad argument, unusable `PR_RELAY_OPENCODE_BIN`) |
+| `3` | a reviewer produced nothing usable (empty / whitespace-only / timed out / non-zero / refused by the argv guard), **or** an explicitly requested reviewer was missing, **or** no reviewer ran at all |
+| `1`/`2` | precondition or usage error (not a repo, unknown base ref, missing `--context-file`, bad argument, unusable `PR_RELAY_OPENCODE_BIN`) |
 
 ## 📋 Notes & caveats
 

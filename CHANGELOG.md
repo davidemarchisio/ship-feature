@@ -6,6 +6,19 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ## [Unreleased]
 
+### Added
+
+- **`review-local --context-file <path>`, so `ship-feature review --context-file <plan>` works.** The
+  relay has the flag; `review-local`, which `ship-feature review` runs, rejected it as
+  an unknown argument, so a plan never reached a panel that reviews a branch with no PR. The flag
+  prepends the document to every seat's prompt, once, with the relay's own `## Provided context`
+  preamble: at the head of the prompt for claude, codex, qwen, cursor and antigravity, and as the
+  context argument of the opencode, grok and pi helpers. A missing file is exit 1 before any seat
+  starts. `review-local` still gives claude, codex and qwen the prompt as one argv string (and
+  antigravity the prompt and the diff), so those four now have the relay's argv guard: a prompt over
+  122880 bytes refuses the seat with a named reason on stderr, and the round exits 3, where exec
+  used to fail with a bare exit 126. Fizzy #1429.
+
 ### Changed
 
 - **ship-feature reads the shared panel config with the relay's own parser.** `bin/ship-feature`
