@@ -711,7 +711,9 @@ bodies of 156–246 bytes, all exit `0`, all published, none a review — and a 
 became two while the banner said success.
 
 A reply now has to do what every reviewer prompt already asks for: **name a severity
-(Blocker / Should-fix / Nit), or say it looks good.** It must also not announce work still to come —
+(Blocker / Should-fix / Nit), or say it looks good.** A clean verdict in other words counts too:
+*LGTM*, *no findings*, *no issues* (and *no issues found*), *nothing to flag*, *none found*,
+*VERDICT: clean*. It must also not announce work still to come —
 one of the four recovered failures reads `Blocker` / *"…Reading the remainder before concluding"*, so
 naming a severity is not on its own enough.
 
