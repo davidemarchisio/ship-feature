@@ -440,6 +440,18 @@ rlr stall "stall: phrased only with 'before concluding'" 'Blocker: none yet, I w
 rlr yes "approval: nothing to flag" 'Nothing to flag.'
 rlr yes "approval: none found" 'Blockers: none found.'
 rlr yes "approval: No blockers." 'No blockers.'
+# pi_grok's whole answer, twice, on 2026-10-16 (feedback-hub Brakeman bump). The gate
+# benched the seat for it, and the round ran with two of three reviewers (Fizzy #1421).
+rlr yes "real: pi_grok clean verdict, No issues found" 'No issues found'
+rlr yes "approval: No issues found." 'No issues found.'
+rlr yes "approval: bare No issues" 'No issues.'
+rlr yes "approval: singular, No issue found" 'No issue found.'
+rlr stall "stall: No issues found so far, then still reading" 'No issues found so far. Let me read the rest.'
+# One sentence, the stall phrase first and the verdict after it: only the second copy of the
+# phrase list (the verdict-after-stall check) can accept this.
+rlr yes "order: reading first, then No issues found" 'Let me read the rest
+No issues found'
+rlr no "boundary: no issuesfound is not a marker" 'grep printed no issuesfound and no_issues and noissues'
 # Underscores are word characters, not boundaries. A raw transcript full of
 # identifiers is exactly what a broken agent emits, and `monitor_nit_state` read as a
 # verdict until this was fixed — measured, not imagined.

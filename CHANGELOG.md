@@ -47,6 +47,11 @@ All notable changes to **ship-feature** are documented here. This project follow
   and `review-local` do: an answer must name a severity (Blocker / Should-fix / Nit) or say that it
   looks good, and its last sentence must not announce more reading. A rejected answer is shown with
   a label, never under the review banner, and the round exits `3`. Fizzy #1412.
+- **A clean "No issues found" did not count as a review.** The gate knew "no findings", "none
+  found" and "looks good", but not "no issues": on 2026-10-16 pi_grok answered exactly
+  "No issues found" twice, the gate called it "not a review", and the round ran with two of three
+  seats. `no issues` and `no issue` are now approval phrases, in all three callers. A "No issues
+  found so far. Let me read the rest." is still a stall. Fizzy #1421.
 
 ## [0.7.0] — 2026-10-16
 
