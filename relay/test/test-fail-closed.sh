@@ -4246,6 +4246,30 @@ _clog=$(latest_log)
 grep -q "verdict exit=1 context file not found" "$_clog" 2>/dev/null
 ok_if $? "a missing context file logs its verdict" "$(tail -1 "$_clog" 2>/dev/null)"
 
+# An existing file that cannot be read passes `-f`. The read must stop the round, or every seat
+# reviews against the preamble and an empty plan and the round posts as if it had the plan.
+printf 'plan\n' >"$WORK/unreadable-context.md"
+chmod 000 "$WORK/unreadable-context.md"
+if [ -r "$WORK/unreadable-context.md" ]; then
+  echo "  skip [-] relay unreadable context file: this user can read a mode-000 file (root?)"
+  SKIP=$((SKIP + 2))
+else
+  s_reset
+  _uargv="$WORK/unreadable-context.argv"
+  : >"$_uargv"
+  env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
+    ARGV_LOG="$_uargv" bash "$RELAY" --pr 1 --author antigravity --reviewers claude,codex \
+    --context-file "$WORK/unreadable-context.md" >/dev/null 2>"$WORK/unreadable-context.err"
+  _urc=$?
+  [ "$_urc" = 1 ] && grep -qF "context file not readable: $WORK/unreadable-context.md" "$WORK/unreadable-context.err" && [ ! -s "$_uargv" ]
+  ok_if $? "an unreadable context file is exit 1, before any seat starts" "rc=$_urc; $(head -3 "$WORK/unreadable-context.err")"
+  _ulog=$(latest_log)
+  grep -q "verdict exit=1 context file not readable" "$_ulog" 2>/dev/null
+  ok_if $? "an unreadable context file logs its verdict" "$(tail -1 "$_ulog" 2>/dev/null)"
+  unset _uargv _urc _ulog
+fi
+chmod 600 "$WORK/unreadable-context.md"
+
 s_reset
 env PATH="$BIN:$PATH" XDG_CACHE_HOME="$SCACHE" GH_SHA_COUNTER="$WORK/sha_counter" GH_FIXED_SHA="$SHA_A" \
   LINK_DIFF_FALLBACK_MAX_BYTES=notanumber \
@@ -5410,6 +5434,11 @@ av_run GH_DIFF_BYTES=20000 -- --author claude --reviewers antigravity --diff
 _m=$(av_max agy)
 [ "$AV_RC" = 0 ] && [ -n "$_m" ] && [ "$_m" -gt 20000 ]
 av_ok "T7 antigravity, --diff mode, 20 KB diff: still runs, element ${_m:-?} B" $?
+# The context block keeps its blank line: $(...) used to strip it, so every prompt ran on as
+# "---You are reviewing ...".
+av_run -- --author codex --reviewers claude --context-file "$AV/ctx34k"
+[ "$AV_RC" = 0 ] && grep -qx -- '---' "$AV/stdin" && ! grep -q -- '^---You are' "$AV/stdin"
+av_ok "the context block ends with '---' and a blank line, not '---You are'" $?
 
 # =============================================================================
 # review-local --context-file (#1429). The relay has the flag; review-local, which is what

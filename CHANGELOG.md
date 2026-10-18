@@ -46,6 +46,13 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Fixed
 
+- **`pr-review-relay --context-file` with an unreadable file posted a clean round.** A file that
+  exists but cannot be read passed the `-f` check; `cat` failed inside the preamble's command
+  substitution, so every seat reviewed the preamble with an empty plan, and the round could post
+  and exit `0` ("clean: 2/2 posted" in the test). The read is now its own step: "context file not
+  readable", exit 1, logged, before any seat starts. The same fix went into `review-local` in
+  #1429. Also: the preamble lost its trailing blank line to `$(...)`, so every prompt ran on as
+  `---You are reviewing …`; the blank line is back.
 - **An OpenCode CLI without `--pure` failed the `opencode` seat with no reason.** On such a CLI
   (seen with 1.2.27), `opencode --pure run …` prints the top-level help and exits `0`, so the
   non-review gate rejected every round and nothing named the CLI. The seat of `pr-review-relay` and

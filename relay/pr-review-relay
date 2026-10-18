@@ -996,7 +996,17 @@ if [ -n "$CONTEXT_FILE" ]; then
     echo "context file not found: $CONTEXT_FILE" >&2
     exit 1
   }
-  CONTEXT_BLOCK=$(printf '## Provided context — read this and verify the PR against it\n\n%s\n\n---\n\n' "$(cat "$CONTEXT_FILE")")
+  # A separate assignment, so a failed read (a file that exists but cannot be read) stops the round
+  # instead of posting reviews made against the preamble and an empty plan.
+  _ctx="$(cat -- "$CONTEXT_FILE")" || {
+    relay_log "verdict exit=1 context file not readable"
+    echo "context file not readable: $CONTEXT_FILE" >&2
+    exit 1
+  }
+  # $(...) strips trailing newlines, so the blank line after the rule is added outside it; without
+  # it every prompt ran on as "---You are reviewing ...".
+  CONTEXT_BLOCK="$(printf '## Provided context — read this and verify the PR against it\n\n%s\n\n---' "$_ctx")"$'\n\n'
+  unset _ctx
   echo "  context: $CONTEXT_FILE ($(wc -c <"$CONTEXT_FILE") bytes)"
 fi
 
