@@ -5437,8 +5437,9 @@ av_ok "T7 antigravity, --diff mode, 20 KB diff: still runs, element ${_m:-?} B" 
 # The context block keeps its blank line: $(...) used to strip it, so every prompt ran on as
 # "---You are reviewing ...".
 av_run -- --author codex --reviewers claude --context-file "$AV/ctx34k"
-[ "$AV_RC" = 0 ] && grep -qx -- '---' "$AV/stdin" && ! grep -q -- '^---You are' "$AV/stdin"
-av_ok "the context block ends with '---' and a blank line, not '---You are'" $?
+# Adjacent lines, not two separate greps: "---", then an empty line, then the prompt's first line.
+[ "$AV_RC" = 0 ] && awk 'p2 && /^You are reviewing/ { ok = 1 } { p2 = (p1 && $0 == ""); p1 = ($0 == "---") } END { exit !ok }' "$AV/stdin"
+av_ok "the context block ends with '---', a blank line, then the prompt" $?
 
 # =============================================================================
 # review-local --context-file (#1429). The relay has the flag; review-local, which is what
