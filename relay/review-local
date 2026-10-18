@@ -299,10 +299,18 @@ if [ -n "$CONTEXT_FILE" ]; then
     echo "context file not found: $CONTEXT_FILE" >&2
     exit 1
   }
-  CONTEXT_BLOCK=$(printf '## Provided context — read this and verify the branch against it\n\n%s\n\n---\n\n' "$(cat "$CONTEXT_FILE")")
+  # A separate assignment, so a failed read (a file that exists but cannot be read) stops the
+  # review instead of sending every seat an empty plan under the preamble.
+  _ctx="$(cat -- "$CONTEXT_FILE")" || {
+    echo "context file not readable: $CONTEXT_FILE" >&2
+    exit 1
+  }
+  # $(...) strips trailing newlines, so the blank line after the rule is added outside it: the
+  # helpers (opencode's prompt starts right after the block) get the same separation as $PROMPT.
+  CONTEXT_BLOCK="$(printf '## Provided context — read this and verify the branch against it\n\n%s\n\n---' "$_ctx")"$'\n\n'
+  unset _ctx
   echo "  context: $CONTEXT_FILE ($(wc -c <"$CONTEXT_FILE") bytes)"
-  # $(...) strips the block's trailing newlines; put the blank line back before the prompt.
-  PROMPT="$CONTEXT_BLOCK"$'\n\n'"$PROMPT"
+  PROMPT="$CONTEXT_BLOCK$PROMPT"
 fi
 
 tool_for() { case "$1" in claude) echo claude ;; codex) echo codex ;; cursor) echo cursor-agent ;; antigravity | agy) echo agy ;; opencode) echo "$OPENCODE_BIN" ;; qwen) echo qwen ;; grok) echo grok ;; pi_glm | pi_grok) echo "$PI_BIN" ;; *) echo "" ;; esac }

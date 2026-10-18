@@ -386,7 +386,7 @@ Flags:
 | `--reviewers a,b,c` | Which agents review. Default: `claude,codex,grok,opencode` — four vendors, every seat on a flat-rate subscription. `cursor`, `antigravity`, and `qwen` are supported but opt-in — name them explicitly to include them. |
 | `--sequential` | Run the reviewers one at a time, in panel order. The default is **parallel**. |
 | `--parallel` | The default; still accepted. With both flags, the last one wins. |
-| `--context-file <path>` | Prepend a document (the plan, a spec) to every reviewer's prompt, as `pr-review-relay --context-file` does: each seat gets it once, under `## Provided context`. A missing file is exit 1, before any reviewer starts. |
+| `--context-file <path>` | Prepend a document (the plan, a spec) to every reviewer's prompt, as `pr-review-relay --context-file` does: each seat gets it once, under `## Provided context`. A missing or unreadable file is exit 1, before any reviewer starts. |
 
 Reviewers that read stdin (`claude` / `codex` / `cursor` / `qwen`) get the diff piped in, so a large branch
 scales the same way `pr-review-relay --diff` does; `agy` takes it as an argument (it doesn't read a
@@ -818,7 +818,7 @@ picked a `bash` through `PATH` before the first line runs. Nothing a script does
 |------|---------|
 | `0` | every dispatched reviewer produced a review |
 | `3` | a reviewer produced nothing usable (empty / whitespace-only / timed out / non-zero / refused by the argv guard), **or** an explicitly requested reviewer was missing, **or** no reviewer ran at all |
-| `1`/`2` | precondition or usage error (not a repo, unknown base ref, missing `--context-file`, bad argument, unusable `PR_RELAY_OPENCODE_BIN`) |
+| `1`/`2` | precondition or usage error (not a repo, unknown base ref, a `--context-file` that is missing or unreadable, bad argument, unusable `PR_RELAY_OPENCODE_BIN`) |
 
 ## 📋 Notes & caveats
 

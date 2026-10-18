@@ -5450,11 +5450,11 @@ for _s in claude codex cursor antigravity qwen grok opencode pi_glm pi_grok; do
   cf_run -- --reviewers "$_s" --context-file "$CF/plan.md"
   cf_seen
   _n=$(grep -c 'CF-PLAN-MARKER-7d1f' "$CF/seen")
-  [ "$CF_RC" = 0 ] && [ "$_n" = 1 ] && grep -q '## Provided context — read this and verify the branch against it' "$CF/seen" &&
-    grep -q "context: $CF/plan.md ([0-9]* bytes)" "$CF/out"
-  ok_if $? "review-local --context-file: $_s gets the plan, once" "rc=$CF_RC, marker seen $_n times; err: $(head -3 "$CF/err")"
+  _h=$(grep -c '## Provided context — read this and verify the branch against it' "$CF/seen")
+  [ "$CF_RC" = 0 ] && [ "$_n" = 1 ] && [ "$_h" = 1 ] && grep -q "context: $CF/plan.md ([0-9]* bytes)" "$CF/out"
+  ok_if $? "review-local --context-file: $_s gets the plan and the preamble, once" "rc=$CF_RC, marker seen $_n times, preamble $_h times; err: $(head -3 "$CF/err")"
 done
-unset _s _n
+unset _s _n _h
 # The control: the same seats with no flag see no plan and no preamble. Without it, a stub that
 # echoed a stale log would pass every check above.
 cf_run -- --reviewers claude,codex,cursor,antigravity,qwen,grok,opencode,pi_glm,pi_grok
@@ -5464,6 +5464,19 @@ ok_if $? "review-local with no --context-file: no seat sees a plan or the preamb
 cf_run -- --reviewers codex --context-file "$CF/no-such-plan.md"
 [ "$CF_RC" = 1 ] && grep -qF "context file not found: $CF/no-such-plan.md" "$CF/err" && [ ! -s "$CF/max" ]
 ok_if $? "review-local: a missing context file is exit 1, before any seat starts" "rc=$CF_RC"
+# A file that exists but cannot be read passes `-f`; the read itself must stop the review, or every
+# seat gets the preamble with an empty plan and the round passes.
+cp "$CF/plan.md" "$CF/unreadable.md"
+chmod 000 "$CF/unreadable.md"
+if [ -r "$CF/unreadable.md" ]; then
+  echo "  skip [-] review-local unreadable context file: this user can read a mode-000 file (root?)"
+  SKIP=$((SKIP + 1))
+else
+  cf_run -- --reviewers codex --context-file "$CF/unreadable.md"
+  [ "$CF_RC" = 1 ] && grep -qF "context file not readable: $CF/unreadable.md" "$CF/err" && [ ! -s "$CF/max" ]
+  ok_if $? "review-local: an unreadable context file is exit 1, before any seat starts" "rc=$CF_RC; err: $(head -3 "$CF/err")"
+fi
+chmod 600 "$CF/unreadable.md"
 cf_run -- --reviewers codex --context-file
 [ "$CF_RC" = 2 ] && grep -q 'missing value for --context-file' "$CF/err" && [ ! -s "$CF/max" ]
 ok_if $? "review-local: --context-file with no value is exit 2" "rc=$CF_RC"
@@ -5471,11 +5484,14 @@ bash "$RL" --help 2>/dev/null | grep -- '--context-file' >/dev/null
 ok_if $? "review-local --help names --context-file" "-"
 # Oversize: 140 KB of plan. claude, codex and qwen take the prompt as one argv string here, and
 # antigravity takes prompt + diff; all four are refused before they start. cursor reads stdin, so
-# it still reviews. --sequential, with cursor last: a refusal that used `exit` would stop the loop.
-cf_run -- --reviewers claude,codex,qwen,antigravity,cursor --sequential --context-file "$AV/ctx140k"
-[ "$CF_RC" = 3 ] && ! grep -qE '^(claude|codex|qwen|agy) ' "$CF/max" && grep -q '^cursor-agent ' "$CF/max" &&
+# it still reviews. opencode is refused by its own guard in opencode_review. --sequential, with
+# cursor last: a refusal that used `exit` would stop the loop.
+cf_run -- --reviewers claude,codex,qwen,antigravity,opencode,cursor --sequential --context-file "$AV/ctx140k"
+[ "$CF_RC" = 3 ] && ! grep -qE '^(claude|codex|qwen|agy) ' "$CF/max" && [ ! -e "$CF/oc" ] && grep -q '^cursor-agent ' "$CF/max" &&
   grep -q 'LGTM from cursor.' "$CF/out" && grep -q 'CTX-MARKER-END' "$CF/stdin"
-ok_if $? "review-local, 140 KB context: the argv seats never start, cursor still reviews, round exit 3" "rc=$CF_RC; max: $(tr '\n' ',' <"$CF/max")"
+ok_if $? "review-local, 140 KB context: the argv seats and opencode never start, cursor still reviews, round exit 3" "rc=$CF_RC; max: $(tr '\n' ',' <"$CF/max")"
+grep -q 'opencode: prompt is [0-9]* B, over the argv limit' "$CF/err"
+ok_if $? "review-local, 140 KB context: opencode is refused with the named reason" "$(head -8 "$CF/err")"
 for _s in claude codex qwen; do
   grep -q "$_s: prompt is [0-9]* B, over the argv limit.*shorten the --context-file" "$CF/err"
   ok_if $? "review-local, 140 KB context: $_s is refused with the named reason" "$(head -5 "$CF/err")"
@@ -5485,6 +5501,13 @@ grep -q 'antigravity: prompt is [0-9]* B, over the argv limit.*a shorter --conte
 ok_if $? "review-local, 140 KB context: antigravity is refused with the named reason" "$(head -5 "$CF/err")"
 ! grep -q 'over the argv limit' "$CF/out"
 ok_if $? "review-local: the refusals stay on stderr, not under a review banner" "-"
+# The seats that take the plan by file or stdin get all of it, end marker included.
+cf_run -- --reviewers grok,pi_glm,pi_grok --context-file "$AV/ctx140k"
+cf_seen
+_n=$(grep -c 'CTX-MARKER-END' "$CF/seen")
+[ "$CF_RC" = 0 ] && [ "$_n" = 3 ]
+ok_if $? "review-local, 140 KB context: grok, pi_glm and pi_grok each get the whole plan" "rc=$CF_RC, end marker seen $_n times; err: $(head -3 "$CF/err")"
+unset _n
 
 echo "-------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
