@@ -199,7 +199,8 @@ there.
   `relay/`) with its arguments, stdout and exact exit code. It diffs the current branch against
   `--base` and prints each reviewer's review; nothing is pushed or posted. Typical:
   `ship-feature review --author claude --base origin/main` — no `--reviewers`, so the panel is
-  `REVIEWERS` in `~/.config/pr-review-relay/config`.
+  `REVIEWERS` in `~/.config/pr-review-relay/config`. When the change has a plan, add
+  `--context-file <plan>`: every seat gets the plan at the head of its prompt, as with the relay.
 - `ship-feature preflight` — assert you're in a feature worktree branched off the default branch, with
   the worktree marker git-excluded and a committed `.githooks/pre-push` that git runs on push — the
   pre-push hook every repo needs, running the tests, a linter and a formatter check (run before you
