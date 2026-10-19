@@ -9,6 +9,8 @@
 #   PI_BIN              resolved absolute path, or the bare name `pi` when it is not installed
 #   pi_is_selected      is pi_glm or pi_grok in $REVIEWERS and not $AUTHOR?
 #   pi_resolve_bin      populate PI_BIN; exits 2 when pi resolves inside the checkout under review
+#   pi_resolve_node     set PI_NODE, the node that runs pi and its reader (PI_NODE_MIN); or return 1
+#                       with the reason in PI_NODE_WHY
 #   pi_resolve_model / pi_resolve_effort <seat>
 #   pi_review           run one review; prints it on stdout, returns the seat's exit code
 #   PI_FINAL_TEXT_JS    the json stream reader (node), a fixed literal
@@ -105,6 +107,75 @@ pi_resolve_bin() {
   else
     PI_BIN=pi # keep the bare name so the caller's "not installed" path reports it
   fi
+}
+
+# --- The Node that runs pi ---------------------------------------------------
+# pi's launcher starts its cli through `#!/usr/bin/env node`, so pi takes the first node on PATH.
+# The relay runs inside the checkout under review, where mise puts THAT repo's pinned Node first.
+# A repo pinned to Node 20 crashed both seats at startup ("does not provide an export named
+# 'enableCompileCache'"), and the round did not count.
+#
+# So the seat picks its own Node: the one on PATH when it meets pi's floor, else the newest
+# mise-installed one that does. Never one inside the repository under review. None → the seat
+# fails before the model call, and the message names every version it found.
+#
+# The floor is pi's package.json engines.node (pi 1.2.0: ">=22.19.0"). Raise it with pi.
+PI_NODE_MIN="22.19.0"
+
+pi_version_ge() { # <version> <floor>: true when version >= floor. Both X.Y.Z, a leading v allowed.
+  local _a _b _i
+  IFS=. read -r -a _a <<<"${1#v}"
+  IFS=. read -r -a _b <<<"${2#v}"
+  for _i in 0 1 2; do
+    [ "${_a[_i]}" -gt "${_b[_i]}" ] && return 0
+    [ "${_a[_i]}" -lt "${_b[_i]}" ] && return 1
+  done
+  return 0
+}
+
+# Sets PI_NODE to the absolute path of the chosen node; otherwise sets PI_NODE_WHY and returns 1.
+# Globals, not stdout: each caller words the failure its own way. Call it in the checkout under
+# review (the in-repo check reads it from the cwd).
+# Candidates: the node on PATH, then ${MISE_DATA_DIR:-$XDG_DATA_HOME/mise}/installs/node/*/bin/node.
+pi_resolve_node() {
+  local _path_node="" _c _v _best="" _best_v="" _found="" _seen=" "
+  local -a _cands=()
+  PI_NODE=""
+  PI_NODE_WHY=""
+  _c="$(command -v node 2>/dev/null || true)"
+  [ -n "$_c" ] && _path_node="$(opencode_abs_path "$_c")" && _cands+=("$_path_node")
+  for _c in "${MISE_DATA_DIR:-${XDG_DATA_HOME:-${HOME:-}/.local/share}/mise}"/installs/node/*/bin/node; do
+    [ -f "$_c" ] && [ -x "$_c" ] && _cands+=("$_c")
+  done
+  if [ "${#_cands[@]}" = 0 ]; then
+    PI_NODE_WHY="node not found — it reads pi's json stream and runs pi"
+    return 1
+  fi
+  for _c in "${_cands[@]}"; do
+    # Never execute a file from the branch under review, not even for --version.
+    opencode_target_in_repo "$_c" >/dev/null && continue
+    _v="$("$_c" --version 2>/dev/null)" || continue
+    _v="${_v#v}"
+    [[ $_v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    # mise links 22 and 22.16 to 22.16.0: one version, one entry in the message.
+    case "$_seen" in *" $_v "*) continue ;; esac
+    _seen="$_seen$_v "
+    _found="${_found:+$_found, }$_v ($_c)"
+    pi_version_ge "$_v" "$PI_NODE_MIN" || continue
+    if [ "$_c" = "$_path_node" ]; then
+      _best="$_c"
+      break
+    fi
+    if [ -z "$_best" ] || ! pi_version_ge "$_best_v" "$_v"; then
+      _best="$_c"
+      _best_v="$_v"
+    fi
+  done
+  if [ -z "$_best" ]; then
+    PI_NODE_WHY="needs Node >= $PI_NODE_MIN (pi's engines field), outside the repository under review; found: ${_found:-none that runs}. Install one, for example: mise install node@24"
+    return 1
+  fi
+  PI_NODE="$_best"
 }
 
 # --- The stream reader -------------------------------------------------------
@@ -215,12 +286,12 @@ pi_review() {
     return 1
   }
   timeout_bin="$(opencode_abs_path "$timeout_bin")"
-  node_bin="$(command -v node 2>/dev/null || true)"
-  [ -n "$node_bin" ] || {
-    echo "pi: node not found — it reads pi's json stream; refuse to start the model call without it" >>"$errf"
+  # Before the cd: the in-repo check reads the checkout from the cwd.
+  pi_resolve_node || {
+    echo "pi: $PI_NODE_WHY; refuse to start the model call without it" >>"$errf"
     return 1
   }
-  node_bin="$(opencode_abs_path "$node_bin")"
+  node_bin="$PI_NODE"
 
   # PATH from absolute entries only, so nothing resolves relative to iso_cwd after the cd.
   _IFS="$IFS"
@@ -279,7 +350,8 @@ pi_review() {
   # -p: run once and exit; with no message argument, stdin is the whole prompt.
   (
     cd "$iso_cwd" || exit 1
-    export PATH="$_np"
+    # The chosen node first: pi's launcher resolves `env node` through PATH.
+    export PATH="${node_bin%/*}:$_np"
     "$timeout_bin" "$agent_timeout" "$pi_bin" -p --mode json --model "$model" --thinking "$effort" \
       --no-tools --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes \
       --no-context-files --no-approve --no-session --offline \

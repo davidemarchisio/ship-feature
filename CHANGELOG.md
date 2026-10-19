@@ -46,6 +46,15 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Fixed
 
+- **The pi seats run on a Node that meets pi's floor, not on the reviewed repo's pinned Node.** pi's
+  launcher starts through `env node`, and both the relay and `plan-review` run pi inside the checkout,
+  where mise puts that repo's pinned Node first. A repo pinned to Node 20 crashed both pi seats at
+  startup (`does not provide an export named 'enableCompileCache'`), and the round did not count.
+  `pi_resolve_node` (`relay/lib-pi.sh`) keeps the PATH node when it meets `PI_NODE_MIN` (22.19.0,
+  pi 1.2.0's `engines.node`), else takes the newest mise-installed node that does, never one inside
+  the checkout under review; pi and its json reader both run on it. With none, the seat fails before
+  the model call and names every version it found.
+
 - **`pr-review-relay --context-file` with an unreadable file posted a clean round.** A file that
   exists but cannot be read passed the `-f` check; `cat` failed inside the preamble's command
   substitution, so every seat reviewed the preamble with an empty plan, and the round could post

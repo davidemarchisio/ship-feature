@@ -237,7 +237,9 @@ there.
   `--tools read,grep,find,ls` — no shell, no write tool — and with extensions, MCP, skills, prompt
   templates, themes, context files, the trust-gated `.pi/` files, the saved session and the startup
   network calls off. An effort that is not one of `off minimal low medium high xhigh max` stops the
-  command, because pi itself does not refuse one. The seat needs `node` to read pi's json stream. Its
+  command, because pi itself does not refuse one. The seat needs a `node` >= 22.19.0 (pi's floor) to
+  run pi and read its json stream: the PATH one when it meets the floor, else the newest one mise
+  installed, never the older Node a reviewed repo pins. Its
   tools can read files outside the checkout too, and what they read goes to the model provider: see
   `WORKFLOW.md` §2),
   and `antigravity` (aliases `agy`, `gemini`) via the `gemini` CLI, run **fail-closed**: an isolated
