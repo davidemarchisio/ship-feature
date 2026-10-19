@@ -2447,6 +2447,7 @@ fi
 echo run >>"$REC/$seat.ran"
 printf '%s\n' "$@" >"$REC/$seat.argv"
 printf '%s\n' "$PWD" >"$REC/$seat.cwd"
+command -v node >"$REC/$seat.node"
 cat >"$REC/$seat.stdin"
 mode="${STUB_PI_MODE:-ok}"
 if [ "$mode" = hang ]; then
@@ -2481,6 +2482,17 @@ exit 0
 PISTUB
   } >"$PBIN/pi"
   chmod +x "$PBIN/pi"
+  # The seat needs a node that meets pi's floor (relay/lib-pi.sh PI_NODE_MIN), and the runner's own
+  # node may be older: one that reports 22.19.0 and runs the real one.
+  pi_node_wrapper "$PBIN" 22.19.0
+}
+REAL_NODE="$(command -v node)"
+pi_node_wrapper() { # <dir> <version>: answers the resolver's -p probe with <version> and itself,
+  # runs the real node for anything else. The rm: a redirect would write through a symlink to node.
+  mkdir -p "$1"
+  rm -f "$1/node"
+  printf '#!/bin/sh\n[ "$1" = -p ] && { echo "v%s $0"; exit 0; }\nexec "%s" "$@"\n' "$2" "$REAL_NODE" >"$1/node"
+  chmod +x "$1/node"
 }
 write_pi_stub
 pi_clear() { rm -f "${PIREC:?}"/*; }
@@ -2559,10 +2571,26 @@ fi
 
 # T.7: no node → the seat refuses before pi starts. $PBIN alone is the curated PATH of the
 # missing-grok test above: the tools the CLI needs, the stubs, and no node.
+# MISE_DATA_DIR: the seat also looks for mise's Nodes, and this machine's must not count.
 pi_clear
-prow=$(printf 'plan\n' | PATH="$PBIN" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
+rm -f "$PBIN/node"
+mkdir -p "$WORK/no-mise"
+prow=$(printf 'plan\n' | PATH="$PBIN" MISE_DATA_DIR="$WORK/no-mise" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
 check "pi: no node → exit 3, says so, and pi never starts" \
   "$?|$(printf '%s' "$prow" | grep -c "pi_glm: node not found")|$(pi_ran pi_glm)" "3|1|no"
+pi_node_wrapper "$PBIN" 22.19.0 # restore
+# T.7a: a repo pinned to an old Node puts it first on PATH, and pi runs through `env node`: pi 1.2.0
+# on Node 20 died at startup with a SyntaxError. The seat runs pi on a node that meets the floor.
+pi_node_wrapper "$WORK/pinned-node" 20.20.2
+pi_node_wrapper "$WORK/pi-mise/installs/node/24.11.0/bin" 24.11.0
+pi_clear
+prow=$(printf 'plan\n' | PATH="$WORK/pinned-node:$PBIN:$PATH" MISE_DATA_DIR="$WORK/pi-mise" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
+check "pi: a pinned Node 20 first on PATH → pi runs on the mise Node that meets the floor" \
+  "$?|$(cat "$PIREC/pi_glm.node" 2>/dev/null)" "0|$WORK/pi-mise/installs/node/24.11.0/bin/node"
+pi_clear
+prow=$(printf 'plan\n' | PATH="$WORK/pinned-node:$PBIN:$PATH" MISE_DATA_DIR="$WORK/no-mise" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
+check "pi: no node meets the floor → exit 3, the versions named, pi never starts" \
+  "$?|$(printf '%s' "$prow" | grep -c "pi_glm: needs Node >= 22.19.0 (pi's engines field), outside the repository under review; found: 20.20.2")|$(pi_ran pi_glm)" "3|1|no"
 # T.7b: no pi → the quorum rule fails the round, as for every seat.
 rm -f "$PBIN/pi"
 prow=$(printf 'plan\n' | PATH="$PBIN" bash "$CLI" plan-review --reviewers pi_grok 2>&1)
@@ -4572,7 +4600,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=512
+EXPECTED=514
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

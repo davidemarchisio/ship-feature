@@ -23,6 +23,17 @@ WORK="$(mktemp -d)" || {
   echo "mktemp failed" >&2
   exit 1
 }
+# pi needs Node >= PI_NODE_MIN (lib-pi.sh), and the machine's own node may be older: a CI image, or
+# a repo pin. make_node <dir> <version>: a node that reports <version> and itself as its executable
+# to the resolver's probe (`-p`), and runs the real node for anything else. The rm first: <dir>/node
+# may be a symlink to the real node, and a redirect would write through it.
+REAL_NODE="$(command -v node)"
+make_node() {
+  mkdir -p "$1"
+  rm -f "$1/node"
+  printf '#!/bin/sh\n[ "$1" = -p ] && { echo "v%s $0"; exit 0; }\nexec "%s" "$@"\n' "$2" "$REAL_NODE" >"$1/node"
+  chmod +x "$1/node"
+}
 # The developer's own ~/.config/pr-review-relay/config must not reach these fixtures. It sets the
 # real panel and real models, so a machine with one configured would fail assertions that pin a
 # model or a reviewer list — and the pre-push gate would go red for a reason that has nothing to do
@@ -1396,7 +1407,7 @@ fi
 # node must be reachable from the restricted PATH or the comment wrapper fails and
 # the relay returns 3 — which passes locally (node in /usr/bin) but is red on CI,
 # where setup-node installs outside /usr/bin and /bin. Symlink it in, as BIN5 does.
-ln -sf "$(command -v node)" "$BIN/node" 2>/dev/null
+make_node "$BIN" 22.19.0 # a node that meets pi's floor: the pi seats below run through $BIN
 rm -f "$WORK/sha_counter"
 oc_reset
 # TMPDIR under $WORK so the run's round state (which falls back to
@@ -2476,7 +2487,7 @@ git init -q -b main "$LREPO"
   echo base >file.txt && git add file.txt && git commit -qm base &&
   git checkout -qb feature && echo change >>file.txt && git add file.txt && git commit -qm feat)
 LHEAD=$(git -C "$LREPO" rev-parse HEAD)
-ln -sf "$(command -v node)" "$BIN/node" 2>/dev/null
+make_node "$BIN" 22.19.0 # a node that meets pi's floor: the pi seats below run through $BIN
 # reviewer stub that echoes the prompt it received, so we can see what it was told to do.
 # The trailing verdict is required, not decoration: a bare prompt echo is precisely what
 # the non-review gate rejects (it strips the prompt's own instruction sentences before
@@ -3000,6 +3011,7 @@ mkdir -p "$PID/bin" "$PID/att"
 cat >"$PID/bin/pi" <<'STUB'
 #!/usr/bin/env bash
 [ -n "${PID_CALLS:-}" ] && echo "$*" >> "$PID_CALLS"
+[ -n "${PID_NODE_LOG:-}" ] && command -v node > "$PID_NODE_LOG"
 cat > /dev/null
 case "${PID_MODE:-ok}" in
   ok)  echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"direct review"}]}}' ;;
@@ -3008,10 +3020,12 @@ esac
 exit 0
 STUB
 chmod +x "$PID/bin/pi"
+make_node "$PID/bin" 22.19.0
+mkdir -p "$PID/no-mise"
 pid_run() { # env assignments... → PID_RC, PID_OUT, PID_ERR
   : >"$PID/err"
   : >"$PID/calls"
-  PID_OUT="$(env PATH="$PID/bin:$PATH" PID_CALLS="$PID/calls" "$@" bash -uo pipefail -c '
+  PID_OUT="$(env PATH="$PID/bin:$PATH" MISE_DATA_DIR="$PID/no-mise" PID_CALLS="$PID/calls" "$@" bash -uo pipefail -c '
     . "$1/lib-panel.sh"; . "$1/lib-opencode.sh"; . "$1/lib-pi.sh"
     PI_BIN="$2/bin/pi"
     pi_review pi_glm "$2/att" "+change" "" "a test diff" "$2/err" 20' _ "$HERE/.." "$PID" 2>&1)"
@@ -3044,13 +3058,74 @@ mkdir -p "$PID/nonode"
 for b in timeout mktemp wc tr dirname basename cat; do _s=$(command -v "$b") && ln -sf "$_s" "$PID/nonode/$b"; done
 : >"$PID/err"
 : >"$PID/calls"
-_o="$(env PATH="$PID/nonode" PID_CALLS="$PID/calls" "$BASH" -uo pipefail -c '
+_o="$(env PATH="$PID/nonode" MISE_DATA_DIR="$PID/no-mise" PID_CALLS="$PID/calls" "$BASH" -uo pipefail -c '
   . "$1/lib-panel.sh"; . "$1/lib-opencode.sh"; . "$1/lib-pi.sh"
   PI_BIN="$2/bin/pi"
   pi_review pi_glm "$2/att" "+change" "" "a test diff" "$2/err" 20' _ "$HERE/.." "$PID" 2>&1)"
 _rc=$?
 [ "$_rc" = 1 ] && [ ! -s "$PID/calls" ] && grep -qF 'pi: node not found' "$PID/err"
 pir_ok "no node on PATH → refused with the reason, pi never called (rc=$_rc)" $?
+
+# A repo that pins an old Node (node = "20" in its mise.toml) puts that Node first on PATH, and pi's
+# launcher takes the first node through `env node`. pi 1.2.0 needs >= 22.19.0: both seats died at
+# startup with a SyntaxError, in every repo with that pin. The seat now picks its own Node.
+PIN="$PID/pinned"
+mkdir -p "$PIN/checkout"
+git -C "$PIN/checkout" init -q
+printf '[tools]\nnode = "20"\n' >"$PIN/checkout/mise.toml"
+make_node "$PIN/pinned-node" 20.20.2 # where the pin resolves: mise keeps it outside the checkout
+make_node "$PIN/mise/installs/node/22.16.0/bin" 22.16.0
+make_node "$PIN/mise/installs/node/22.20.0/bin" 22.20.0 # meets the floor too: the newest must win
+make_node "$PIN/mise/installs/node/24.11.0/bin" 24.11.0
+ln -s 22.16.0 "$PIN/mise/installs/node/22"
+make_node "$PIN/mise-old/installs/node/22.16.0/bin" 22.16.0
+pin_run() { # <dir first on PATH> <MISE_DATA_DIR> → PID_RC, PID_ERR, PID_SEEN (the node pi ran with)
+  : >"$PID/err"
+  : >"$PID/calls"
+  : >"$PID/seen"
+  (cd "$PIN/checkout" && env PATH="$1:$PID/bin:$PATH" MISE_DATA_DIR="$2" PID_CALLS="$PID/calls" \
+    PID_NODE_LOG="$PID/seen" bash -uo pipefail -c '
+    . "$1/lib-panel.sh"; . "$1/lib-opencode.sh"; . "$1/lib-pi.sh"
+    PI_BIN="$2/bin/pi"
+    pi_review pi_glm "$2/att" "+change" "" "a test diff" "$2/err" 20' _ "$HERE/.." "$PID" >/dev/null 2>&1)
+  PID_RC=$?
+  PID_ERR="$(cat "$PID/err")"
+  PID_SEEN="$(cat "$PID/seen")"
+}
+pin_run "$PIN/pinned-node" "$PIN/mise"
+[ "$PID_RC" = 0 ] && [ "$PID_SEEN" = "$PIN/mise/installs/node/24.11.0/bin/node" ]
+pir_ok "a repo pinned to Node 20: pi runs on the newest mise Node that meets the floor (rc $PID_RC, $PID_SEEN)" $?
+pin_run "$PIN/pinned-node" "$PIN/mise-old"
+[ "$PID_RC" = 1 ] && [ ! -s "$PID/calls" ] &&
+  grep -qF "pi: needs Node >= 22.19.0 (pi's engines field)" <<<"$PID_ERR" &&
+  grep -qF "20.20.2 ($PIN/pinned-node/node)" <<<"$PID_ERR" && grep -qF "22.16.0 (" <<<"$PID_ERR"
+pir_ok "no Node meets the floor: refused before pi starts, the message names each version found" $?
+pin_run "$PID/bin" "$PIN/mise"
+[ "$PID_RC" = 0 ] && [ "$PID_SEEN" = "$PID/bin/node" ]
+pir_ok "the PATH node is kept when it meets the floor ($PID_SEEN)" $?
+# A node in the checkout is written by the author of the diff: never chosen, never even asked
+# for its version.
+mkdir -p "$PIN/checkout/bin"
+printf '#!/bin/sh\ntouch "%s"\necho "v99.0.0 $0"\n' "$PIN/ran" >"$PIN/checkout/bin/node"
+chmod +x "$PIN/checkout/bin/node"
+pin_run "$PIN/checkout/bin" "$PIN/mise"
+[ "$PID_RC" = 0 ] && [ "$PID_SEEN" = "$PIN/mise/installs/node/24.11.0/bin/node" ] && [ ! -e "$PIN/ran" ]
+pir_ok "a node inside the checkout under review is skipped and never run" $?
+pin_run "$PIN/checkout/bin" "$PID/no-mise"
+[ "$PID_RC" = 1 ] && [ ! -e "$PIN/ran" ] && grep -qF "$PIN/checkout/bin/node (inside the repository under review, not run)" <<<"$PID_ERR"
+pir_ok "only a node inside the checkout: refused, and the message says why" $?
+# A mise shim answers for the cwd it runs in. Asked in the checkout (pinned to 24 here), it said 24;
+# run later from the seat's isolated cwd, it would have started the global Node 20. The seat runs
+# the executable the probe reported, so the cwd no longer matters.
+make_node "$PIN/shim-24" 24.11.0
+make_node "$PIN/shim-20" 20.20.2
+mkdir -p "$PIN/shims"
+printf '#!/bin/sh\ncase "$PWD" in "%s"*) exec "%s" "$@" ;; esac\nexec "%s" "$@"\n' \
+  "$PIN/checkout" "$PIN/shim-24/node" "$PIN/shim-20/node" >"$PIN/shims/node"
+chmod +x "$PIN/shims/node"
+pin_run "$PIN/shims" "$PID/no-mise"
+[ "$PID_RC" = 0 ] && [ "$PID_SEEN" = "$PIN/shim-24/node" ]
+pir_ok "a shim on PATH: pi runs on the executable it resolved in the checkout ($PID_SEEN)" $?
 
 # --- pi seats: the relay contract ----------------------------------------------
 # A stand-in for pi 1.1.0 in `-p --mode json`: one json event per line, the final assistant message

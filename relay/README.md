@@ -144,7 +144,9 @@ cross-review for free: let whoever opened the PR delegate the review to the othe
     (`QWEN_DEFAULT_AUTH_TYPE`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`). Opt-in: name it
     explicitly in `--reviewers`.
   - ⚡ [`grok`](https://grok.com) (Grok Build CLI) — uses `grok --prompt-file … -m grok-4.6 --reasoning-effort medium --permission-mode plan --sandbox read-only --deny '*'` from an isolated cwd (full diff always embedded; stdin is ignored). Model and effort come from `MODEL_grok` / `EFFORT_grok` (defaults `grok-4.6` / `medium`) — the same keys ship-feature's plan-review `grok` seat reads.
-  - 🥧 [`pi`](https://pi.dev) (pi coding agent) **1.1.0**, plus **`node`** — two seats on the one
+  - 🥧 [`pi`](https://pi.dev) (pi coding agent) **1.1.0**, plus **`node` >= 22.19.0** (pi's floor: the
+    PATH one when it meets it, else the newest mise-installed one, never the Node a reviewed repo
+    pins) — two seats on the one
     binary: `pi_glm` (default model `zai/glm-5.3`) and `pi_grok` (default `xai/grok-4.7`). Each runs
     `pi -p --mode json --model <m> --thinking <effort> --no-tools --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve --no-session --offline`
     from an isolated cwd, with the whole prompt on stdin; `node` reads pi's json event stream and

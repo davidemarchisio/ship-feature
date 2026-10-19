@@ -48,7 +48,7 @@ ok() { echo "  ✓ $*"; }
 # relay's own parser (lib-panel.sh: panel_config_load, PANEL_CFG_*) and runs the pi seats with the
 # relay's json reader (lib-pi.sh: PI_FINAL_TEXT_JS, PI_EFFORT_LEVELS), so one file cannot mean two
 # things in the two tools. install.sh links this script into ~/.local/bin: follow the links to find
-# the checkout. Sourcing defines functions and four variables and runs nothing else. Built-ins
+# the checkout. Sourcing defines functions and a few variables and runs nothing else. Built-ins
 # only, except readlink for a link: tests run this script with a PATH that has no dirname.
 sf_dir_of() { case "$1" in */*) printf '%s' "${1%/*}" ;; *) printf '.' ;; esac }
 sf_self="${BASH_SOURCE[0]}"
@@ -58,10 +58,13 @@ while [ -L "$sf_self" ]; do
 done
 SF_RELAY_DIR="$(cd -- "$(sf_dir_of "$sf_self")/../relay" 2>/dev/null && pwd -P)" ||
   die "no relay/ next to $sf_self: install ship-feature from a full clone (install.sh)"
-[ -f "$SF_RELAY_DIR/lib-panel.sh" ] && [ -f "$SF_RELAY_DIR/lib-pi.sh" ] ||
-  die "relay/lib-panel.sh or relay/lib-pi.sh is missing in $SF_RELAY_DIR: the clone is incomplete"
+[ -f "$SF_RELAY_DIR/lib-panel.sh" ] && [ -f "$SF_RELAY_DIR/lib-opencode.sh" ] && [ -f "$SF_RELAY_DIR/lib-pi.sh" ] ||
+  die "relay/lib-panel.sh, lib-opencode.sh or lib-pi.sh is missing in $SF_RELAY_DIR: the clone is incomplete"
 # shellcheck source=relay/lib-panel.sh
 . "$SF_RELAY_DIR/lib-panel.sh"
+# The path helpers pi_resolve_node uses (opencode_abs_path, opencode_target_in_repo).
+# shellcheck source=relay/lib-opencode.sh
+. "$SF_RELAY_DIR/lib-opencode.sh"
 # shellcheck source=relay/lib-pi.sh
 . "$SF_RELAY_DIR/lib-pi.sh"
 
@@ -1410,9 +1413,18 @@ have found something serious, write it down before you go looking for the next t
           pi_model="$PI_GROK_REVIEW_MODEL" pi_effort="$PI_GROK_REVIEW_EFFORT"
         fi
         # node reads pi's stream. Without it there is no way to tell a review from a failure, so the
-        # model call never starts.
-        if ! command -v node >/dev/null 2>&1; then
-          printf "  ! %s: node not found — it reads pi's json stream; seat not run\n" "$name" >"$STATUS_DIR/diag_$key"
+        # model call never starts. pi itself runs through `env node`, and this runs in the checkout,
+        # where mise puts the repo's own pinned Node first: a repo pinned to Node 20 crashed both
+        # seats. pi_resolve_node (lib-pi.sh) picks a node that meets pi's floor, for pi and reader.
+        local pi_cmd
+        if ! pi_resolve_node; then
+          printf '  ! %s: %s; seat not run\n' "$name" "$PI_NODE_WHY" >"$STATUS_DIR/diag_$key"
+          echo fail >"$STATUS_DIR/$key"
+          return 0
+        fi
+        # Found before the node's directory goes first on PATH, so that directory cannot shadow it.
+        if ! pi_cmd="$(command -v pi)"; then
+          printf '  ! %s: pi not found; seat not run\n' "$name" >"$STATUS_DIR/diag_$key"
           echo fail >"$STATUS_DIR/$key"
           return 0
         fi
@@ -1428,11 +1440,11 @@ have found something serious, write it down before you go looking for the next t
         out=$(
           (
             printf '%s\n\n--- PLAN ---\n~~~~plan\n%s\n~~~~\n--- END PLAN ---\n' "$PROMPT" "$plan" |
-              run_reviewer pi -p --mode json --model "$pi_model" --thinking "$pi_effort" \
+              PATH="${PI_NODE%/*}:$PATH" run_reviewer "$pi_cmd" -p --mode json --model "$pi_model" --thinking "$pi_effort" \
                 --tools read,grep,find,ls \
                 --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes \
                 --no-context-files --no-approve --no-session --offline 2>>"$errf" |
-              node -e "$PI_FINAL_TEXT_JS" 2>>"$errf"
+              "$PI_NODE" -e "$PI_FINAL_TEXT_JS" 2>>"$errf"
             _ps=("${PIPESTATUS[@]}")
             [ "${_ps[1]}" -ne 0 ] && exit "${_ps[1]}"
             exit "${_ps[2]}"
