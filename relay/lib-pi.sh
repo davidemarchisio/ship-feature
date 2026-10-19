@@ -119,6 +119,10 @@ pi_resolve_bin() {
 # mise-installed one that does. Never one inside the repository under review. None → the seat
 # fails before the model call, and the message names every version it found.
 #
+# Each candidate is asked for its version AND its real executable (process.execPath), and the seat
+# runs that executable. A mise shim answers for the cwd it runs in: asked in the checkout, it can
+# report the checkout's Node 24 and then start the global Node 20 from the seat's isolated cwd.
+#
 # The floor is pi's package.json engines.node (pi 1.2.0: ">=22.19.0"). Raise it with pi.
 PI_NODE_MIN="22.19.0"
 
@@ -138,7 +142,7 @@ pi_version_ge() { # <version> <floor>: true when version >= floor. Both X.Y.Z, a
 # review (the in-repo check reads it from the cwd).
 # Candidates: the node on PATH, then ${MISE_DATA_DIR:-$XDG_DATA_HOME/mise}/installs/node/*/bin/node.
 pi_resolve_node() {
-  local _path_node="" _c _v _best="" _best_v="" _found="" _seen=" "
+  local _path_node="" _c _v _out _real _best="" _best_v="" _found="" _seen=" "
   local -a _cands=()
   PI_NODE=""
   PI_NODE_WHY=""
@@ -152,22 +156,32 @@ pi_resolve_node() {
     return 1
   fi
   for _c in "${_cands[@]}"; do
-    # Never execute a file from the branch under review, not even for --version.
-    opencode_target_in_repo "$_c" >/dev/null && continue
-    _v="$("$_c" --version 2>/dev/null)" || continue
+    # Never execute a file from the branch under review, not even to ask its version.
+    if opencode_target_in_repo "$_c" >/dev/null; then
+      _found="${_found:+$_found, }$_c (inside the repository under review, not run)"
+      continue
+    fi
+    _out="$("$_c" -p 'process.version + " " + process.execPath' 2>/dev/null)" || continue
+    _v="${_out%% *}"
     _v="${_v#v}"
+    _real="${_out#* }"
     [[ $_v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    case "$_real" in /*) ;; *) continue ;; esac
+    if opencode_target_in_repo "$_real" >/dev/null; then
+      _found="${_found:+$_found, }$_c (runs $_real, inside the repository under review)"
+      continue
+    fi
     # mise links 22 and 22.16 to 22.16.0: one version, one entry in the message.
     case "$_seen" in *" $_v "*) continue ;; esac
     _seen="$_seen$_v "
-    _found="${_found:+$_found, }$_v ($_c)"
+    _found="${_found:+$_found, }$_v ($_real)"
     pi_version_ge "$_v" "$PI_NODE_MIN" || continue
     if [ "$_c" = "$_path_node" ]; then
-      _best="$_c"
+      _best="$_real"
       break
     fi
     if [ -z "$_best" ] || ! pi_version_ge "$_best_v" "$_v"; then
-      _best="$_c"
+      _best="$_real"
       _best_v="$_v"
     fi
   done

@@ -52,8 +52,10 @@ All notable changes to **ship-feature** are documented here. This project follow
   startup (`does not provide an export named 'enableCompileCache'`), and the round did not count.
   `pi_resolve_node` (`relay/lib-pi.sh`) keeps the PATH node when it meets `PI_NODE_MIN` (22.19.0,
   pi 1.2.0's `engines.node`), else takes the newest mise-installed node that does, never one inside
-  the checkout under review; pi and its json reader both run on it. With none, the seat fails before
-  the model call and names every version it found.
+  the checkout under review; pi and its json reader both run on it. Each candidate is asked for its
+  version and its real executable, and the seat runs that executable: a mise shim answers for the cwd
+  it runs in, and pi runs from another one. With none, the seat fails before the model call and names
+  every version it found.
 
 - **`pr-review-relay --context-file` with an unreadable file posted a clean round.** A file that
   exists but cannot be read passed the `-f` check; `cat` failed inside the preamble's command

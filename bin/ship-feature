@@ -1423,7 +1423,11 @@ have found something serious, write it down before you go looking for the next t
           return 0
         fi
         # Found before the node's directory goes first on PATH, so that directory cannot shadow it.
-        pi_cmd="$(command -v pi || printf pi)"
+        if ! pi_cmd="$(command -v pi)"; then
+          printf '  ! %s: pi not found; seat not run\n' "$name" >"$STATUS_DIR/diag_$key"
+          echo fail >"$STATUS_DIR/$key"
+          return 0
+        fi
         # Truncated once, then APPENDED to by both stages: a truncating open and an appending open of
         # one file at pipeline start would race, and pi's fd could write over the reader's reason line.
         : >"$errf"

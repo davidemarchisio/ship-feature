@@ -24,13 +24,14 @@ WORK="$(mktemp -d)" || {
   exit 1
 }
 # pi needs Node >= PI_NODE_MIN (lib-pi.sh), and the machine's own node may be older: a CI image, or
-# a repo pin. make_node <dir> <version>: a node that reports <version> and runs the real one. The rm
-# first: <dir>/node may be a symlink to the real node, and a redirect would write through it.
+# a repo pin. make_node <dir> <version>: a node that reports <version> and itself as its executable
+# to the resolver's probe (`-p`), and runs the real node for anything else. The rm first: <dir>/node
+# may be a symlink to the real node, and a redirect would write through it.
 REAL_NODE="$(command -v node)"
 make_node() {
   mkdir -p "$1"
   rm -f "$1/node"
-  printf '#!/bin/sh\n[ "$1" = --version ] && { echo v%s; exit 0; }\nexec "%s" "$@"\n' "$2" "$REAL_NODE" >"$1/node"
+  printf '#!/bin/sh\n[ "$1" = -p ] && { echo "v%s $0"; exit 0; }\nexec "%s" "$@"\n' "$2" "$REAL_NODE" >"$1/node"
   chmod +x "$1/node"
 }
 # The developer's own ~/.config/pr-review-relay/config must not reach these fixtures. It sets the
@@ -3074,6 +3075,7 @@ git -C "$PIN/checkout" init -q
 printf '[tools]\nnode = "20"\n' >"$PIN/checkout/mise.toml"
 make_node "$PIN/pinned-node" 20.20.2 # where the pin resolves: mise keeps it outside the checkout
 make_node "$PIN/mise/installs/node/22.16.0/bin" 22.16.0
+make_node "$PIN/mise/installs/node/22.20.0/bin" 22.20.0 # meets the floor too: the newest must win
 make_node "$PIN/mise/installs/node/24.11.0/bin" 24.11.0
 ln -s 22.16.0 "$PIN/mise/installs/node/22"
 make_node "$PIN/mise-old/installs/node/22.16.0/bin" 22.16.0
@@ -3104,11 +3106,26 @@ pir_ok "the PATH node is kept when it meets the floor ($PID_SEEN)" $?
 # A node in the checkout is written by the author of the diff: never chosen, never even asked
 # for its version.
 mkdir -p "$PIN/checkout/bin"
-printf '#!/bin/sh\ntouch "%s"\necho v99.0.0\n' "$PIN/ran" >"$PIN/checkout/bin/node"
+printf '#!/bin/sh\ntouch "%s"\necho "v99.0.0 $0"\n' "$PIN/ran" >"$PIN/checkout/bin/node"
 chmod +x "$PIN/checkout/bin/node"
 pin_run "$PIN/checkout/bin" "$PIN/mise"
 [ "$PID_RC" = 0 ] && [ "$PID_SEEN" = "$PIN/mise/installs/node/24.11.0/bin/node" ] && [ ! -e "$PIN/ran" ]
 pir_ok "a node inside the checkout under review is skipped and never run" $?
+pin_run "$PIN/checkout/bin" "$PID/no-mise"
+[ "$PID_RC" = 1 ] && [ ! -e "$PIN/ran" ] && grep -qF "$PIN/checkout/bin/node (inside the repository under review, not run)" <<<"$PID_ERR"
+pir_ok "only a node inside the checkout: refused, and the message says why" $?
+# A mise shim answers for the cwd it runs in. Asked in the checkout (pinned to 24 here), it said 24;
+# run later from the seat's isolated cwd, it would have started the global Node 20. The seat runs
+# the executable the probe reported, so the cwd no longer matters.
+make_node "$PIN/shim-24" 24.11.0
+make_node "$PIN/shim-20" 20.20.2
+mkdir -p "$PIN/shims"
+printf '#!/bin/sh\ncase "$PWD" in "%s"*) exec "%s" "$@" ;; esac\nexec "%s" "$@"\n' \
+  "$PIN/checkout" "$PIN/shim-24/node" "$PIN/shim-20/node" >"$PIN/shims/node"
+chmod +x "$PIN/shims/node"
+pin_run "$PIN/shims" "$PID/no-mise"
+[ "$PID_RC" = 0 ] && [ "$PID_SEEN" = "$PIN/shim-24/node" ]
+pir_ok "a shim on PATH: pi runs on the executable it resolved in the checkout ($PID_SEEN)" $?
 
 # --- pi seats: the relay contract ----------------------------------------------
 # A stand-in for pi 1.1.0 in `-p --mode json`: one json event per line, the final assistant message

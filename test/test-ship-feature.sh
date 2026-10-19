@@ -2487,10 +2487,11 @@ PISTUB
   pi_node_wrapper "$PBIN" 22.19.0
 }
 REAL_NODE="$(command -v node)"
-pi_node_wrapper() { # <dir> <version>. The rm: a redirect would write through a symlink to node.
+pi_node_wrapper() { # <dir> <version>: answers the resolver's -p probe with <version> and itself,
+  # runs the real node for anything else. The rm: a redirect would write through a symlink to node.
   mkdir -p "$1"
   rm -f "$1/node"
-  printf '#!/bin/sh\n[ "$1" = --version ] && { echo v%s; exit 0; }\nexec "%s" "$@"\n' "$2" "$REAL_NODE" >"$1/node"
+  printf '#!/bin/sh\n[ "$1" = -p ] && { echo "v%s $0"; exit 0; }\nexec "%s" "$@"\n' "$2" "$REAL_NODE" >"$1/node"
   chmod +x "$1/node"
 }
 write_pi_stub
@@ -2577,6 +2578,7 @@ mkdir -p "$WORK/no-mise"
 prow=$(printf 'plan\n' | PATH="$PBIN" MISE_DATA_DIR="$WORK/no-mise" bash "$CLI" plan-review --reviewers pi_glm 2>&1)
 check "pi: no node → exit 3, says so, and pi never starts" \
   "$?|$(printf '%s' "$prow" | grep -c "pi_glm: node not found")|$(pi_ran pi_glm)" "3|1|no"
+pi_node_wrapper "$PBIN" 22.19.0 # restore
 # T.7a: a repo pinned to an old Node puts it first on PATH, and pi runs through `env node`: pi 1.2.0
 # on Node 20 died at startup with a SyntaxError. The seat runs pi on a node that meets the floor.
 pi_node_wrapper "$WORK/pinned-node" 20.20.2
