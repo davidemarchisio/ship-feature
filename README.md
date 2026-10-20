@@ -287,6 +287,17 @@ there.
   each round's startup lines either way: omitting the flag fixes a stale list, it cannot tell you a
   seat dropped out — a **benched** (out-of-quota) reviewer is skipped and the round still exits
   `0`.
+- `ship-feature seat-audit snapshot --out <file> [--dir <repo-dir>] [--pr <n> --repo <owner/name>]`
+  and `ship-feature seat-audit check <file>` — prove a review round wrote nothing. Some seats are
+  read-only by instruction only, not by sandbox, so `snapshot` records before the round what a seat
+  could change: HEAD, every ref, the stash, the worktrees, `git status`, a hash of every tracked and
+  untracked file, size and mtime of every ignored file, the git config and hooks, and with
+  `--pr`/`--repo` the PR's head, comment count and review count (read through `gh`; if `gh` fails,
+  so does the snapshot). `check` reads the same facts again and compares. The snapshot is a sorted
+  text file, one fact per line, so two of them can be read with `diff`; keep it outside the work
+  tree. Exit `0` = no change, `3` = something changed and the round does not count (the diff is
+  printed by category), `1` = usage error, unreadable snapshot, or a fact that could not be read.
+  See [`WORKFLOW.md`](WORKFLOW.md) §5.
 
 State/resume (`new`/`status`) is intentionally deferred — the CLI stays a thin helper; the agent drives
 the process from `WORKFLOW.md`.

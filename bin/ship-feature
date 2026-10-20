@@ -31,6 +31,16 @@
 #                            the pre-push hook tests the exact tree that lands. Each -m adds a paragraph
 #                            to the merge message. Any failure leaves the remote as it was and returns to
 #                            the branch. Exit 0 landed, 1 refused or failed.
+#   ship-feature seat-audit snapshot --out <file> [--dir <repo-dir>] [--pr <n> --repo <owner/name>]
+#   ship-feature seat-audit check <file>
+#                            Prove a review round wrote nothing. `snapshot`, before the round, records
+#                            HEAD, every ref, the stash, the worktrees, `git status`, a hash of every
+#                            tracked and untracked file, size and mtime of every ignored file, the git
+#                            config and hooks, and with --pr/--repo the PR's head, comment count and
+#                            review count. `check`, after the round, records them again and compares.
+#                            --dir defaults to the current work tree. Keep <file> outside the work
+#                            tree. Exit 0 no change, 3 something changed (the round does not count),
+#                            1 usage error, unreadable snapshot, or a fact that could not be read.
 #   ship-feature help        This message.
 #
 # The workflow itself lives in WORKFLOW.md; this tool does not drive it. State/resume is intentionally
@@ -1659,6 +1669,464 @@ cmd_land() {
   echo "    git worktree remove '$top' && git branch -d '$cur'"
 }
 
+# --- seat-audit: did a review round write anything? --------------------------
+# A reviewer seat is meant to be read-only, and for some seats that is a sandbox: codex runs with
+# --sandbox read-only, the gemini seat in an isolated home. For others it is only an instruction in
+# the prompt, and an agent host that runs seats in-process can give a seat the same write access the
+# host has. Nothing in the round's output says whether a seat obeyed. seat-audit answers that from
+# the outside: fingerprint everything a seat could change before the round, fingerprint it again
+# after, and compare. Any difference means the round does not count, the same as relay's exit 3.
+#
+# The snapshot is a plain text file, one fact per line, sorted, so two snapshots can be read with
+# diff. A small header holds what `check` needs to compute the same facts again (the format, the
+# work tree, the PR) and a hash of the fact lines, so a truncated or hand-edited file is refused as
+# unreadable instead of read as a smaller, clean state.
+#
+# Facts, by category:
+#   tree   `git status` (untracked and ignored files listed one by one), a blob hash of every tracked
+#          and untracked file, the index entries, and size + mtime of every ignored file. Ignored
+#          files are not hashed because build and dependency directories can be huge; a write inside
+#          the same second that keeps the size is the one change that slips through.
+#   refs   HEAD and what it points at, every ref (`git for-each-ref`), the stash list, the worktrees.
+#   git    the repository's config, info/exclude and hooks: files under .git/ that a seat could use
+#          to run code later, which the rest of .git/ (objects, logs, the index file) is not.
+#   pr     with --pr/--repo, the PR's head commit, comment count and review count.
+#
+# Refs are shared by every worktree of a repository, so a commit or fetch in another worktree during
+# the round shows up as a change. That is deliberate: check cannot tell who moved a ref, and a check
+# that guessed would pass the one round it exists to stop.
+#
+# Every fact is read with git itself (hash-object for content, so no sha1sum/shasum split between
+# Linux and macOS) and with the PR read through gh's own --jq, so this adds no dependency. Bash
+# 3.2-safe like the rest of the file.
+SA_FORMAT=1
+SA_NL='
+'
+SA_TAB='	'
+SA_USAGE="usage: ship-feature seat-audit snapshot --out <file> [--dir <repo-dir>] [--pr <n> --repo <owner/name>]
+       ship-feature seat-audit check <file>"
+
+# Paths go last on a fact line, so spaces are safe, but a newline would split a fact in two. A path
+# with a newline or a backslash is written with \n and \\ so every fact stays one line and the
+# escaping can be read back without ambiguity. Sets SA_P rather than printing, so the common case
+# (no escaping needed) costs no subshell; this runs once per file in the tree.
+sa_esc() {
+  SA_P="$1"
+  case "$SA_P" in *'\'* | *"$SA_NL"*) ;; *) return 0 ;; esac
+  local out="" c i=0 n=${#SA_P}
+  while [ "$i" -lt "$n" ]; do
+    c="${SA_P:$i:1}"
+    case "$c" in
+      '\') out="$out\\\\" ;;
+      "$SA_NL") out="$out\\n" ;;
+      *) out="$out$c" ;;
+    esac
+    i=$((i + 1))
+  done
+  SA_P="$out"
+}
+
+# One "tree <kind> <hash> <path>" fact per path in a NUL-separated list, for the tracked and the
+# untracked files. Content is hashed with `git hash-object --no-filters`: the bytes on disk, with no
+# clean filter or line-ending conversion between them and the hash (and no filter driver run by an
+# audit). Most paths go through one `--stdin-paths` process; that reads one path per line and
+# unquotes a line that starts with a double quote, so a path with a newline or a leading quote is
+# hashed on its own instead. Only regular files are hashed: a symlink records its target, and a
+# directory (a submodule, a nested repository) or a missing path records only that.
+sa_hash_list() { # sa_hash_list <kind> <NUL list> <skip path>
+  local kind="$1" list="$2" skip="$3" p pp h t batch="$SA_TMP/batch" hashes="$SA_TMP/hashes" nb nh
+  {
+    while IFS= read -r -d '' p; do
+      [ "$p" = "$skip" ] && continue
+      sa_esc "$p"
+      if [ -L "$p" ]; then
+        t="$(readlink -- "$p")" || return 1
+        pp="$SA_P"
+        sa_esc "$t"
+        echo "tree $kind link $pp -> $SA_P"
+      elif [ -f "$p" ]; then
+        case "$p" in
+          *"$SA_NL"* | \"*)
+            h="$(git hash-object --no-filters -- "$p")" || return 1
+            echo "tree $kind $h $SA_P"
+            ;;
+          *) printf '%s\n' "$p" >&4 ;;
+        esac
+      elif [ -d "$p" ]; then
+        echo "tree $kind dir $SA_P"
+      elif [ -e "$p" ]; then
+        echo "tree $kind special $SA_P"
+      else
+        echo "tree $kind missing $SA_P"
+      fi
+    done <"$list"
+  } 4>"$batch" || return 1
+  [ -s "$batch" ] || return 0
+  git hash-object --no-filters --stdin-paths <"$batch" >"$hashes" || return 1
+  # Paired line by line, so the two lists must be the same length: a file removed between the
+  # listing and the hashing makes hash-object fail above, and anything else that shortens one list
+  # is refused here rather than pairing hashes with the wrong paths.
+  nb="$(wc -l <"$batch")"
+  nh="$(wc -l <"$hashes")"
+  [ "$nb" -eq "$nh" ] || return 1
+  while IFS= read -r p && IFS= read -r h <&3; do
+    sa_esc "$p"
+    echo "tree $kind $h $SA_P"
+  done <"$batch" 3<"$hashes"
+}
+
+# Size and mtime of every ignored file, from one batched `stat` per xargs chunk. GNU and BSD stat
+# take different format flags, so the flavour is probed once. Each output line repeats the path, so
+# a file that vanishes mid-run costs only its own line and cannot shift the rest. Paths get a ./
+# prefix (a leading - is not an option) and a path with a newline is stat'ed alone, for the same
+# reason sa_hash_list hashes it alone. Seconds, not nanoseconds: BSD stat has no portable sub-second
+# field.
+sa_stat_list() { # sa_stat_list <NUL list> <skip path>
+  local list="$1" skip="$2" p line s m batch="$SA_TMP/sbatch"
+  local -a fmt
+  if stat -c '%s' . >/dev/null 2>&1; then fmt=(-c '%s %Y %n'); else fmt=(-f '%z %m %N'); fi
+  {
+    while IFS= read -r -d '' p; do
+      [ "$p" = "$skip" ] && continue
+      if [ ! -L "$p" ] && [ -d "$p" ]; then
+        sa_esc "$p"
+        echo "tree ignored dir $SA_P"
+        continue
+      fi
+      case "$p" in
+        *"$SA_NL"*)
+          line="$(stat "${fmt[@]}" -- "./$p")" || continue
+          sa_esc "$p"
+          echo "tree ignored ${line%% ./*} $SA_P"
+          ;;
+        *) printf './%s\0' "$p" >&4 ;;
+      esac
+    done <"$list"
+  } 4>"$batch" || return 1
+  [ -s "$batch" ] || return 0
+  # stat exits non-zero when a file vanished, and xargs passes that on; the facts it could read are
+  # still right, and the vanished file is simply absent, so the status is not a failure here.
+  { xargs -0 stat "${fmt[@]}" -- <"$batch" 2>/dev/null || true; } | while IFS= read -r line; do
+    s="${line%% *}"
+    line="${line#* }"
+    m="${line%% *}"
+    p="${line#* ./}"
+    sa_esc "$p"
+    echo "tree ignored $s $m $SA_P"
+  done
+}
+
+# Every fact for the work tree in the current directory, unsorted, on stdout. Non-zero when any fact
+# cannot be read: a snapshot or check that silently left a category out would compare as clean.
+# <skip> is the snapshot file's path relative to the work tree when it lives inside it, so the
+# snapshot does not see itself appear.
+sa_facts() { # sa_facts <skip> <pr> <repo>
+  local skip="$1" pr="$2" repo="$3" e xy p o hd sym line rec f gd cdir hooks h out n v bad
+  # --no-optional-locks everywhere status could run: a plain `git status` refreshes the index file,
+  # and an audit that writes to the repository it audits is not one.
+  export GIT_OPTIONAL_LOCKS=0
+
+  # refs
+  if hd="$(git rev-parse -q --verify HEAD)"; then echo "refs HEAD $hd"; else echo "refs HEAD (unborn)"; fi
+  if sym="$(git symbolic-ref -q HEAD)"; then echo "refs HEAD-ref $sym"; else echo "refs HEAD-ref (detached)"; fi
+  git for-each-ref --format='refs ref %(objectname) %(refname)' || return 1
+  git stash list --format='refs stash %gd %H' || return 1
+  # One worktree per line: the porcelain record's fields joined by spaces, so a worktree that moves,
+  # changes branch or gains a lock is one changed fact.
+  out="$(git worktree list --porcelain)" || return 1
+  rec=""
+  while IFS= read -r line; do
+    if [ -z "$line" ]; then
+      [ -n "$rec" ] && echo "refs $rec"
+      rec=""
+    else
+      rec="${rec:+$rec }$line"
+    fi
+  done <<EOF
+$out
+
+EOF
+
+  # tree: status. -uall lists untracked and ignored files one by one rather than as a collapsed
+  # directory, which is also what lets the snapshot file itself be skipped by name.
+  git status --porcelain=v1 --ignored -uall -z >"$SA_TMP/status" || return 1
+  while IFS= read -r -d '' e; do
+    xy="${e:0:2}"
+    p="${e:3}"
+    o=""
+    case "$xy" in R* | C*) IFS= read -r -d '' o ;; esac
+    [ "$p" = "$skip" ] && continue
+    sa_esc "$p"
+    p="$SA_P"
+    if [ -n "$o" ]; then
+      sa_esc "$o"
+      echo "tree status $xy $p <- $SA_P"
+    else
+      echo "tree status $xy $p"
+    fi
+  done <"$SA_TMP/status"
+
+  # tree: the index (catches a `git add` that leaves the file on disk as it was) and the content of
+  # every tracked path. A conflicted path has one index entry per stage but is hashed once.
+  git ls-files -s -z >"$SA_TMP/index" || return 1
+  : >"$SA_TMP/tracked"
+  p=""
+  while IFS= read -r -d '' e; do
+    o="${e#*"$SA_TAB"}"
+    sa_esc "$o"
+    echo "tree index ${e%%"$SA_TAB"*} $SA_P"
+    [ "$o" = "$p" ] || printf '%s\0' "$o" >>"$SA_TMP/tracked"
+    p="$o"
+  done <"$SA_TMP/index"
+  sa_hash_list tracked "$SA_TMP/tracked" "" || return 1
+
+  git ls-files -z --others --exclude-standard >"$SA_TMP/untracked" || return 1
+  sa_hash_list untracked "$SA_TMP/untracked" "$skip" || return 1
+  git ls-files -z --others --ignored --exclude-standard >"$SA_TMP/ignored" || return 1
+  sa_stat_list "$SA_TMP/ignored" "$skip" || return 1
+
+  # git: config, info/exclude and hooks. `--git-path hooks` follows core.hooksPath. A file that is
+  # absent is recorded as absent, so creating one is a change too.
+  gd="$(git rev-parse --git-dir)" || return 1
+  cdir="$(git rev-parse --git-common-dir)" || return 1
+  hooks="$(git rev-parse --git-path hooks)" || return 1
+  for f in "$cdir/config" "$gd/config.worktree" "$cdir/info/exclude"; do
+    if [ -f "$f" ]; then
+      h="$(git hash-object --no-filters -- "$f")" || return 1
+      echo "git file $h ${f##*/}"
+    else
+      echo "git file absent ${f##*/}"
+    fi
+  done
+  if [ -d "$hooks" ]; then
+    for f in "$hooks"/* "$hooks"/.[!.]*; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      if [ -f "$f" ]; then
+        h="$(git hash-object --no-filters -- "$f")" || return 1
+        [ -x "$f" ] && h="$h x"
+      else
+        h="not-a-file"
+      fi
+      sa_esc "${f##*/}"
+      echo "git hook $h $SA_P"
+    done
+  fi
+
+  # pr: through gh's built-in --jq, so jq need not be installed. Fail closed: no answer, or an
+  # answer that is not exactly the three expected facts, fails the whole run.
+  if [ -n "$pr" ]; then
+    out="$(gh pr view "$pr" --repo "$repo" --json headRefOid,comments,reviews \
+      --jq '"pr head \(.headRefOid)", "pr comments \(.comments | length)", "pr reviews \(.reviews | length)"' 2>"$SA_TMP/gh.err")" || {
+      echo "seat-audit: gh pr view $pr --repo $repo failed: $(head -n 3 "$SA_TMP/gh.err")" >&2
+      return 1
+    }
+    n=0
+    while IFS= read -r line; do
+      case "$line" in
+        "pr head "*) v="${line#pr head }" && bad='*[!0-9a-f]*' ;;
+        "pr comments "* | "pr reviews "*) v="${line#pr * }" && bad='*[!0-9]*' ;;
+        *) v="" ;;
+      esac
+      # shellcheck disable=SC2254 # $bad is the pattern on purpose
+      case "$v" in '' | $bad)
+        echo "seat-audit: unexpected answer from gh pr view: '$line'" >&2
+        return 1
+        ;;
+      esac
+      echo "$line"
+      n=$((n + 1))
+    done <<EOF
+$out
+EOF
+    [ "$n" -eq 3 ] || {
+      echo "seat-audit: gh pr view returned $n facts, expected 3" >&2
+      return 1
+    }
+  fi
+  return 0
+}
+
+# Resolve a path to an absolute one without requiring it to exist (the snapshot file does not yet).
+sa_abs() {
+  local d b
+  case "$1" in */*) d="${1%/*}" b="${1##*/}" ;; *) d="." b="$1" ;; esac
+  [ -n "$d" ] || d="/"
+  d="$(CDPATH='' cd -- "$d" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s' "${d%/}" "$b"
+}
+
+# The sorted facts for <dir>, into <out>. Runs in a subshell: it changes directory and exports
+# LC_ALL=C (one sort order and one character model on every machine, so a snapshot from one shell
+# compares cleanly in another).
+sa_collect() { # sa_collect <dir> <snapshot file, absolute> <pr> <repo> <out>
+  (
+    export LC_ALL=C
+    cd -- "$1" || exit 1
+    skip=""
+    case "$2" in "$1"/*) skip="${2#"$1"/}" ;; esac
+    sa_facts "$skip" "$3" "$4" >"$SA_TMP/facts.raw" || exit 1
+    sort "$SA_TMP/facts.raw" >"$5" || exit 1
+  )
+}
+
+sa_mktemp() {
+  SA_TMP="$(mktemp -d "${TMPDIR:-/tmp}/seat-audit.XXXXXX")" || die "seat-audit: cannot create a temp dir."
+  # shellcheck disable=SC2064 # expand now: SA_TMP is this run's directory
+  trap "rm -rf -- '$SA_TMP'" EXIT
+}
+
+# The work tree's top level, or exit 1. A path inside the tree is accepted and widened to the top,
+# so the facts always cover the whole tree whatever directory the round runs from.
+sa_toplevel() {
+  local top
+  [ -d "$1" ] || die "seat-audit: $1 is not a directory."
+  [ "$(git -C "$1" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] ||
+    die "seat-audit: $1 is not inside a git work tree."
+  top="$(cd -- "$1" && git rev-parse --show-toplevel 2>/dev/null)" || die "seat-audit: cannot read the top of the work tree at $1."
+  top="$(CDPATH='' cd -- "$top" && pwd -P)" || die "seat-audit: cannot resolve $top."
+  printf '%s' "$top"
+}
+
+sa_snapshot() {
+  local out="" dir="" pr="" repo="" abs top hash n
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out | --dir | --pr | --repo)
+        [ $# -ge 2 ] && [ -n "$2" ] || die "seat-audit snapshot: $1 needs a value.
+$SA_USAGE"
+        case "$1" in --out) out="$2" ;; --dir) dir="$2" ;; --pr) pr="$2" ;; --repo) repo="$2" ;; esac
+        shift 2
+        ;;
+      *) die "seat-audit snapshot: unknown argument '$1'.
+$SA_USAGE" ;;
+    esac
+  done
+  [ -n "$out" ] || die "seat-audit snapshot: --out is required.
+$SA_USAGE"
+  # Both or neither: a PR number with no repository would make gh guess the repository from the
+  # current directory, and the check could then read a different one.
+  if [ -n "$pr$repo" ]; then
+    [ -n "$pr" ] && [ -n "$repo" ] || die "seat-audit snapshot: --pr and --repo go together."
+    case "$pr" in *[!0-9]*) die "seat-audit snapshot: --pr wants a PR number, got '$pr'." ;; esac
+    case "$repo" in
+      */*/* | *[!A-Za-z0-9._/-]*) die "seat-audit snapshot: --repo wants owner/name, got '$repo'." ;;
+      [A-Za-z0-9]*/[A-Za-z0-9._]*) ;;
+      *) die "seat-audit snapshot: --repo wants owner/name, got '$repo'." ;;
+    esac
+  fi
+  if [ -z "$dir" ]; then
+    dir="$(git rev-parse --show-toplevel 2>/dev/null)" || die "seat-audit: not inside a git work tree (pass --dir)."
+  fi
+  top="$(sa_toplevel "$dir")" || exit 1
+  case "$top" in *"$SA_NL"*) die "seat-audit: the work tree path contains a newline." ;; esac
+  abs="$(sa_abs "$out")" || die "seat-audit snapshot: the directory of $out does not exist."
+  [ -d "$abs" ] && die "seat-audit snapshot: $out is a directory."
+
+  sa_mktemp
+  sa_collect "$top" "$abs" "$pr" "$repo" "$SA_TMP/facts" || die "seat-audit snapshot: could not read every fact (see above); no snapshot written."
+  hash="$(git hash-object --no-filters "$SA_TMP/facts")" || die "seat-audit snapshot: cannot hash the facts."
+  n="$(wc -l <"$SA_TMP/facts")"
+  n="${n//[!0-9]/}"
+  {
+    echo "ship-feature seat-audit $SA_FORMAT"
+    echo "dir $top"
+    [ -n "$pr" ] && echo "pr $pr" && echo "repo $repo"
+    echo "facts $n $hash"
+    echo "--"
+    cat "$SA_TMP/facts"
+  } >"$SA_TMP/snapshot" || die "seat-audit snapshot: cannot write the snapshot."
+  # Written next to the destination and renamed, so a reader never sees half a file.
+  cp -- "$SA_TMP/snapshot" "$abs.tmp.$$" && mv -f -- "$abs.tmp.$$" "$abs" || {
+    rm -f -- "$abs.tmp.$$"
+    die "seat-audit snapshot: cannot write $out."
+  }
+  ok "seat-audit: snapshot of $top ($n facts${pr:+, PR $repo#$pr}) written to $out"
+}
+
+# Print the lines of a comm(1) side for one category, with a marker.
+sa_print_side() { # sa_print_side <category> <marker> <file>
+  local line
+  while IFS= read -r line; do
+    case "$line" in "$1 "*) printf '    %s %s\n' "$2" "${line#"$1" }" ;; esac
+  done <"$3"
+}
+
+sa_check() {
+  [ $# -eq 1 ] || die "seat-audit check: takes exactly one snapshot file.
+$SA_USAGE"
+  local file="$1" abs line dir="" pr="" repo="" n="" hash="" ver got cat label changed=0
+  [ -f "$file" ] && [ -r "$file" ] || die "seat-audit check: cannot read $file."
+  abs="$(sa_abs "$file")" || die "seat-audit check: cannot resolve $file."
+  sa_mktemp
+
+  # The header, strictly: an unknown line or a missing field means the file is not a snapshot this
+  # version can compare, and guessing would turn an unreadable file into a clean result.
+  {
+    IFS= read -r ver || ver=""
+    while IFS= read -r line; do
+      case "$line" in
+        "dir "*) dir="${line#dir }" ;;
+        "pr "*) pr="${line#pr }" ;;
+        "repo "*) repo="${line#repo }" ;;
+        "facts "*) line="${line#facts }" && n="${line%% *}" && hash="${line#* }" ;;
+        --) break ;;
+        *) die "seat-audit check: $file is not a seat-audit snapshot (unexpected header line)." ;;
+      esac
+    done
+    cat >"$SA_TMP/old"
+  } <"$file"
+  [ "$ver" = "ship-feature seat-audit $SA_FORMAT" ] || die "seat-audit check: $file is not a format-$SA_FORMAT seat-audit snapshot."
+  [ -n "$dir" ] && [ -n "$n" ] && [ -n "$hash" ] || die "seat-audit check: $file has an incomplete header."
+  if { [ -n "$pr" ] && [ -z "$repo" ]; } || { [ -z "$pr" ] && [ -n "$repo" ]; }; then
+    die "seat-audit check: $file names a PR without a repository, or the reverse."
+  fi
+  got="$(wc -l <"$SA_TMP/old")"
+  got="${got//[!0-9]/}"
+  [ "$got" = "$n" ] && [ "$(git hash-object --no-filters "$SA_TMP/old")" = "$hash" ] ||
+    die "seat-audit check: $file is corrupt (its facts do not match the hash in its header)."
+  [ -d "$dir" ] || die "seat-audit check: the audited work tree $dir no longer exists."
+  [ "$(sa_toplevel "$dir")" = "$dir" ] || die "seat-audit check: $dir is no longer the top of a git work tree."
+
+  sa_collect "$dir" "$abs" "$pr" "$repo" "$SA_TMP/new" ||
+    die "seat-audit check: could not read every fact (see above); the round cannot be verified."
+  if cmp -s "$SA_TMP/old" "$SA_TMP/new"; then
+    echo "seat-audit: no change"
+    return 0
+  fi
+  (
+    export LC_ALL=C
+    comm -23 "$SA_TMP/old" "$SA_TMP/new" >"$SA_TMP/gone"
+    comm -13 "$SA_TMP/old" "$SA_TMP/new" >"$SA_TMP/added"
+  )
+  echo "seat-audit: CHANGED since the snapshot — this review round does not count"
+  for cat in tree refs git pr; do
+    case "$cat" in
+      tree) label="local tree" ;;
+      refs) label="refs" ;;
+      git) label="git config and hooks" ;;
+      pr) label="PR $repo#$pr" ;;
+    esac
+    grep -q "^$cat " "$SA_TMP/gone" "$SA_TMP/added" 2>/dev/null || continue
+    changed=1
+    echo "  $label:"
+    sa_print_side "$cat" - "$SA_TMP/gone"
+    sa_print_side "$cat" + "$SA_TMP/added"
+  done
+  [ "$changed" = 1 ] || echo "  (a fact outside the known categories differs)"
+  return 3
+}
+
+cmd_seat_audit() {
+  local sub="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    snapshot) sa_snapshot "$@" ;;
+    check) sa_check "$@" ;;
+    *) die "seat-audit: unknown or missing subcommand '${sub}'.
+$SA_USAGE" ;;
+  esac
+}
+
 main() {
   local sub="${1:-help}"
   [ $# -gt 0 ] && shift
@@ -1669,6 +2137,7 @@ main() {
     plan-review) cmd_plan_review "$@" ;;
     plan-consensus | merge-gate) die "$sub was removed with autonomous mode (2026-10-15). See WORKFLOW.md for the two lanes." ;;
     land) cmd_land "$@" ;;
+    seat-audit) cmd_seat_audit "$@" ;;
     # Print the whole header comment block — from line 2 to the first line that is not a
     # comment. A hardcoded end line silently truncates help the moment anyone documents a new
     # flag up there, which is exactly how this broke once; the shebang is the only line skipped.
