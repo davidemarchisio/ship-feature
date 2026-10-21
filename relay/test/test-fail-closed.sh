@@ -962,7 +962,7 @@ printf '%s\n' "${OPENCODE_DISABLE_PROJECT_CONFIG:-}" > "${OC_ARGV_FILE}.projcfg"
 # the user's global plugins out, since v2 has no --pure.
 _oc_cd_empty=no
 [ -n "${OPENCODE_CONFIG_DIR:-}" ] && [ -d "$OPENCODE_CONFIG_DIR" ] && [ -z "$(ls -A "$OPENCODE_CONFIG_DIR")" ] && _oc_cd_empty=yes
-printf 'dir=%s empty=%s\n' "${OPENCODE_CONFIG_DIR:-}" "$_oc_cd_empty" > "${OC_ARGV_FILE}.cfgdir"
+printf 'dir=%s empty=%s config=%s\n' "${OPENCODE_CONFIG_DIR:-}" "$_oc_cd_empty" "${OPENCODE_CONFIG:-}" > "${OC_ARGV_FILE}.cfgdir"
 # v2 behaves like the real 2.x: `--pure` is an unknown flag (help + exit 1), and a run without
 # --standalone would go to the shared background service, which ignores this env entirely.
 if [ "${OC_HELP:-}" = v2 ]; then
@@ -1321,7 +1321,10 @@ unset _probe _probe_out
 # v2 has no --pure, so the seat runs `run --standalone` (a private server: the shared background
 # service was started with the user's env and ignores this one) with OPENCODE_CONFIG_DIR at an empty
 # dir (what keeps the user's global plugins out). Everything else is the v1 lockdown, unchanged.
-oc_run 0 "a v2 CLI (--standalone, no --pure) runs the review" OC_HELP=v2 PR_RELAY_OPENCODE_MODEL=oc-v2-pin
+# OPENCODE_CONFIG is inherited on purpose: it names one more config file, plugins and all, so v2
+# must drop it.
+oc_run 0 "a v2 CLI (--standalone, no --pure) runs the review" OC_HELP=v2 PR_RELAY_OPENCODE_MODEL=oc-v2-pin \
+  OPENCODE_CONFIG="$WORK/inherited-opencode.json"
 oc_assert "v2 runs on a private server" has "run --standalone"
 oc_assert "v2 never passes --pure, which v2 rejects" hasnt "--pure"
 oc_assert "v2 still selects the relay's own agent" has "--agent pr-review-relay-ro"
@@ -1330,8 +1333,8 @@ oc_cfg "v2 keeps the default-deny policy" has '"\*":"deny"'
 oc_stdin "v2 delivers the diff on stdin" has "+change"
 _cd="$(cat "$OC_ARGV.cfgdir" 2>/dev/null || true)"
 case "$_cd" in
-  "dir=$(cat "$OC_ARGV.cwd" 2>/dev/null)/"*" empty=yes")
-    echo "  ok   [-] v2 points OPENCODE_CONFIG_DIR at an empty dir inside the private attach dir"
+  "dir=$(cat "$OC_ARGV.cwd" 2>/dev/null)/"*" empty=yes config=")
+    echo "  ok   [-] v2 points OPENCODE_CONFIG_DIR at an empty dir inside the private attach dir, OPENCODE_CONFIG dropped"
     PASS=$((PASS + 1))
     ;;
   *)
@@ -1344,7 +1347,7 @@ oc_run 0 "a v1 CLI still runs the v1 command"
 oc_assert "v1 keeps --pure" has "--pure run"
 oc_assert "v1 never gets --standalone" hasnt "--standalone"
 _cd="$(cat "$OC_ARGV.cfgdir" 2>/dev/null || true)"
-if [ "$_cd" = "dir= empty=no" ]; then
+if [ "$_cd" = "dir= empty=no config=" ]; then
   echo "  ok   [-] v1 runs without a config dir of ours"
   PASS=$((PASS + 1))
 else
@@ -2098,7 +2101,7 @@ oc_reset
   bash "$RELAY" --pr 1 --author antigravity --reviewers claude,opencode >/dev/null 2>&1)
 rc=$?
 case "$rc $(cat "$OC_ARGV.cfgdir" 2>/dev/null)" in
-  "0 dir=/"*" empty=yes")
+  "0 dir=/"*" empty=yes config=")
     echo "  ok   [0] a relative TMPDIR on v2 still gives an absolute, empty config dir"
     PASS=$((PASS + 1))
     ;;

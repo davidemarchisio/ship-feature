@@ -739,7 +739,7 @@ if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --help ]; then
 fi
 _cd_empty=no
 [ -n "\${OPENCODE_CONFIG_DIR:-}" ] && [ -d "\$OPENCODE_CONFIG_DIR" ] && [ -z "\$(ls -A "\$OPENCODE_CONFIG_DIR")" ] && _cd_empty=yes
-echo "REVIEW-$1 CFGDIR_EMPTY=[\$_cd_empty] argv=[\$*] OPENCODE_CONFIG_CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}] OPENCODE_CONFIG=[\${OPENCODE_CONFIG:-}] OPENCODE_CONFIG_DIR=[\${OPENCODE_CONFIG_DIR:-}] CWD=[\${PWD}]"
+echo "REVIEW-$1 CFGDIR_EMPTY=[\$_cd_empty] PROJCFG=[\${OPENCODE_DISABLE_PROJECT_CONFIG:-}] argv=[\$*] OPENCODE_CONFIG_CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}] OPENCODE_CONFIG=[\${OPENCODE_CONFIG:-}] OPENCODE_CONFIG_DIR=[\${OPENCODE_CONFIG_DIR:-}] CWD=[\${PWD}]"
 _args=("\$@")
 for ((_i=0; _i<\${#_args[@]}; _i++)); do
   if [ "\${_args[\$_i]}" = "--prompt-file" ]; then
@@ -1014,8 +1014,8 @@ printf '%s' "$km2" | grep -q -- "argv=\[run --standalone --agent plan -m " && ! 
   echo "  FAIL glm on v2 argv wrong: $km2"
   FAIL=$((FAIL + 1))
 }
-printf '%s' "$km2" | grep -q 'CFGDIR_EMPTY=\[yes\]' && {
-  echo "  ok   [-] glm on v2 points OPENCODE_CONFIG_DIR at an empty dir (no user plugins)"
+printf '%s' "$km2" | grep -q 'CFGDIR_EMPTY=\[yes\] PROJCFG=\[1\]' && {
+  echo "  ok   [-] glm on v2 points OPENCODE_CONFIG_DIR at an empty dir and skips project config (no plugins)"
   PASS=$((PASS + 1))
 } || {
   echo "  FAIL glm on v2 has no empty config dir: $km2"

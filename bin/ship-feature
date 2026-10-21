@@ -1119,7 +1119,7 @@ have found something serious, write it down before you go looking for the next t
         if [ "${#oc_cmd[@]}" -gt 0 ]; then
           out=$(cd "${ro_cwd:-$PWD}" &&
             unset OPENCODE_CONFIG OPENCODE_CONFIG_DIR &&
-            { [ -z "$oc_cfg" ] || export OPENCODE_CONFIG_DIR="$oc_cfg"; } &&
+            { [ -z "$oc_cfg" ] || export OPENCODE_CONFIG_DIR="$oc_cfg" OPENCODE_DISABLE_PROJECT_CONFIG=1; } &&
             export OPENCODE_CONFIG_CONTENT='{"permission":{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","task":"deny","lsp":"deny"}}' &&
             printf '%s\n\n--- PLAN ---\n%s' "$PROMPT" "$plan" |
             run_reviewer opencode "${oc_cmd[@]}" --agent plan -m "$GLM_REVIEW_MODEL" 2>"$errf")

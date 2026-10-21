@@ -685,10 +685,13 @@ opencode_review() {
           echo "OpenCode v2 needs a pinned model for this seat: it runs with an empty config dir to keep your plugins out, so your default model is not visible: set PR_RELAY_OPENCODE_MODEL (or MODEL_opencode in the config). No review ran." >"$errf"
           exit 1
         fi
-        _oc_cfg="$(mktemp -d "$(pwd -P)/oc-config.XXXXXX")" || {
+        _oc_cfg="$(mktemp -d "$PWD/oc-config.XXXXXX")" || {
           echo "cannot create the empty OpenCode config dir in $attach_dir. No review ran." >"$errf"
           exit 1
         }
+        # An inherited OPENCODE_CONFIG names one more config file, plugins and all. This is a
+        # subshell, so the unset stays here.
+        unset OPENCODE_CONFIG
         OPENCODE_CONFIG_DIR="$_oc_cfg" OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
           timeout "$agent_timeout" "$OPENCODE_BIN" run --standalone \
           --agent pr-review-relay-ro ${model[@]+"${model[@]}"} -- "$oc_prompt" \
