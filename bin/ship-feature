@@ -1092,7 +1092,7 @@ have found something serious, write it down before you go looking for the next t
         # replaces the global config dir, which is what keeps the user's plugins out) stand in for it.
         # Policy, agent, model and cwd are the same on both. The empty dir also hides the user's
         # default model, which is harmless here: -m is always passed.
-        local oc_help oc_help_rc=0 oc_cfg=""
+        local oc_help oc_help_rc=0 oc_cfg="" oc_ver
         local -a oc_cmd=(run --pure)
         oc_help="$(cd "${ro_cwd:-$PWD}" && unset OPENCODE_CONFIG OPENCODE_CONFIG_DIR &&
           run_reviewer opencode --help </dev/null 2>&1)" || oc_help_rc=$?
@@ -1111,7 +1111,8 @@ have found something serious, write it down before you go looking for the next t
               fi
               ;;
             *)
-              echo "opencode $(run_reviewer opencode --version </dev/null 2>/dev/null | head -n 1) $OPENCODE_TOO_OLD" >"$errf"
+              oc_ver="$(run_reviewer opencode --version </dev/null 2>/dev/null | head -n 1)"
+              echo "opencode ${oc_ver:-(version unknown)} $OPENCODE_TOO_OLD" >"$errf"
               rc=1 out="" oc_cmd=()
               ;;
           esac
