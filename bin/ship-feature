@@ -1116,7 +1116,10 @@ have found something serious, write it down before you go looking for the next t
             OPENCODE_CONFIG_DIR="$oc_cfg" OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$oc_ro" \
               run_reviewer opencode --help </dev/null 2>&1)" || oc_help_rc=$?
         fi
-        if [ "$oc_help_rc" -ne 0 ]; then
+        if [ "$oc_help_rc" -eq 124 ]; then
+          echo "\`opencode --help\` did not finish within ${timeout_s}s, so the seat could not check its flags. No review ran." >"$errf"
+          rc=1 out="" oc_cmd=()
+        elif [ "$oc_help_rc" -ne 0 ]; then
           echo "\`opencode --help\` exited $oc_help_rc, so the seat could not check its flags. No review ran." >"$errf"
           rc=1 out="" oc_cmd=()
         elif [ "${#oc_cmd[@]}" -gt 0 ]; then
