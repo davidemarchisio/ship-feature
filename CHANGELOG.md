@@ -68,6 +68,11 @@ All notable changes to **ship-feature** are documented here. This project follow
   v2 the relay seat needs `PR_RELAY_OPENCODE_MODEL` (or `MODEL_opencode`): the empty dir hides
   your default model and custom providers. The upgrade hint now names 1.3.4, the first v1 release
   with `--pure`.
+- **On v2 the glm seat could run code.** Its policy denies tools by name, and v2 added tools the list
+  does not name: `execute` (Code Mode), `skill`, `worktree_create`, `session_move`, MCP tools. On
+  v2.0.32 the seat listed 14 tools. On v2 it now gets an allowlist (`"*": "deny"` plus `read`,
+  `grep`, `glob`), repeated inside the `plan` agent, and lists only those three. v1 keeps its
+  denylist.
 - **The pi seats run on a Node that meets pi's floor, not on the reviewed repo's pinned Node.** pi's
   launcher starts through `env node`, and both the relay and `plan-review` run pi inside the checkout,
   where mise puts that repo's pinned Node first. A repo pinned to Node 20 crashed both pi seats at

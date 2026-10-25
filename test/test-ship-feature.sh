@@ -1021,9 +1021,13 @@ printf '%s' "$km2" | grep -q 'CFGDIR_EMPTY=\[yes\] PROJCFG=\[1\]' && {
   echo "  FAIL glm on v2 has no empty config dir: $km2"
   FAIL=$((FAIL + 1))
 }
-printf '%s' "$km2" | grep -q 'OPENCODE_CONFIG_CONTENT=\[.*"edit":"deny".*"bash":"deny".*\]' &&
+# v2 adds tools a denylist does not name (execute = Code Mode, worktree_create, session_move...),
+# so v2 gets an allowlist, repeated in the plan agent so an agent-scoped allow cannot beat it.
+# Exact match: a pattern would pass for a policy that merely omits a tool.
+oc_ro2='{"share":"disabled","permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow"},"agent":{"plan":{"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow"}}}}'
+printf '%s' "$km2" | grep -qF "OPENCODE_CONFIG_CONTENT=[$oc_ro2]" &&
   printf '%s' "$km2" | grep -q "CWD=\[$PWD\]" && {
-  echo "  ok   [-] glm on v2 keeps the read-only policy and reads the checkout"
+  echo "  ok   [-] glm on v2 allows only read/grep/glob (agent-pinned) and reads the checkout"
   PASS=$((PASS + 1))
 } || {
   echo "  FAIL glm on v2 lost the policy or the cwd: $km2"
