@@ -648,9 +648,14 @@ opencode_review() {
     # from v2 (opencode_cli_kind). The probe is an opencode start-up too, so it runs in the
     # same cwd, config lock and timeout as the review.
     _oc_help_rc=0
-    # An inherited OPENCODE_CONFIG is dropped for the probe on both versions (the v1 run keeps
-    # it, as before); --help loads no plugins (checked with a canary on 2.0.32).
-    _oc_help="$(env -u OPENCODE_CONFIG OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
+    # The probe gets its own empty config dir and no inherited OPENCODE_CONFIG on both versions
+    # (the v1 run keeps the user's, as before). --help loaded no plugin in a 2.0.32 canary;
+    # this does not rely on that.
+    _oc_probe_cfg="$(mktemp -d "$PWD/oc-probe.XXXXXX")" || {
+      echo "cannot create the empty OpenCode config dir in $attach_dir. No review ran." >"$errf"
+      exit 1
+    }
+    _oc_help="$(env -u OPENCODE_CONFIG OPENCODE_CONFIG_DIR="$_oc_probe_cfg" OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
       timeout "$agent_timeout" "$OPENCODE_BIN" --help </dev/null 2>&1)" || _oc_help_rc=$?
     # A `--help` that failed says nothing about the flags, and "upgrade" would send the
     # reader to replace a CLI that may be fine. So the failure gets its own message and
@@ -700,7 +705,7 @@ opencode_review() {
           <"$diff_file" 2>"$errf"
         ;;
       *)
-        _oc_ver="$(env -u OPENCODE_CONFIG OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
+        _oc_ver="$(env -u OPENCODE_CONFIG OPENCODE_CONFIG_DIR="$_oc_probe_cfg" OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$OPENCODE_RO_CONFIG" \
           timeout "$agent_timeout" "$OPENCODE_BIN" --version </dev/null 2>/dev/null | head -n 1)"
         echo "opencode ${_oc_ver:-(version unknown)} $OPENCODE_TOO_OLD" >"$errf"
         exit 1

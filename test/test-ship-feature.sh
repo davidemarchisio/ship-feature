@@ -735,8 +735,8 @@ fi
 if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --help ]; then
   [ -z "\${OC_HELP_LOG:-}" ] || echo "PROBE CFGDIR=[\${OPENCODE_CONFIG_DIR:-}] PROJCFG=[\${OPENCODE_DISABLE_PROJECT_CONFIG:-}] CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}]" >"\$OC_HELP_LOG"
   case "\${OC_HELP:-}" in
-    fail) exit 7 ;;
-    hang) sleep 30; exit 0 ;;
+    fail) echo "oc-help-broke" >&2; exit 7 ;;
+    hang) exec sleep 30 ;;
     v2) printf 'FLAGS\n  --standalone            Run with a private server instead of the background service\n' ;;
     nopure) printf 'Options:\n      --print-logs    print logs to stderr\n' ;;
     *) printf 'Options:\n      --pure          run without external plugins\n' ;;
@@ -1011,8 +1011,15 @@ printf '%s' "$km" | grep -q -- "--agent build" && {
 # --- glm on OpenCode v2 (@opencode/cli 2.x): no --pure, so `run --standalone` (a private server;
 # the shared background service ignores this env) with OPENCODE_CONFIG_DIR at an empty dir (what
 # keeps the user's global plugins out). Same policy, same agent, same model, same cwd as v1.
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 OPENCODE_CONFIG="$WORK/inherited.json" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
 km2=$(printf '%s' "$out" | grep 'REVIEW-glm')
+printf '%s' "$km2" | grep -q 'OPENCODE_CONFIG=\[\] ' && {
+  echo "  ok   [-] glm on v2 drops an inherited OPENCODE_CONFIG"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm on v2 kept an inherited OPENCODE_CONFIG: $km2"
+  FAIL=$((FAIL + 1))
+}
 printf '%s' "$km2" | grep -q -- "argv=\[run --standalone --agent plan -m " && ! printf '%s' "$km2" | grep -q -- "--pure" && {
   echo "  ok   [-] glm on v2 runs --standalone with the plan agent and no --pure"
   PASS=$((PASS + 1))
@@ -1063,7 +1070,8 @@ printf '%s' "$ver" | grep -q 'CFGDIR=\[[^]]*/oc-config\.[^]]*\] PROJCFG=\[1\] CO
 unset ver ver_log
 # A failing `opencode --help` fails the seat with the exit code, and the review never starts.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=fail bash "$CLI" plan-review --reviewers glm 2>&1)
-printf '%s' "$out" | grep -q 'opencode --help` exited 7' && ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
+printf '%s' "$out" | grep -q 'opencode --help` exited 7' && printf '%s' "$out" | grep -q 'oc-help-broke' &&
+  ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
   echo "  ok   [-] glm fails closed when opencode --help fails"
   PASS=$((PASS + 1))
 } || {
@@ -4877,7 +4885,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=568
+EXPECTED=569
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

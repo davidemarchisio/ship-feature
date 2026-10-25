@@ -932,7 +932,8 @@ make_strict_opencode() { # $1 = dir to install the stub into
 #   v2          @opencode/cli 2.x: no --pure, lists --standalone (layout of the real 2.0.32)
 case "${1:-}" in
   --help)
-    printf 'cwd=%s projcfg=%s\n' "$PWD" "${OPENCODE_DISABLE_PROJECT_CONFIG:-}" >> "${OC_ARGV_FILE:?}.probe"
+    _pe=no; [ -n "${OPENCODE_CONFIG_DIR:-}" ] && [ -d "$OPENCODE_CONFIG_DIR" ] && [ -z "$(ls -A "$OPENCODE_CONFIG_DIR")" ] && _pe=yes
+    printf 'cwd=%s projcfg=%s cfgdir_empty=%s config=%s\n' "$PWD" "${OPENCODE_DISABLE_PROJECT_CONFIG:-}" "$_pe" "${OPENCODE_CONFIG:-}" >> "${OC_ARGV_FILE:?}.probe"
     case "${OC_HELP:-}" in
       nopure) printf 'Options:\n      --print-logs    print logs to stderr\n      --purely-cosmetic  not the flag\n' ;;
       comma-ansi) printf 'Options:\n  -l, --print-logs  print logs to stderr\n  -p, \033[1m--pure\033[0m  run without external plugins\n' ;;
@@ -1217,8 +1218,8 @@ else
 fi
 # The --pure probe is an opencode start-up as well, so it gets the same isolation.
 _probe="$(head -n 1 "$OC_ARGV.probe" 2>/dev/null || true)"
-if [ -n "$_probe" ] && [ "$_probe" = "cwd=$(cat "$OC_ARGV.cwd") projcfg=1" ]; then
-  echo "  ok   [-] the --pure probe runs in the review's cwd with project config disabled"
+if [ -n "$_probe" ] && [ "$_probe" = "cwd=$(cat "$OC_ARGV.cwd") projcfg=1 cfgdir_empty=yes config=" ]; then
+  echo "  ok   [-] the --pure probe runs in the review's cwd, project config off, empty config dir, no OPENCODE_CONFIG"
   PASS=$((PASS + 1))
 else
   echo "  FAIL the --pure probe ran elsewhere or with project config on ($_probe)"

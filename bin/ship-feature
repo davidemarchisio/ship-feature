@@ -1120,7 +1120,8 @@ have found something serious, write it down before you go looking for the next t
           echo "\`opencode --help\` did not finish within ${timeout_s}s, so the seat could not check its flags. No review ran." >"$errf"
           rc=1 out="" oc_cmd=()
         elif [ "$oc_help_rc" -ne 0 ]; then
-          echo "\`opencode --help\` exited $oc_help_rc, so the seat could not check its flags. No review ran." >"$errf"
+          echo "\`opencode --help\` exited $oc_help_rc, so the seat could not check its flags. No review ran. Its output:" >"$errf"
+          printf '%s\n' "$oc_help" | tail -n 5 >>"$errf"
           rc=1 out="" oc_cmd=()
         elif [ "${#oc_cmd[@]}" -gt 0 ]; then
           case "$(opencode_cli_kind "$oc_help")" in
