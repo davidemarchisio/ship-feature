@@ -1357,7 +1357,7 @@ fi
 # The empty config dir also hides the user's default model, and v2 then falls back to a free
 # model that refuses to run outside OpenCode (seen on 2.0.32). So v2 needs a pin, said up front.
 oc_probe_fails "a v2 CLI with no pinned model fails and says to pin one" \
-  'set PR_RELAY_OPENCODE_MODEL' -- OC_HELP=v2
+  'set PR_RELAY_OPENCODE_MODEL' -- OC_HELP=v2 PR_RELAY_OPENCODE_MODEL= MODEL_opencode=
 unset _cd
 
 oc_run 0 "opencode runs read-only, diff mode" -- --diff

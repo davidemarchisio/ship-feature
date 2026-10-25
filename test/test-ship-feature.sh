@@ -730,7 +730,9 @@ make_reviewer() {
 # answer: unset = v1, v2 = @opencode/cli 2.x, nopure = a CLI older than both.
 if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --version ]; then echo 1.2.27; exit 0; fi
 if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --help ]; then
+  [ -z "\${OC_HELP_LOG:-}" ] || echo "PROBE CFGDIR=[\${OPENCODE_CONFIG_DIR:-}] PROJCFG=[\${OPENCODE_DISABLE_PROJECT_CONFIG:-}] CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}]" >"\$OC_HELP_LOG"
   case "\${OC_HELP:-}" in
+    fail) exit 7 ;;
     v2) printf 'FLAGS\n  --standalone            Run with a private server instead of the background service\n' ;;
     nopure) printf 'Options:\n      --print-logs    print logs to stderr\n' ;;
     *) printf 'Options:\n      --pure          run without external plugins\n' ;;
@@ -1042,7 +1044,31 @@ printf '%s' "$out" | grep -q 'has neither --pure (v1) nor --standalone (v2)' && 
   echo "  FAIL glm on an old opencode: $(printf '%s' "$out" | grep -i -m3 'glm\|opencode')"
   FAIL=$((FAIL + 1))
 }
-unset km2
+# A failing `opencode --help` fails the seat with the exit code, and the review never starts.
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=fail bash "$CLI" plan-review --reviewers glm 2>&1)
+printf '%s' "$out" | grep -q 'opencode --help` exited 7' && ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
+  echo "  ok   [-] glm fails closed when opencode --help fails"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm on a failing --help: $(printf '%s' "$out" | grep -i -m3 'glm\|opencode')"
+  FAIL=$((FAIL + 1))
+}
+# The --help probe is an opencode startup in the checkout too: empty config dir, no project
+# config, the read-only policy — even with a hostile inherited policy.
+probe_log="$WORK/oc-probe.log"
+printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP_LOG="$probe_log" OPENCODE_CONFIG_CONTENT='{"permission":{"bash":"allow"}}' \
+  bash "$CLI" plan-review --reviewers glm >/dev/null 2>&1
+probe=$(cat "$probe_log" 2>/dev/null)
+probe_dir=$(printf '%s' "$probe" | sed -n 's/.*CFGDIR=\[\([^]]*\)\].*/\1/p')
+[ -n "$probe_dir" ] && printf '%s' "$probe" | grep -q 'PROJCFG=\[1\]' &&
+  printf '%s' "$probe" | grep -q 'CONTENT=\[{"permission":{"edit":"deny"' && ! printf '%s' "$probe" | grep -q '"bash":"allow"' && {
+  echo "  ok   [-] glm's --help probe runs isolated (empty config dir, no project config, read-only policy)"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm's --help probe is not isolated: $probe"
+  FAIL=$((FAIL + 1))
+}
+unset km2 probe probe_dir probe_log
 
 # The other half of the cwd contract: a checkout that ships its OWN opencode config must push
 # the seat back into an isolated dir, and must SAY so. Permissions are pinned by the deny above
@@ -4824,7 +4850,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=564
+EXPECTED=566
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
