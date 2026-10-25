@@ -728,7 +728,10 @@ make_reviewer() {
 #!/usr/bin/env bash
 # glm probes \`opencode --help\` first, to tell v1 (--pure) from v2 (--standalone). OC_HELP picks the
 # answer: unset = v1, v2 = @opencode/cli 2.x, nopure = a CLI older than both.
-if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --version ]; then echo 1.2.27; exit 0; fi
+if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --version ]; then
+  [ -z "\${OC_VER_LOG:-}" ] || echo "VER CFGDIR=[\${OPENCODE_CONFIG_DIR:-}] PROJCFG=[\${OPENCODE_DISABLE_PROJECT_CONFIG:-}] CONFIG=[\${OPENCODE_CONFIG:-}] CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}]" >"\$OC_VER_LOG"
+  echo 1.2.27; exit 0
+fi
 if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --help ]; then
   [ -z "\${OC_HELP_LOG:-}" ] || echo "PROBE CFGDIR=[\${OPENCODE_CONFIG_DIR:-}] PROJCFG=[\${OPENCODE_DISABLE_PROJECT_CONFIG:-}] CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}]" >"\$OC_HELP_LOG"
   case "\${OC_HELP:-}" in
@@ -1027,7 +1030,7 @@ printf '%s' "$km2" | grep -q 'CFGDIR_EMPTY=\[yes\] PROJCFG=\[1\]' && {
 # v2 adds tools a denylist does not name (execute = Code Mode, worktree_create, session_move...),
 # so v2 gets an allowlist, repeated in the plan agent so an agent-scoped allow cannot beat it.
 # Exact match: a pattern would pass for a policy that merely omits a tool.
-oc_ro2='{"share":"disabled","permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow"},"agent":{"plan":{"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow"}}}}'
+oc_ro2='{"share":"disabled","permission":{"*":"deny","external_directory":"deny","read":"allow","grep":"allow","glob":"allow"},"agent":{"plan":{"permission":{"*":"deny","external_directory":"deny","read":"allow","grep":"allow","glob":"allow"}}}}'
 printf '%s' "$km2" | grep -qF "OPENCODE_CONFIG_CONTENT=[$oc_ro2]" &&
   printf '%s' "$km2" | grep -q "CWD=\[$PWD\]" && {
   echo "  ok   [-] glm on v2 allows only read/grep/glob (agent-pinned) and reads the checkout"
@@ -1045,6 +1048,19 @@ printf '%s' "$out" | grep -q 'has neither --pure (v1) nor --standalone (v2)' && 
   echo "  FAIL glm on an old opencode: $(printf '%s' "$out" | grep -i -m3 'glm\|opencode')"
   FAIL=$((FAIL + 1))
 }
+# The --version call on that path is an opencode startup too: same isolation as the probe.
+ver_log="$WORK/oc-ver.log"
+printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=nopure OC_VER_LOG="$ver_log" OPENCODE_CONFIG="$WORK/inherited.json" \
+  bash "$CLI" plan-review --reviewers glm >/dev/null 2>&1
+ver=$(cat "$ver_log" 2>/dev/null)
+printf '%s' "$ver" | grep -q 'CFGDIR=\[[^]]*/oc-config\.[^]]*\] PROJCFG=\[1\] CONFIG=\[\] CONTENT=\[{"permission":{"edit":"deny"' && {
+  echo "  ok   [-] glm's --version call on an old opencode runs isolated"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm's --version call is not isolated: $ver"
+  FAIL=$((FAIL + 1))
+}
+unset ver ver_log
 # A failing `opencode --help` fails the seat with the exit code, and the review never starts.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=fail bash "$CLI" plan-review --reviewers glm 2>&1)
 printf '%s' "$out" | grep -q 'opencode --help` exited 7' && ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
@@ -4861,7 +4877,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=567
+EXPECTED=568
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

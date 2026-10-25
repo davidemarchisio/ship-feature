@@ -1130,11 +1130,19 @@ have found something serious, write it down before you go looking for the next t
               # v2 adds tools the v1 denylist does not name: execute (Code Mode), skill,
               # worktree_create, session_move, MCP tools. Allowlist instead, repeated in the
               # plan agent so an agent-scoped allow cannot beat it. Verified on 2.0.32: the
-              # seat then lists only read, grep, glob; a read outside the checkout is refused.
-              oc_ro='{"share":"disabled","permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow"},"agent":{"plan":{"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow"}}}}'
+              # seat then lists only read, grep, glob; read, grep and glob outside the checkout
+              # are refused. external_directory is named although "*" already denies it.
+              oc_ro='{"share":"disabled","permission":{"*":"deny","external_directory":"deny","read":"allow","grep":"allow","glob":"allow"},"agent":{"plan":{"permission":{"*":"deny","external_directory":"deny","read":"allow","grep":"allow","glob":"allow"}}}}'
+              # A fresh dir for the run, so nothing the probe wrote can configure it.
+              oc_cfg="$(mktemp -d "$STATUS_DIR/oc-config.XXXXXX")" && oc_cfg="$(cd "$oc_cfg" && pwd -P)" || {
+                echo "cannot create the empty OpenCode config dir. No review ran." >"$errf"
+                rc=1 out="" oc_cmd=()
+              }
               ;;
             *)
-              oc_ver="$(run_reviewer opencode --version </dev/null 2>/dev/null | head -n 1)"
+              oc_ver="$(cd "${ro_cwd:-$PWD}" && unset OPENCODE_CONFIG &&
+                OPENCODE_CONFIG_DIR="$oc_cfg" OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG_CONTENT="$oc_ro" \
+                  run_reviewer opencode --version </dev/null 2>/dev/null | head -n 1)"
               echo "opencode ${oc_ver:-(version unknown)} $OPENCODE_TOO_OLD" >"$errf"
               rc=1 out="" oc_cmd=()
               ;;
