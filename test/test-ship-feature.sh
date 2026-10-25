@@ -4645,6 +4645,173 @@ _before="$(ld_tip "$_r")"
 (cd "$_r/.claude/worktrees/f" && ld >/dev/null 2>&1)
 check "land: the pre-push hook runs on the merged tree (main's new file and the branch's file both present)" "$?|$([ "$(ld_tip "$_r")" != "$_before" ] && echo moved)" "0|moved"
 
+# --- seat-audit: a review round that wrote anything does not count --------------------------------
+# Each case gets its own repository (a tracked file, an ignored build/ with one file in it) and its
+# own snapshot, taken outside the tree, then makes one change and runs check. The change is a shell
+# snippet run inside the repository, so each case reads as the one thing a seat might do.
+SAW="$WORK/seat-audit"
+mkdir -p "$SAW"
+SAN=0
+sa() { bash "$CLI" seat-audit "$@"; }
+# Sets _r rather than printing it: SAN must count in this shell, and $(...) would count in a copy.
+sa_repo() { # sa_repo: a fresh repository in _r
+  SAN=$((SAN + 1))
+  _r="$SAW/r$SAN"
+  mkdir -p "$_r" && (cd "$_r" && git init -q && printf 'build/\n' >.gitignore && echo one >a.txt &&
+    mkdir build && echo out >build/out && git add .gitignore a.txt && git commit -q -m init)
+}
+# sa_case <desc> <change>: snapshot, run <change> in the repository, check; the check must exit 3.
+sa_case() {
+  local r snap rc
+  sa_repo
+  r="$_r"
+  snap="$SAW/s$SAN.snap"
+  (cd "$r" && sa snapshot --out "$snap" >/dev/null 2>&1)
+  (cd "$r" && eval "$2") >/dev/null 2>&1
+  (cd "$r" && sa check "$snap" >"$SAW/out$SAN" 2>&1)
+  rc=$?
+  check "seat-audit: $1 -> exit 3" "$rc" 3
+}
+
+sa_repo
+(cd "$_r" && sa snapshot --out "$SAW/clean.snap" >/dev/null 2>&1)
+check "seat-audit: snapshot exits 0 and writes the file" "$?|$([ -s "$SAW/clean.snap" ] && echo file)" "0|file"
+(cd "$_r" && sa check "$SAW/clean.snap" >"$SAW/clean.out" 2>&1)
+check "seat-audit: nothing changed -> exit 0, 'seat-audit: no change'" "$?|$(cat "$SAW/clean.out")" "0|seat-audit: no change"
+# Plain text, sorted, one fact per line, with the header the check reads back.
+check "seat-audit: the snapshot has the format line, the dir and sorted facts" \
+  "$(head -n 1 "$SAW/clean.snap")|$(grep -c "^dir $(cd "$_r" && pwd -P)$" "$SAW/clean.snap")|$(sed '1,/^--$/d' "$SAW/clean.snap" | LC_ALL=C sort -c && echo sorted)" \
+  "ship-feature seat-audit 1|1|sorted"
+# check reads the work tree from the file, not from where it runs.
+(cd "$WORK" && sa check "$SAW/clean.snap" >/dev/null 2>&1)
+check "seat-audit: check run from outside the tree still checks the recorded tree" $? 0
+# --dir, from anywhere, and a path inside the tree widens to the whole tree.
+(cd "$WORK" && sa snapshot --dir "$_r/build" --out "$SAW/dir.snap" >/dev/null 2>&1) && echo two >"$_r/a.txt"
+(cd "$WORK" && sa check "$SAW/dir.snap" >/dev/null 2>&1)
+check "seat-audit: --dir on a subdirectory audits the whole tree" $? 3
+
+sa_case "a modified tracked file" 'echo two >a.txt'
+grep -q '^  local tree:$' "$SAW/out$SAN" && grep -q '^    + tracked [0-9a-f]* a.txt$' "$SAW/out$SAN"
+check "seat-audit: the diff lists the file under 'local tree' with its new hash" $? 0
+sa_case "a new untracked file" 'echo x >new.txt'
+sa_case "a deleted tracked file" 'rm a.txt'
+sa_case "an index-only change (the file on disk untouched)" 'git update-index --chmod=+x a.txt'
+sa_case "a new commit" 'git commit -q --allow-empty -m seat'
+grep -q '^  refs:$' "$SAW/out$SAN"
+check "seat-audit: a moved ref is listed under 'refs'" $? 0
+sa_case "a new branch" 'git branch seat'
+sa_case "a stash" 'echo two >a.txt && git stash -q'
+sa_case "a checkout of another branch" 'git checkout -q -b seat'
+sa_case "a detached HEAD at the same commit" 'git checkout -q --detach'
+sa_case "a changed ignored file" 'echo more >>build/out'
+grep -q '^    + ignored [0-9]* [0-9]* build/out$' "$SAW/out$SAN"
+check "seat-audit: an ignored file is recorded by size and mtime" $? 0
+sa_case "a new ignored file" 'echo x >build/new'
+sa_case "a new git worktree" 'git worktree add -q ../wt-$RANDOM'
+sa_case "a git config change" 'git config alias.seat status'
+grep -q '^  git config and hooks:$' "$SAW/out$SAN"
+check "seat-audit: a config change is listed under 'git config and hooks'" $? 0
+
+# A planted hook. The suite points core.hooksPath at a directory that does not exist; here it points
+# at the repository's own hooks directory, which is where a seat would write one.
+sa_repo
+(cd "$_r" && GIT_CONFIG_VALUE_2="$_r/.git/hooks" sa snapshot --out "$SAW/hook.snap" >/dev/null 2>&1)
+printf '#!/bin/sh\nexit 0\n' >"$_r/.git/hooks/pre-push" && chmod +x "$_r/.git/hooks/pre-push"
+(cd "$_r" && GIT_CONFIG_VALUE_2="$_r/.git/hooks" sa check "$SAW/hook.snap" >"$SAW/hook.out" 2>&1)
+check "seat-audit: a planted hook -> exit 3, listed by name" "$?|$(grep -c '^    + hook [0-9a-f]* x pre-push$' "$SAW/hook.out")" "3|1"
+
+# The snapshot may sit inside the tree (an ignored or untracked spot): it must not see itself.
+sa_repo
+(cd "$_r" && mkdir audit && sa snapshot --out audit/s.snap >/dev/null 2>&1 && sa check audit/s.snap >/dev/null 2>&1)
+check "seat-audit: a snapshot file inside the tree does not count as a change" $? 0
+(cd "$_r" && sa snapshot --out build/s.snap >/dev/null 2>&1 && sa check build/s.snap >/dev/null 2>&1)
+check "seat-audit: a snapshot file in an ignored directory does not count as a change" $? 0
+
+# Paths that need escaping: a space, a backslash, a newline, a leading double quote. They must hash
+# and compare like any other file, and keep one fact per line.
+sa_repo
+(cd "$_r" && printf 'x\n' >'sp ace' && printf 'x\n' >'back\slash' && printf 'x\n' >"$(printf 'new\nline')" &&
+  printf 'x\n' >'"quoted' && sa snapshot --out "$SAW/odd.snap" >/dev/null 2>&1 && sa check "$SAW/odd.snap" >/dev/null 2>&1)
+check "seat-audit: odd file names snapshot and check clean" "$?|$(grep -c '^tree untracked [0-9a-f]* new\\nline$' "$SAW/odd.snap")" "0|1"
+printf 'y\n' >"$_r/$(printf 'new\nline')"
+(cd "$_r" && sa check "$SAW/odd.snap" >/dev/null 2>&1)
+check "seat-audit: a change to a file with a newline in its name is caught" $? 3
+
+# The PR, through a fake gh that answers from a JSON file with the real --jq expression (jq ships
+# with the relay's own requirements). It refuses any repository but the one it was given.
+SAB="$WORK/sabin"
+mkdir -p "$SAB"
+cat >"$SAB/gh" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${SA_GH_FAIL:-}" ] && { echo "gh: authentication required" >&2; exit 1; }
+[ "$1 $2 $3" = "pr view 7" ] || { echo "fake gh: unexpected $*" >&2; exit 2; }
+repo="" jqx=""
+while [ $# -gt 0 ]; do
+  case "$1" in --repo) repo="$2"; shift 2 ;; --jq) jqx="$2"; shift 2 ;; *) shift ;; esac
+done
+[ "$repo" = acme/widgets ] || { echo "fake gh: wrong repo '$repo'" >&2; exit 1; }
+jq -r "$jqx" "$SA_GH_STATE"
+STUB
+chmod +x "$SAB/gh"
+export SA_GH_STATE="$WORK/sa-pr.json"
+sa_pr() { printf '{"headRefOid":"%s","comments":[%s],"reviews":[%s]}' "$1" "$2" "$3" >"$SA_GH_STATE"; }
+sag() { PATH="$SAB:$PATH" bash "$CLI" seat-audit "$@"; }
+sa_repo
+sa_pr 1111111111111111111111111111111111111111 '{"body":"a"}' ''
+(cd "$_r" && sag snapshot --out "$SAW/pr.snap" --pr 7 --repo acme/widgets >/dev/null 2>&1)
+check "seat-audit: --pr/--repo snapshot records head, comments and reviews" \
+  "$?|$(grep -c '^pr head 1111111111111111111111111111111111111111$' "$SAW/pr.snap")|$(grep -c '^pr comments 1$' "$SAW/pr.snap")|$(grep -c '^pr reviews 0$' "$SAW/pr.snap")|$(grep -c '^repo acme/widgets$' "$SAW/pr.snap")" \
+  "0|1|1|1|1"
+(cd "$_r" && sag check "$SAW/pr.snap" >/dev/null 2>&1)
+check "seat-audit: the PR unchanged -> exit 0" $? 0
+sa_pr 1111111111111111111111111111111111111111 '{"body":"a"},{"body":"seat"}' ''
+(cd "$_r" && sag check "$SAW/pr.snap" >"$SAW/pr.out" 2>&1)
+check "seat-audit: a new PR comment -> exit 3, listed under the PR" "$?|$(grep -c '^  PR acme/widgets#7:$' "$SAW/pr.out")" "3|1"
+sa_pr 1111111111111111111111111111111111111111 '{"body":"a"}' '{"state":"COMMENTED"}'
+(cd "$_r" && sag check "$SAW/pr.snap" >/dev/null 2>&1)
+check "seat-audit: a new PR review -> exit 3" $? 3
+sa_pr 2222222222222222222222222222222222222222 '{"body":"a"}' ''
+(cd "$_r" && sag check "$SAW/pr.snap" >/dev/null 2>&1)
+check "seat-audit: a pushed PR head -> exit 3" $? 3
+sa_pr 1111111111111111111111111111111111111111 '{"body":"a"}' ''
+(cd "$_r" && SA_GH_FAIL=1 sag snapshot --out "$SAW/prfail.snap" --pr 7 --repo acme/widgets >/dev/null 2>&1)
+check "seat-audit: gh failing on snapshot -> exit 1, no file written" "$?|$([ -e "$SAW/prfail.snap" ] && echo written)" "1|"
+(cd "$_r" && SA_GH_FAIL=1 sag check "$SAW/pr.snap" >/dev/null 2>&1)
+check "seat-audit: gh failing on check -> exit 1 (the round cannot be verified)" $? 1
+printf '{"headRefOid":"not a sha","comments":[],"reviews":[]}' >"$SA_GH_STATE"
+(cd "$_r" && sag snapshot --out "$SAW/prodd.snap" --pr 7 --repo acme/widgets >/dev/null 2>&1)
+check "seat-audit: an answer from gh that is not a sha and two counts -> exit 1" $? 1
+
+# Usage errors and unreadable snapshots: exit 1, never 0.
+mkdir -p "$WORK/sa-nogit"
+(cd "$WORK/sa-nogit" && sa snapshot --out "$SAW/nogit.snap" >/dev/null 2>&1)
+check "seat-audit: snapshot outside a git work tree -> exit 1" $? 1
+(cd "$WORK" && sa snapshot --dir "$WORK/sa-nogit" --out "$SAW/nogit.snap" >/dev/null 2>&1)
+check "seat-audit: --dir that is not a git work tree -> exit 1" $? 1
+sa_repo
+(cd "$_r" && sa snapshot --out "$SAW/u.snap" --pr 7 >/dev/null 2>&1)
+check "seat-audit: --pr without --repo -> exit 1" $? 1
+(cd "$_r" && sa snapshot >/dev/null 2>&1)
+check "seat-audit: snapshot without --out -> exit 1" $? 1
+(cd "$_r" && sa check >/dev/null 2>&1)
+check "seat-audit: check without a file -> exit 1" $? 1
+(cd "$_r" && sa frobnicate >/dev/null 2>&1)
+check "seat-audit: an unknown subcommand -> exit 1" $? 1
+(cd "$_r" && sa snapshot --out "$SAW/c.snap" >/dev/null 2>&1)
+sed 's/^tree tracked [0-9a-f]* a.txt$/tree tracked 0000000000000000000000000000000000000000 a.txt/' "$SAW/c.snap" >"$SAW/c1.snap"
+(cd "$_r" && sa check "$SAW/c1.snap" >/dev/null 2>&1)
+check "seat-audit: a snapshot with an edited fact (hash mismatch) -> exit 1" "$?|$(cmp -s "$SAW/c.snap" "$SAW/c1.snap" || echo edited)" "1|edited"
+head -n 6 "$SAW/c.snap" >"$SAW/c2.snap"
+(cd "$_r" && sa check "$SAW/c2.snap" >/dev/null 2>&1)
+check "seat-audit: a truncated snapshot -> exit 1" $? 1
+printf 'not a snapshot\n' >"$SAW/c3.snap"
+(cd "$_r" && sa check "$SAW/c3.snap" >/dev/null 2>&1)
+check "seat-audit: a file that is not a snapshot -> exit 1" $? 1
+(cd "$_r" && sa check "$SAW/missing.snap" >/dev/null 2>&1)
+check "seat-audit: a missing snapshot file -> exit 1" $? 1
+printf '%s' "$help_out" | grep -q 'ship-feature seat-audit snapshot --out'
+check "help documents the 'seat-audit' command" $? 0
+
 echo "-------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 # FAIL is checked FIRST: when a case fails, PASS is naturally short of the total, and reporting that
@@ -4653,7 +4820,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=518
+EXPECTED=564
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

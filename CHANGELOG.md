@@ -8,6 +8,18 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Added
 
+- **`ship-feature seat-audit`: a review round that wrote anything does not count.** Some reviewer
+  seats are read-only by instruction only, not by sandbox, and nothing in a round's output said
+  whether a seat obeyed. `seat-audit snapshot --out <file>` records, before the round, HEAD and what
+  it points at, every ref, the stash, the worktrees, `git status`, the index, a `git hash-object` hash
+  of every tracked and untracked file, size and mtime of every ignored file (not hashed: build
+  directories can be huge), and the git config and hooks; with `--pr <n> --repo <owner/name>`, the
+  PR's head, comment count and review count through `gh`'s own `--jq`, so there is no jq dependency.
+  If `gh` fails, the snapshot fails. `seat-audit check <file>` reads the same facts again: exit 0
+  `seat-audit: no change`, exit 3 with the changes grouped as local tree, refs, git config and hooks,
+  and PR, exit 1 for a usage error, a snapshot whose facts do not match the hash in its header, or a
+  fact that could not be read. The snapshot is a sorted text file, one fact per line. `WORKFLOW.md`
+  wraps the review round in it, in both lanes.
 - **`review-local --context-file <path>`, so `ship-feature review --context-file <plan>` works.** The
   relay has the flag; `review-local`, which `ship-feature review` runs, rejected it as
   an unknown argument, so a plan never reached a panel that reviews a branch with no PR. The flag

@@ -35,7 +35,8 @@ Use it for every change that is not on the careful-lane list.
    (timeout, quota, no usable review) makes the round exit `3`, and so does a round where no seat ran.
    If the same seat fails twice, run the remaining seats with `--reviewers` and tell the human which
    seat was dropped. One round, however many seats: more seats find more, and the rule in step 4
-   decides what gets fixed.
+   decides what gets fixed. Wrap the round in `ship-feature seat-audit snapshot` and `check` (see
+   step 5 of the careful lane): a seat that wrote to the checkout voids the round, like exit `3`.
 4. **Fix only what breaks the change for a real user**, loses money, or leaks data. Record every other
    finding in the merge message (`-m "Not fixed: …"`) and move on. No second round, unless the fix was
    large.
@@ -303,6 +304,28 @@ PR thread, where the human reads them at Gate 2.
   reviews are clean — you must READ the verdicts.
 - `3` — the round is not trustworthy (a reviewer failed / SHA unreadable / HEAD moved). Re-run.
 - `4` — the round cap was hit. Take the open findings to Gate 2.
+
+**Prove the round wrote nothing: `ship-feature seat-audit`.** A reviewer seat is meant to be
+read-only, but for some seats that is only an instruction in the prompt, not a sandbox, and an agent
+host that runs seats in-process can give a seat its own write access. Take a snapshot before the
+round and check it after:
+
+```
+snap="$(mktemp)"                       # outside the work tree, out of the seats' reach
+ship-feature seat-audit snapshot --out "$snap"
+ship-feature review --author <self> --base origin/<default>    # or relay, or plan-review
+ship-feature seat-audit check "$snap"
+```
+
+The snapshot records HEAD, every ref, the stash, the worktrees, `git status`, a hash of every tracked
+and untracked file, size and mtime of every ignored file, and the git config and hooks. A non-zero
+`check` means **the round does not count**, the same as exit `3`: `3` prints what changed, grouped as
+local tree, refs, git config and hooks, and PR; `1` means the snapshot was unreadable or a fact could
+not be read. Find what wrote, undo it, and re-run the round. Refs are shared by every worktree, so a
+commit or fetch in another worktree during the round fails the check too; run it when nothing else
+works in the repository. Add `--pr <n> --repo <owner/name>` to record the PR's head, comment count and
+review count as well, for a round that posts nothing (`review`, `plan-review`): `relay` posts its own
+reviews, so on a relay round the PR always changes.
 
 **Quorum:** set it once — `SHIP_FEATURE_REVIEWERS` in `~/.config/ship-feature/config`, or
 `REVIEWERS` in `~/.config/pr-review-relay/config`, not both — and then **do not pass a list on the
