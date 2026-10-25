@@ -1332,6 +1332,17 @@ oc_assert "v2 still selects the relay's own agent" has "--agent pr-review-relay-
 oc_assert "v2 passes the pinned model" has "-m oc-v2-pin"
 oc_cfg "v2 keeps the default-deny policy" has '"\*":"deny"'
 oc_stdin "v2 delivers the diff on stdin" has "+change"
+# This run inherits OPENCODE_CONFIG, so it is the one that shows the probe drops it.
+case "$(head -n 1 "$OC_ARGV.probe" 2>/dev/null)" in
+  *" cfgdir_empty=yes config=")
+    echo "  ok   [-] the probe drops an inherited OPENCODE_CONFIG and uses an empty config dir"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "  FAIL the probe kept OPENCODE_CONFIG or had no empty config dir ($(head -n 1 "$OC_ARGV.probe" 2>/dev/null))"
+    FAIL=$((FAIL + 1))
+    ;;
+esac
 _cd="$(cat "$OC_ARGV.cfgdir" 2>/dev/null || true)"
 case "$_cd" in
   "dir=$(cat "$OC_ARGV.cwd" 2>/dev/null)/"*" empty=yes config=")
