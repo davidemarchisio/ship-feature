@@ -361,8 +361,8 @@ yourself. `GLM_REVIEW_MODEL` still sets the model. A missing folder or file, or 
 fails the seat.
 
 [`opencode-reviewer/`](opencode-reviewer/README.md) is a ready, tested folder to point these at: a
-plan-review agent that checks claims against the code, and a required "Callers checked" prompt
-step. It is off unless you set the keys.
+plan-review agent that checks claims against the code, and a "Callers checked" step for
+`GLM_REVIEW_PROMPT_EXTRA`. It is off unless you set the keys.
 
 **The seat is the runner, not the model.** `glm` names the opencode runner pinned read-only, and the
 model is this one setting. That is also why the seat was renamed: it was called `kimi3` until

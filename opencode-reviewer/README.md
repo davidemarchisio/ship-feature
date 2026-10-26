@@ -52,14 +52,24 @@ seat found it 0 times out of 3. To add codebase-memory-mcp in your own copy of t
 
    `codemode: false` puts its tools in the tool list instead of behind Code Mode, which the seat
    denies.
-3. In the agent's `permission`, allow its tools and deny the ones that write:
+3. In the agent's frontmatter, allow its read tools by name. The seat's denylist does not cover MCP
+   tools, so name what may run rather than what may not:
 
    ```yaml
-   "codebase-memory-mcp_*": allow
-   codebase-memory-mcp_index_repository: deny
-   codebase-memory-mcp_delete_project: deny
-   codebase-memory-mcp_manage_adr: deny
-   codebase-memory-mcp_ingest_traces: deny
+   permission:
+     "*": deny
+     read: allow
+     grep: allow
+     glob: allow
+     list: allow
+     codebase-memory-mcp_list_projects: allow
+     codebase-memory-mcp_index_status: allow
+     codebase-memory-mcp_search_graph: allow
+     codebase-memory-mcp_trace_path: allow
+     codebase-memory-mcp_get_code_snippet: allow
+     codebase-memory-mcp_query_graph: allow
+     codebase-memory-mcp_search_code: allow
+     codebase-memory-mcp_get_architecture: allow
    ```
 
 4. In the prompt extra, ask for the graph explicitly: a soft hint got zero calls in our tests. For
