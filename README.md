@@ -360,6 +360,10 @@ your MCP servers' tools and plugins, which the denylist does not cover: keep tho
 yourself. `GLM_REVIEW_MODEL` still sets the model. A missing folder or file, or a bad agent name,
 fails the seat.
 
+[`opencode-reviewer/`](opencode-reviewer/README.md) is a ready, tested folder to point these at: a
+plan-review agent that checks claims against the code, and a required "Callers checked" prompt
+step. It is off unless you set the keys.
+
 **The seat is the runner, not the model.** `glm` names the opencode runner pinned read-only, and the
 model is this one setting. That is also why the seat was renamed: it was called `kimi3` until
 2026-09, by which point it had been running GLM for weeks, and the panel header named a model that

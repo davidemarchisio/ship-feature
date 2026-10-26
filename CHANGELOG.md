@@ -14,7 +14,8 @@ All notable changes to **ship-feature** are documented here. This project follow
   `{repo}` filled in. With a folder set, the read/grep/glob allowlist becomes a denylist (edit,
   bash, execute, question, `opencode_console_*` and the other built-in write, shell, network and
   delegation tools), in the agent
-  too; your folder's own MCP servers and plugins are yours to keep read-only. Unset, nothing changes. On v1 the keys are ignored with a note.
+  too; your folder's own MCP servers and plugins are yours to keep read-only. `opencode-reviewer/`
+  ships an optional, tested folder for it: a plan-review agent and a "Callers checked" prompt step. Unset, nothing changes. On v1 the keys are ignored with a note.
 
 - **`ship-feature seat-audit`: a review round that wrote anything does not count.** Some reviewer
   seats are read-only by instruction only, not by sandbox, and nothing in a round's output said

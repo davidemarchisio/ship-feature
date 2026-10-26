@@ -1141,6 +1141,21 @@ printf '%s' "$km2" | grep -q -- '--agent rev ' && printf '%s' "$km2" | grep -q '
   echo "  FAIL glm reviewer keys from the config file: $out"
   FAIL=$((FAIL + 1))
 }
+# The shipped opencode-reviewer folder, as its README says to set it up.
+: >"$rv_stdin"
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 OC_STDIN_LOG="$rv_stdin" GLM_REVIEW_CONFIG_DIR="$HERE/../opencode-reviewer" \
+  GLM_REVIEW_AGENT=plan-reviewer GLM_REVIEW_PROMPT_EXTRA="$HERE/../opencode-reviewer/review-prompt-extra.md" \
+  bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+km2=$(printf '%s' "$out" | grep 'REVIEW-glm')
+printf '%s' "$km2" | grep -q -- '--agent plan-reviewer ' && printf '%s' "$km2" | grep -q 'CFGFILES=\[[^]]*agents' &&
+  grep -q 'Callers checked' "$rv_stdin" && grep -qF "checkout at $rv_top " "$rv_stdin" &&
+  [ -f "$HERE/../opencode-reviewer/agents/plan-reviewer.md" ] && {
+  echo "  ok   [-] the shipped opencode-reviewer folder runs as its README says"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL shipped opencode-reviewer folder: $km2"
+  FAIL=$((FAIL + 1))
+}
 unset rv_dir rv_stdin rv_deny rv_top rv_case rv_claude
 # A CLI with neither flag fails the seat with the reason, and the review never starts.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=nopure bash "$CLI" plan-review --reviewers glm 2>&1)
@@ -5011,7 +5026,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=582
+EXPECTED=583
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1
