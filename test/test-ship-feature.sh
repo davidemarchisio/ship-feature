@@ -1094,6 +1094,7 @@ rv_claude=$(printf '%s' "$out" | grep 'REVIEW-claude')
 # Each bad setting fails the seat, says which, and runs no review.
 for rv_case in "GLM_REVIEW_CONFIG_DIR=$WORK/rv-missing|GLM_REVIEW_CONFIG_DIR" \
   "GLM_REVIEW_CONFIG_DIR=$rv_dir GLM_REVIEW_AGENT=a\"b|GLM_REVIEW_AGENT" \
+  "GLM_REVIEW_CONFIG_DIR=$rv_dir GLM_REVIEW_AGENT=--help|GLM_REVIEW_AGENT" \
   "GLM_REVIEW_PROMPT_EXTRA=$WORK/rv-missing.md|GLM_REVIEW_PROMPT_EXTRA"; do
   out=$(printf 'plan\n' | env PATH="$PBIN:$PATH" OC_HELP=v2 ${rv_case%%|*} bash "$CLI" plan-review --reviewers glm 2>&1)
   printf '%s' "$out" | grep -q "${rv_case##*|}.*No review ran" && ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
@@ -1125,11 +1126,15 @@ printf '%s' "$out" | grep -q 'need OpenCode v2 — ignored' && printf '%s' "$out
   FAIL=$((FAIL + 1))
 }
 # From the config file, with ~/ expanded, and the environment still winning.
-printf 'GLM_REVIEW_CONFIG_DIR=~/rv-config\nGLM_REVIEW_AGENT=rev\n' >"$WORK/rv-sf-config"
-out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$WORK" OC_HELP=v2 SHIP_FEATURE_CONFIG="$WORK/rv-sf-config" GLM_REVIEW_AGENT=envagent \
+printf 'GLM_REVIEW_CONFIG_DIR=~/rv-config\nGLM_REVIEW_AGENT=rev\nGLM_REVIEW_PROMPT_EXTRA=~/rv-extra.md\n' >"$WORK/rv-sf-config"
+: >"$rv_stdin"
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$WORK" OC_HELP=v2 OC_STDIN_LOG="$rv_stdin" SHIP_FEATURE_CONFIG="$WORK/rv-sf-config" \
   bash "$CLI" plan-review --reviewers glm 2>/dev/null)
 km2=$(printf '%s' "$out" | grep 'REVIEW-glm')
-printf '%s' "$km2" | grep -q -- '--agent envagent ' && printf '%s' "$km2" | grep -q 'CFGFILES=\[agents,opencode.json,\]' && {
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$WORK" OC_HELP=v2 SHIP_FEATURE_CONFIG="$WORK/rv-sf-config" GLM_REVIEW_AGENT=envagent \
+  bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+printf '%s' "$km2" | grep -q -- '--agent rev ' && printf '%s' "$km2" | grep -q 'CFGFILES=\[agents,opencode.json,\]' &&
+  grep -q 'Extra step for' "$rv_stdin" && printf '%s' "$out" | grep -q -- '--agent envagent ' && {
   echo "  ok   [-] glm reads its reviewer keys from the config file, expands ~/, and the environment wins"
   PASS=$((PASS + 1))
 } || {
@@ -1248,6 +1253,14 @@ printf '%s' "$ocfg_out" | grep -q 'opencode.json would configure the reviewer' &
   PASS=$((PASS + 1))
 } || {
   echo "  FAIL glm lost a warning: $ocfg_out"
+  FAIL=$((FAIL + 1))
+}
+ocfg_out=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 GLM_REVIEW_AGENT=rev bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+printf '%s' "$ocfg_out" | grep -q 'opencode.json would configure the reviewer' && printf '%s' "$ocfg_out" | grep -q 'GLM_REVIEW_AGENT needs GLM_REVIEW_CONFIG_DIR' && {
+  echo "  ok   [-] glm on v2 keeps the degraded-review warning next to the agent note"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm on v2 lost a warning: $ocfg_out"
   FAIL=$((FAIL + 1))
 }
 unset ocfg_stdin
@@ -4998,7 +5011,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=580
+EXPECTED=582
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

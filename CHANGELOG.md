@@ -12,7 +12,8 @@ All notable changes to **ship-feature** are documented here. This project follow
   points it at a folder of agents, instructions and MCP servers, copied fresh each run;
   `GLM_REVIEW_AGENT` picks the agent; `GLM_REVIEW_PROMPT_EXTRA` appends a file to the prompt, with
   `{repo}` filled in. With a folder set, the read/grep/glob allowlist becomes a denylist (edit,
-  bash, execute and the other built-in write, shell, network and delegation tools), in the agent
+  bash, execute, question, `opencode_console_*` and the other built-in write, shell, network and
+  delegation tools), in the agent
   too; your folder's own MCP servers and plugins are yours to keep read-only. Unset, nothing changes. On v1 the keys are ignored with a note.
 
 - **`ship-feature seat-audit`: a review round that wrote anything does not count.** Some reviewer
