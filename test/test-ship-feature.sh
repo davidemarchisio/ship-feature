@@ -132,7 +132,7 @@ export PR_RELAY_CONFIG=/dev/null
 # come from the shared config. They are knobs people really do export, and an exported one would
 # satisfy the "no config at all -> the built-in default" assertion below: green on this machine,
 # red in CI, for a reason the assertion never mentions.
-unset SHIP_FEATURE_WORKTREE_ROOT SHIP_FEATURE_EXCLUDE_MARKER SHIP_FEATURE_DENYLIST SHIP_FEATURE_REVIEWERS SHIP_FEATURE_PLAN_REVIEWERS CURSOR_REVIEW_MODEL GLM_REVIEW_MODEL KIMI3_REVIEW_MODEL GROK45HIGH_REVIEW_MODEL CLAUDE_REVIEW_MODEL CLAUDE_REVIEW_EFFORT CODEX_REVIEW_MODEL CODEX_REVIEW_EFFORT GROK_REVIEW_MODEL GROK_REVIEW_EFFORT PI_GLM_REVIEW_MODEL PI_GLM_REVIEW_EFFORT PI_GROK_REVIEW_MODEL PI_GROK_REVIEW_EFFORT PR_RELAY_OPENCODE_MODEL SHIP_FEATURE_PLAN_TIMEOUT PR_RELAY_AGENT_TIMEOUT SHIP_FEATURE_GEMINI_MODEL SHIP_FEATURE_GEMINI_TESTED_VERSIONS
+unset SHIP_FEATURE_WORKTREE_ROOT SHIP_FEATURE_EXCLUDE_MARKER SHIP_FEATURE_DENYLIST SHIP_FEATURE_REVIEWERS SHIP_FEATURE_PLAN_REVIEWERS CURSOR_REVIEW_MODEL GLM_REVIEW_MODEL KIMI3_REVIEW_MODEL GROK45HIGH_REVIEW_MODEL CLAUDE_REVIEW_MODEL CLAUDE_REVIEW_EFFORT CODEX_REVIEW_MODEL CODEX_REVIEW_EFFORT GROK_REVIEW_MODEL GROK_REVIEW_EFFORT PI_GLM_REVIEW_MODEL PI_GLM_REVIEW_EFFORT PI_GROK_REVIEW_MODEL PI_GROK_REVIEW_EFFORT PR_RELAY_OPENCODE_MODEL SHIP_FEATURE_PLAN_TIMEOUT PR_RELAY_AGENT_TIMEOUT SHIP_FEATURE_GEMINI_MODEL SHIP_FEATURE_GEMINI_TESTED_VERSIONS GLM_REVIEW_CONFIG_DIR GLM_REVIEW_AGENT GLM_REVIEW_PROMPT_EXTRA
 # The gemini seat picks its auth method from the environment, and anyone who actually uses gemini
 # has one of these exported — a working machine is the normal case, not the exotic one. Leave them
 # in place and the seat takes the API-key path on this developer's box and the OAuth path in CI,
@@ -1058,7 +1058,7 @@ rv_stdin="$WORK/rv-stdin.log"
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 OC_STDIN_LOG="$rv_stdin" GLM_REVIEW_CONFIG_DIR="$rv_dir" GLM_REVIEW_AGENT=rev \
   GLM_REVIEW_PROMPT_EXTRA="$WORK/rv-extra.md" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
 km2=$(printf '%s' "$out" | grep 'REVIEW-glm')
-rv_deny='"edit":"deny","bash":"deny","execute":"deny","task":"deny","lsp":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","skill":"deny","worktree_create":"deny","session_move":"deny","session_rename":"deny"'
+rv_deny='"edit":"deny","bash":"deny","execute":"deny","task":"deny","lsp":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","skill":"deny","question":"deny","worktree_create":"deny","session_move":"deny","session_rename":"deny","opencode_console_*":"deny"'
 printf '%s' "$km2" | grep -q -- "argv=\[run --standalone --agent rev -m " &&
   printf '%s' "$km2" | grep -q 'CFGFILES=\[agents,opencode.json,\]' &&
   printf '%s' "$km2" | grep -q 'OPENCODE_CONFIG_DIR=\[[^]]*/oc-config\.' &&
@@ -1079,10 +1079,12 @@ grep -qF "Extra step for $rv_top and $rv_top." "$rv_stdin" && grep -q -- '--- PL
   echo "  FAIL glm prompt extra: $(head -c 600 "$rv_stdin" 2>/dev/null)"
   FAIL=$((FAIL + 1))
 }
-# The extra is glm's alone: the claude seat in the same round gets the plain prompt.
+# The extra is glm's alone: the claude seat in the same round gets the plain prompt. claude takes
+# the prompt as an argument, which its stub echoes, so the prompt is checked to be there at all.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 GLM_REVIEW_PROMPT_EXTRA="$WORK/rv-extra.md" \
   bash "$CLI" plan-review --reviewers glm,claude 2>/dev/null)
-! printf '%s' "$out" | grep -q 'Extra step for' && printf '%s' "$out" | grep -q 'REVIEW-claude' && {
+rv_claude=$(printf '%s' "$out" | grep 'REVIEW-claude')
+! printf '%s' "$rv_claude" | grep -q 'Extra step for' && printf '%s' "$rv_claude" | grep -q 'reviewing an IMPLEMENTATION PLAN' && {
   echo "  ok   [-] GLM_REVIEW_PROMPT_EXTRA does not reach the other seats"
   PASS=$((PASS + 1))
 } || {
@@ -1122,7 +1124,19 @@ printf '%s' "$out" | grep -q 'need OpenCode v2 — ignored' && printf '%s' "$out
   echo "  FAIL glm on v1 with reviewer settings: $out"
   FAIL=$((FAIL + 1))
 }
-unset rv_dir rv_stdin rv_deny rv_top rv_case
+# From the config file, with ~/ expanded, and the environment still winning.
+printf 'GLM_REVIEW_CONFIG_DIR=~/rv-config\nGLM_REVIEW_AGENT=rev\n' >"$WORK/rv-sf-config"
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" HOME="$WORK" OC_HELP=v2 SHIP_FEATURE_CONFIG="$WORK/rv-sf-config" GLM_REVIEW_AGENT=envagent \
+  bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+km2=$(printf '%s' "$out" | grep 'REVIEW-glm')
+printf '%s' "$km2" | grep -q -- '--agent envagent ' && printf '%s' "$km2" | grep -q 'CFGFILES=\[agents,opencode.json,\]' && {
+  echo "  ok   [-] glm reads its reviewer keys from the config file, expands ~/, and the environment wins"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm reviewer keys from the config file: $out"
+  FAIL=$((FAIL + 1))
+}
+unset rv_dir rv_stdin rv_deny rv_top rv_case rv_claude
 # A CLI with neither flag fails the seat with the reason, and the review never starts.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=nopure bash "$CLI" plan-review --reviewers glm 2>&1)
 printf '%s' "$out" | grep -q 'has neither --pure (v1) nor --standalone (v2)' && ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
@@ -1225,6 +1239,15 @@ printf '%s' "$ocfg_out" | grep -q 'GLM_REVIEW_PROMPT_EXTRA skipped' && [ -s "$oc
   PASS=$((PASS + 1))
 } || {
   echo "  FAIL glm prompt extra on the degraded path: $ocfg_out"
+  FAIL=$((FAIL + 1))
+}
+# A note about the reviewer keys adds to the degraded-review warning, never replaces it.
+ocfg_out=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$PBIN:$PATH" GLM_REVIEW_AGENT=rev bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+printf '%s' "$ocfg_out" | grep -q 'opencode.json would configure the reviewer' && printf '%s' "$ocfg_out" | grep -q 'need OpenCode v2 — ignored' && {
+  echo "  ok   [-] glm keeps the degraded-review warning next to the reviewer-keys note"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm lost a warning: $ocfg_out"
   FAIL=$((FAIL + 1))
 }
 unset ocfg_stdin
@@ -4975,7 +4998,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=578
+EXPECTED=580
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

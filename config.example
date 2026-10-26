@@ -165,8 +165,9 @@ SHIP_FEATURE_DENYLIST=/path/to/your/denylist.txt
 # GLM_REVIEW_CONFIG_DIR: a folder used as the seat's OPENCODE_CONFIG_DIR (agents, instructions,
 #   MCP servers), copied fresh each run. With it set, the seat no longer allows only
 #   read/grep/glob: it denies edit, bash, execute, task, lsp, webfetch, websearch,
-#   external_directory, skill, worktree_create, session_move and session_rename, and whatever
-#   else your folder's agent allows, it gets.
+#   external_directory, skill, question, worktree_create, session_move, session_rename and
+#   opencode_console_*, and whatever else your folder's agent allows (your MCP servers, plugins),
+#   it gets: keep those read-only yourself. GLM_REVIEW_MODEL still sets the model.
 # GLM_REVIEW_AGENT: the agent to run (default plan). Needs GLM_REVIEW_CONFIG_DIR.
 # GLM_REVIEW_PROMPT_EXTRA: a file appended to the glm prompt; {repo} becomes the checkout path.
 # GLM_REVIEW_CONFIG_DIR=~/.config/ship-feature/opencode-reviewer

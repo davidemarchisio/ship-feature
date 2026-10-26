@@ -353,9 +353,12 @@ without waiting on its quota reset. `opencode models` lists what your account ca
   Skipped when the seat runs outside the checkout.
 
 With a folder set, the read/grep/glob allowlist would block your MCP tools, so the seat swaps it
-for a denylist: edit, bash, execute, task, lsp, webfetch, websearch, external_directory, skill,
-worktree_create, session_move and session_rename, pinned in your agent too. Anything else your agent
-allows, it gets. A missing folder or file, or a bad agent name, fails the seat.
+for a denylist: edit (also write and patch), bash, execute, task, lsp, webfetch, websearch,
+external_directory, skill, question, worktree_create, session_move, session_rename and
+`opencode_console_*`, denied in your agent too. Anything else your agent allows, it gets, including
+your MCP servers' tools and plugins, which the denylist does not cover: keep those read-only
+yourself. `GLM_REVIEW_MODEL` still sets the model. A missing folder or file, or a bad agent name,
+fails the seat.
 
 **The seat is the runner, not the model.** `glm` names the opencode runner pinned read-only, and the
 model is this one setting. That is also why the seat was renamed: it was called `kimi3` until
