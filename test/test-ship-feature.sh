@@ -745,7 +745,9 @@ if [ "\$(basename "\$0")" = opencode ] && [ "\${1:-}" = --help ]; then
 fi
 _cd_empty=no
 [ -n "\${OPENCODE_CONFIG_DIR:-}" ] && [ -d "\$OPENCODE_CONFIG_DIR" ] && [ -z "\$(ls -A "\$OPENCODE_CONFIG_DIR")" ] && _cd_empty=yes
-echo "REVIEW-$1 CFGDIR_EMPTY=[\$_cd_empty] PROJCFG=[\${OPENCODE_DISABLE_PROJECT_CONFIG:-}] argv=[\$*] OPENCODE_CONFIG_CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}] OPENCODE_CONFIG=[\${OPENCODE_CONFIG:-}] OPENCODE_CONFIG_DIR=[\${OPENCODE_CONFIG_DIR:-}] CWD=[\${PWD}]"
+echo "REVIEW-$1 CFGDIR_EMPTY=[\$_cd_empty] PROJCFG=[\${OPENCODE_DISABLE_PROJECT_CONFIG:-}] argv=[\$*] OPENCODE_CONFIG_CONTENT=[\${OPENCODE_CONFIG_CONTENT:-}] OPENCODE_CONFIG=[\${OPENCODE_CONFIG:-}] OPENCODE_CONFIG_DIR=[\${OPENCODE_CONFIG_DIR:-}] CWD=[\${PWD}] CFGFILES=[\$([ -d "\${OPENCODE_CONFIG_DIR:-}" ] && ls -A "\$OPENCODE_CONFIG_DIR" | tr '\n' ,)]"
+# OC_STDIN_LOG keeps the prompt the seat was given.
+[ -z "\${OC_STDIN_LOG:-}" ] || cat >"\$OC_STDIN_LOG"
 _args=("\$@")
 for ((_i=0; _i<\${#_args[@]}; _i++)); do
   if [ "\${_args[\$_i]}" = "--prompt-file" ]; then
@@ -1046,6 +1048,81 @@ printf '%s' "$km2" | grep -qF "OPENCODE_CONFIG_CONTENT=[$oc_ro2]" &&
   echo "  FAIL glm on v2 lost the policy or the cwd: $km2"
   FAIL=$((FAIL + 1))
 }
+# --- glm's own reviewer setup (v2): GLM_REVIEW_CONFIG_DIR, GLM_REVIEW_AGENT, GLM_REVIEW_PROMPT_EXTRA.
+# The folder is COPIED per run (the user's folder is never the config dir), and read-only is then
+# pinned by a denylist, top level and in the chosen agent, since the allowlist would block its MCP tools.
+rv_dir="$WORK/rv-config"
+mkdir -p "$rv_dir/agents" && printf 'x\n' >"$rv_dir/agents/rev.md" && printf '{}\n' >"$rv_dir/opencode.json"
+printf 'Extra step for {repo} and {repo}.\n' >"$WORK/rv-extra.md"
+rv_stdin="$WORK/rv-stdin.log"
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 OC_STDIN_LOG="$rv_stdin" GLM_REVIEW_CONFIG_DIR="$rv_dir" GLM_REVIEW_AGENT=rev \
+  GLM_REVIEW_PROMPT_EXTRA="$WORK/rv-extra.md" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+km2=$(printf '%s' "$out" | grep 'REVIEW-glm')
+rv_deny='"edit":"deny","bash":"deny","execute":"deny","task":"deny","lsp":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","skill":"deny","worktree_create":"deny","session_move":"deny","session_rename":"deny"'
+printf '%s' "$km2" | grep -q -- "argv=\[run --standalone --agent rev -m " &&
+  printf '%s' "$km2" | grep -q 'CFGFILES=\[agents,opencode.json,\]' &&
+  printf '%s' "$km2" | grep -q 'OPENCODE_CONFIG_DIR=\[[^]]*/oc-config\.' &&
+  ! printf '%s' "$km2" | grep -qF "OPENCODE_CONFIG_DIR=[$rv_dir]" &&
+  printf '%s' "$km2" | grep -qF "OPENCODE_CONFIG_CONTENT=[{\"share\":\"disabled\",\"permission\":{$rv_deny},\"agent\":{\"rev\":{\"permission\":{$rv_deny}}}}]" &&
+  [ "$(ls -A "$rv_dir" | tr '\n' ,)" = "agents,opencode.json," ] && {
+  echo "  ok   [-] glm on v2 runs a copy of GLM_REVIEW_CONFIG_DIR with GLM_REVIEW_AGENT, denylist pinned in that agent"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm with GLM_REVIEW_CONFIG_DIR: $km2"
+  FAIL=$((FAIL + 1))
+}
+rv_top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+grep -qF "Extra step for $rv_top and $rv_top." "$rv_stdin" && grep -q -- '--- PLAN ---' "$rv_stdin" && {
+  echo "  ok   [-] glm appends GLM_REVIEW_PROMPT_EXTRA with every {repo} filled"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm prompt extra: $(head -c 600 "$rv_stdin" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
+}
+# The extra is glm's alone: the claude seat in the same round gets the plain prompt.
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 GLM_REVIEW_PROMPT_EXTRA="$WORK/rv-extra.md" \
+  bash "$CLI" plan-review --reviewers glm,claude 2>/dev/null)
+! printf '%s' "$out" | grep -q 'Extra step for' && printf '%s' "$out" | grep -q 'REVIEW-claude' && {
+  echo "  ok   [-] GLM_REVIEW_PROMPT_EXTRA does not reach the other seats"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL GLM_REVIEW_PROMPT_EXTRA leaked: $(printf '%s' "$out" | grep -m2 'Extra step')"
+  FAIL=$((FAIL + 1))
+}
+# Each bad setting fails the seat, says which, and runs no review.
+for rv_case in "GLM_REVIEW_CONFIG_DIR=$WORK/rv-missing|GLM_REVIEW_CONFIG_DIR" \
+  "GLM_REVIEW_CONFIG_DIR=$rv_dir GLM_REVIEW_AGENT=a\"b|GLM_REVIEW_AGENT" \
+  "GLM_REVIEW_PROMPT_EXTRA=$WORK/rv-missing.md|GLM_REVIEW_PROMPT_EXTRA"; do
+  out=$(printf 'plan\n' | env PATH="$PBIN:$PATH" OC_HELP=v2 ${rv_case%%|*} bash "$CLI" plan-review --reviewers glm 2>&1)
+  printf '%s' "$out" | grep -q "${rv_case##*|}.*No review ran" && ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
+    echo "  ok   [-] glm fails closed on a bad ${rv_case##*|}"
+    PASS=$((PASS + 1))
+  } || {
+    echo "  FAIL glm on a bad ${rv_case##*|}: $(printf '%s' "$out" | grep -i -m3 'glm\|review')"
+    FAIL=$((FAIL + 1))
+  }
+done
+# GLM_REVIEW_AGENT without a folder: the empty dir has no such agent, so it is ignored and said so.
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 GLM_REVIEW_AGENT=rev bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+km2=$(printf '%s' "$out" | grep 'REVIEW-glm')
+printf '%s' "$out" | grep -q 'GLM_REVIEW_AGENT needs GLM_REVIEW_CONFIG_DIR' &&
+  printf '%s' "$km2" | grep -q -- "--agent plan " && printf '%s' "$km2" | grep -qF "OPENCODE_CONFIG_CONTENT=[$oc_ro2]" && {
+  echo "  ok   [-] glm ignores GLM_REVIEW_AGENT without a folder, says so, keeps the allowlist"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm with GLM_REVIEW_AGENT and no folder: $out"
+  FAIL=$((FAIL + 1))
+}
+# v1 has none of this: one line says so, and the run is the usual one.
+out=$(printf 'plan\n' | PATH="$PBIN:$PATH" GLM_REVIEW_CONFIG_DIR="$rv_dir" GLM_REVIEW_AGENT=rev bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+printf '%s' "$out" | grep -q 'need OpenCode v2 — ignored' && printf '%s' "$out" | grep -q -- 'argv=\[run --pure --agent plan ' && {
+  echo "  ok   [-] glm on v1 ignores the reviewer settings and says so"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm on v1 with reviewer settings: $out"
+  FAIL=$((FAIL + 1))
+}
+unset rv_dir rv_stdin rv_deny rv_top rv_case
 # A CLI with neither flag fails the seat with the reason, and the review never starts.
 out=$(printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=nopure bash "$CLI" plan-review --reviewers glm 2>&1)
 printf '%s' "$out" | grep -q 'has neither --pure (v1) nor --standalone (v2)' && ! printf '%s' "$out" | grep -q 'REVIEW-glm' && {
@@ -1138,6 +1215,19 @@ printf '%s' "$ocfg_out" | grep -q 'opencode.json would configure the reviewer' &
     echo "  FAIL glm degraded silently — a prose-only review must say so"
     FAIL=$((FAIL + 1))
   }
+# On that path the seat is not in the checkout, so a {repo} prompt extra would send it outside.
+printf 'x {repo}\n' >"$WORK/rv-extra2.md"
+ocfg_stdin="$WORK/ocfg-stdin.log"
+ocfg_out=$(cd "$ocfg_repo" && printf 'plan\n' | PATH="$PBIN:$PATH" OC_HELP=v2 OC_STDIN_LOG="$ocfg_stdin" \
+  GLM_REVIEW_PROMPT_EXTRA="$WORK/rv-extra2.md" bash "$CLI" plan-review --reviewers glm 2>/dev/null)
+printf '%s' "$ocfg_out" | grep -q 'GLM_REVIEW_PROMPT_EXTRA skipped' && [ -s "$ocfg_stdin" ] && ! grep -q '^x ' "$ocfg_stdin" && {
+  echo "  ok   [-] glm skips GLM_REVIEW_PROMPT_EXTRA when it is not in the checkout, and says so"
+  PASS=$((PASS + 1))
+} || {
+  echo "  FAIL glm prompt extra on the degraded path: $ocfg_out"
+  FAIL=$((FAIL + 1))
+}
+unset ocfg_stdin
 # From a SUBDIRECTORY the config is still found: opencode discovers config by walking up, so a
 # check that only looked at $PWD would miss it and hand the reviewer a config we refused. This
 # is the case the walk-up exists for, and it is also this workflow's normal shape — plan-review
@@ -4885,7 +4975,7 @@ echo "PASS=$PASS FAIL=$FAIL"
 # Hard-coded, deliberately NOT overridable from the environment. An ambient SF_EXPECTED_PASS would
 # let the very thing this suite now guarantees — that its result does not depend on the environment
 # it is run in — be switched off from outside, and would hide a removed test.
-EXPECTED=569
+EXPECTED=578
 if [ "$PASS" != "$EXPECTED" ]; then
   echo "  ! expected PASS=$EXPECTED, got $PASS — a test was added or silently dropped" >&2
   exit 1

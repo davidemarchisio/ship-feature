@@ -8,6 +8,13 @@ All notable changes to **ship-feature** are documented here. This project follow
 
 ### Added
 
+- **The glm plan-review seat can run your own reviewer (OpenCode v2).** `GLM_REVIEW_CONFIG_DIR`
+  points it at a folder of agents, instructions and MCP servers, copied fresh each run;
+  `GLM_REVIEW_AGENT` picks the agent; `GLM_REVIEW_PROMPT_EXTRA` appends a file to the prompt, with
+  `{repo}` filled in. With a folder set, read-only is pinned by a denylist (edit, bash, execute and
+  the other write, shell, network and delegation tools) in the agent too, instead of the
+  read/grep/glob allowlist. Unset, nothing changes. On v1 the keys are ignored with a note.
+
 - **`ship-feature seat-audit`: a review round that wrote anything does not count.** Some reviewer
   seats are read-only by instruction only, not by sandbox, and nothing in a round's output said
   whether a seat obeyed. `seat-audit snapshot --out <file>` records, before the round, HEAD and what
